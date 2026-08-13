@@ -298,6 +298,12 @@ class CarController(CarControllerBase):
     if self.frame % 20 == 0 and self.CP.flags & ToyotaFlags.DISABLE_RADAR.value:
       can_sends.append(make_tester_present_msg(0x750, 0, 0xF))
 
+    # One-off Gate-2 MAC28 ablation: on SecOC targets, keep the stock camera
+    # copies of these four messages instead of transmitting openpilot replacements.
+    if self.CP.flags & ToyotaFlags.SECOC.value:
+      stock_camera_ablation_addrs = {0x191, 0x412, 0x2E4, 0x131}
+      can_sends = [msg for msg in can_sends if msg[0] not in stock_camera_ablation_addrs]
+
     new_actuators = actuators.as_builder()
     new_actuators.torque = apply_torque / self.params.STEER_MAX
     new_actuators.torqueOutputCan = apply_torque

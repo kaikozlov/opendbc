@@ -335,7 +335,8 @@ class TestToyotaSecOcSafetyBase(TestToyotaSafetyBase):
 
   TX_MSGS = TOYOTA_SECOC_TX_MSGS
   RELAY_MALFUNCTION_ADDRS = {0: (0x2E4, 0x191, 0x412, 0x131)}
-  FWD_BLACKLISTED_ADDRS = {2: [0x2E4, 0x191, 0x412, 0x131]}
+  # One-off Gate-2 MAC28 ablation: these four stock camera messages must forward.
+  FWD_BLACKLISTED_ADDRS = {2: []}
 
   def setUp(self):
     self.packer = CANPackerSafety("toyota_secoc_pt_generated")
@@ -388,7 +389,7 @@ class TestToyotaSecOcSafetyStockLongitudinal(TestToyotaSecOcSafetyBase, TestToyo
 class TestToyotaSecOcSafety(TestToyotaSecOcSafetyBase):
 
   RELAY_MALFUNCTION_ADDRS = {0: (0x2E4, 0x191, 0x412, 0x131, 0x343, 0x183)}
-  FWD_BLACKLISTED_ADDRS = {2: [0x2E4, 0x191, 0x412, 0x131, 0x343, 0x183]}
+  FWD_BLACKLISTED_ADDRS = {2: [0x343, 0x183]}
 
   def setUp(self):
     self.packer = CANPackerSafety("toyota_secoc_pt_generated")

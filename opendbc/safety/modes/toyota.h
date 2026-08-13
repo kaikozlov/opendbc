@@ -6,14 +6,19 @@
 #define TOYOTA_BASE_TX_MSGS \
   {0x191, 0, 8, .check_relay = true}, {0x412, 0, 8, .check_relay = true}, {0x1D2, 0, 8, .check_relay = false},  /* LKAS + LTA + PCM cancel cmd */  \
 
+// One-off SecOC Gate-2 MAC28 ablation: retain relay detection, but allow the
+// stock camera copies through the static forwarding block on SecOC profiles.
+#define TOYOTA_SECOC_BASE_TX_MSGS \
+  {0x191, 0, 8, .check_relay = true, .disable_static_blocking = true}, {0x412, 0, 8, .check_relay = true, .disable_static_blocking = true}, {0x1D2, 0, 8, .check_relay = false}, \
+
 #define TOYOTA_COMMON_TX_MSGS \
   TOYOTA_BASE_TX_MSGS \
   {0x2E4, 0, 5, .check_relay = true}, \
   {0x343, 0, 8, .check_relay = false},  /* ACC cancel cmd */  \
 
 #define TOYOTA_COMMON_SECOC_TX_MSGS \
-  TOYOTA_BASE_TX_MSGS \
-  {0x2E4, 0, 8, .check_relay = true}, {0x131, 0, 8, .check_relay = true}, \
+  TOYOTA_SECOC_BASE_TX_MSGS \
+  {0x2E4, 0, 8, .check_relay = true, .disable_static_blocking = true}, {0x131, 0, 8, .check_relay = true, .disable_static_blocking = true}, \
   {0x343, 0, 8, .check_relay = false},  /* ACC cancel cmd */ \
 
 #define TOYOTA_COMMON_LONG_TX_MSGS \
