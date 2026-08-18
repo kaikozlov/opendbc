@@ -5,7 +5,7 @@ from opendbc.car.lateral import apply_meas_steer_torque_limits, apply_std_steer_
 from opendbc.car.carlog import carlog
 from opendbc.car.common.filter_simple import FirstOrderFilter, HighPassFilter
 from opendbc.car.common.pid import PIDController
-from opendbc.car.secoc import add_mac, build_sync_mac
+from opendbc.car.secoc import add_mac, add_mac28_zero_marker, build_sync_mac
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.toyota import toyotacan
 from opendbc.car.toyota.values import CAR, CarControllerParams, ToyotaFlags
@@ -74,6 +74,9 @@ class CarController(CarControllerBase):
     self.secoc_lta_message_counter = 0
     self.secoc_acc_message_counter = 0
     self.secoc_prev_reset_counter = 0
+    # Set by openpilot's car card only after an external, evidence-gated EPS runtime
+    # deployment. Default behavior remains ordinary key-backed SecOC.
+    self.ephemeral_secoc_bridge = False
 
   def update(self, CC, CS, now_nanos):
     actuators = CC.actuators
@@ -97,9 +100,10 @@ class CarController(CarControllerBase):
         self.secoc_acc_message_counter = 0
         self.secoc_prev_reset_counter = CS.secoc_synchronization['RESET_CNT']
 
-        expected_mac = build_sync_mac(self.secoc_key, int(CS.secoc_synchronization['TRIP_CNT']), int(CS.secoc_synchronization['RESET_CNT']))
-        if int(CS.secoc_synchronization['AUTHENTICATOR']) != expected_mac:
-          carlog.error("SecOC synchronization MAC mismatch, wrong key?")
+        if not self.ephemeral_secoc_bridge:
+          expected_mac = build_sync_mac(self.secoc_key, int(CS.secoc_synchronization['TRIP_CNT']), int(CS.secoc_synchronization['RESET_CNT']))
+          if int(CS.secoc_synchronization['AUTHENTICATOR']) != expected_mac:
+            carlog.error("SecOC synchronization MAC mismatch, wrong key?")
 
     # *** steer torque ***
     new_torque = int(round(actuators.torque * self.params.STEER_MAX))
@@ -133,12 +137,16 @@ class CarController(CarControllerBase):
     # on consecutive messages
     steer_command = toyotacan.create_steer_command(self.packer, apply_torque, apply_steer_req)
     if self.CP.flags & ToyotaFlags.SECOC.value:
-      # TODO: check if this slow and needs to be done by the CANPacker
-      steer_command = add_mac(self.secoc_key,
-                              int(CS.secoc_synchronization['TRIP_CNT']),
-                              int(CS.secoc_synchronization['RESET_CNT']),
-                              self.secoc_lka_message_counter,
-                              steer_command)
+      if self.ephemeral_secoc_bridge:
+        steer_command = add_mac28_zero_marker(int(CS.secoc_synchronization['RESET_CNT']),
+                                              self.secoc_lka_message_counter, steer_command)
+      else:
+        # TODO: check if this slow and needs to be done by the CANPacker
+        steer_command = add_mac(self.secoc_key,
+                                int(CS.secoc_synchronization['TRIP_CNT']),
+                                int(CS.secoc_synchronization['RESET_CNT']),
+                                self.secoc_lka_message_counter,
+                                steer_command)
       self.secoc_lka_message_counter += 1
     can_sends.append(steer_command)
 
@@ -157,11 +165,15 @@ class CarController(CarControllerBase):
 
       if self.CP.flags & ToyotaFlags.SECOC.value:
         lta_steer_2 = toyotacan.create_lta_steer_command_2(self.packer, self.frame // 2)
-        lta_steer_2 = add_mac(self.secoc_key,
-                              int(CS.secoc_synchronization['TRIP_CNT']),
-                              int(CS.secoc_synchronization['RESET_CNT']),
-                              self.secoc_lta_message_counter,
-                              lta_steer_2)
+        if self.ephemeral_secoc_bridge:
+          lta_steer_2 = add_mac28_zero_marker(int(CS.secoc_synchronization['RESET_CNT']),
+                                               self.secoc_lta_message_counter, lta_steer_2)
+        else:
+          lta_steer_2 = add_mac(self.secoc_key,
+                                int(CS.secoc_synchronization['TRIP_CNT']),
+                                int(CS.secoc_synchronization['RESET_CNT']),
+                                self.secoc_lta_message_counter,
+                                lta_steer_2)
         self.secoc_lta_message_counter += 1
         can_sends.append(lta_steer_2)
 
@@ -297,12 +309,6 @@ class CarController(CarControllerBase):
     # keep radar disabled
     if self.frame % 20 == 0 and self.CP.flags & ToyotaFlags.DISABLE_RADAR.value:
       can_sends.append(make_tester_present_msg(0x750, 0, 0xF))
-
-    # One-off Gate-2 MAC28 ablation: on SecOC targets, keep the stock camera
-    # copies of these four messages instead of transmitting openpilot replacements.
-    if self.CP.flags & ToyotaFlags.SECOC.value:
-      stock_camera_ablation_addrs = {0x191, 0x412, 0x2E4, 0x131}
-      can_sends = [msg for msg in can_sends if msg[0] not in stock_camera_ablation_addrs]
 
     new_actuators = actuators.as_builder()
     new_actuators.torque = apply_torque / self.params.STEER_MAX
