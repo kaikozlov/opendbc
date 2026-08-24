@@ -36,6 +36,13 @@ class TestToyotaInterfaces(unittest.TestCase):
       if car_model.config.flags & ToyotaFlags.TSS2 and not (car_model.config.flags & ToyotaFlags.SECOC):
         assert dbc[Bus.pt] == "toyota_nodsu_pt_generated"
 
+  def test_tss3_control_and_security_axes_are_independent(self):
+    flags = CAR.TOYOTA_COROLLA_TSS3.config.flags
+    assert flags & ToyotaFlags.TSS3
+    assert flags & ToyotaFlags.SECOC
+    assert not flags & ToyotaFlags.TSS2
+    assert DBC[CAR.TOYOTA_COROLLA_TSS3][Bus.pt] == "toyota_tss3_pt_generated"
+
   def test_essential_ecus(self):
     # Asserts standard ECUs exist for each platform
     common_ecus = {Ecu.fwdRadar, Ecu.fwdCamera}

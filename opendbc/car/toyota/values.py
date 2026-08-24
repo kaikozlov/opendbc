@@ -73,6 +73,17 @@ class ToyotaFlags(IntFlag):
   # these cars can utilize 2.0 m/s^2
   RAISED_ACCEL_LIMIT = 1024
   SECOC = 2048
+  # TSS generation is independent from SecOC. This flag is for the newer
+  # CAN-FD control/state architecture, while SECOC continues to describe the
+  # authentication architecture.
+  TSS3 = 4096
+
+  # Detected flags
+  # On an unmodified Toyota-B harness the target vehicle network can remain on
+  # the unsplit CAN1 path. A relay-correct CAN0/CAN1 repin moves that network
+  # onto the CAN0/CAN2 pair. This flag selects the observed bus-1 topology for
+  # the read-only TSS3 parser; it is not a safety/interception assertion.
+  TSS3_PT_BUS1 = 8192
 
   # deprecated flags
   # these cars are speculated to allow stop and go when the DSU is unplugged
@@ -123,6 +134,21 @@ class ToyotaSecOCPlatformConfig(PlatformConfig):
 
     if self.flags & ToyotaFlags.RADAR_ACC:
       self.dbc_dict = {Bus.pt: 'toyota_secoc_pt_generated'}
+
+
+@dataclass
+class ToyotaTSS3CarDocs(ToyotaSecOcCarDocs):
+  car_parts: CarParts = field(default_factory=CarParts.common([CarHarness.toyota_b]))
+
+
+@dataclass
+class ToyotaTSS3PlatformConfig(PlatformConfig):
+  dbc_dict: dict = field(default_factory=lambda: {Bus.pt: 'toyota_tss3_pt_generated'})
+
+  def init(self):
+    # TSS3 and SecOC are separate axes. The tracked Corolla H/F specimens use
+    # both, but TSS3 must never imply TSS2 through config inheritance.
+    self.flags |= ToyotaFlags.TSS3 | ToyotaFlags.NO_DSU | ToyotaFlags.SECOC
 
 
 class CAR(Platforms):
@@ -209,6 +235,17 @@ class CAR(Platforms):
       ToyotaCarDocs("Lexus UX Hybrid 2019-24"),
     ],
     CarSpecs(mass=3060. * CV.LB_TO_KG, wheelbase=2.67, steerRatio=13.9, tireStiffnessFactor=0.444),
+  )
+  # Read-only initial TSS3 integration. 2023 and 2025 Corolla specimens are
+  # directly evidenced; expand model-year coverage only with additional data.
+  TOYOTA_COROLLA_TSS3 = ToyotaTSS3PlatformConfig(
+    [
+      ToyotaTSS3CarDocs("Toyota Corolla 2023"),
+      ToyotaTSS3CarDocs("Toyota Corolla 2025"),
+    ],
+    # Reuse the existing Corolla dynamics only as non-actuating metadata until
+    # target-specific dynamics are measured. This platform is dashcam/noOutput.
+    TOYOTA_COROLLA_TSS2.specs,
   )
   TOYOTA_HIGHLANDER = PlatformConfig(
     [

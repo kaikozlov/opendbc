@@ -33,6 +33,9 @@ non_tested_cars = [
   # These had their DSUs unplugged, need new routes
   # TOYOTA.LEXUS_ES  # hybrid
   TOYOTA.TOYOTA_COROLLA,
+  # Read-only TSS3 port is validated against a tracked raw Span rlog in its
+  # dedicated Toyota test; no fetchable comma route with native carParams yet.
+  TOYOTA.TOYOTA_COROLLA_TSS3,
   TOYOTA.TOYOTA_RAV4H,
 
 ]

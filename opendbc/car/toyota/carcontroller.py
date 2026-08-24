@@ -79,6 +79,14 @@ class CarController(CarControllerBase):
     self.ephemeral_secoc_bridge = False
 
   def update(self, CC, CS, now_nanos):
+    if self.CP.flags & ToyotaFlags.TSS3:
+      # TSS3 B6 receiver geometry is known, but the sender cadence/full payload,
+      # SecOC freshness/source, stock suppression point and safety limits are
+      # not. This read-only platform must emit no CAN traffic under any control
+      # request until those contracts are closed.
+      self.frame += 1
+      return CC.actuators.as_builder(), []
+
     actuators = CC.actuators
     stopping = actuators.longControlState == LongCtrlState.stopping
     hud_control = CC.hudControl

@@ -1,0 +1,74 @@
+VERSION ""
+
+NS_ :
+  CM_
+  BA_DEF_
+  BA_
+  VAL_
+
+BS_:
+
+BU_: XXX EPS
+
+BO_ 15 SECOC_SYNCHRONIZATION: 8 XXX
+ SG_ TRIP_CNT : 7|16@0+ (1,0) [0|65535] "" XXX
+ SG_ RESET_CNT : 23|20@0+ (1,0) [0|1048575] "" XXX
+ SG_ AUTHENTICATOR : 35|28@0+ (1,0) [0|268435455] "" XXX
+
+BO_ 37 STEER_ANGLE_SENSOR: 32 XXX
+ SG_ STEER_ANGLE : 3|12@0- (1.5,0) [-500|500] "deg" XXX
+ SG_ STEER_FRACTION : 39|4@0- (0.1,0) [-0.7|0.7] "deg" XXX
+ SG_ STEER_RATE : 35|12@0- (1,0) [-2000|2000] "deg/s" XXX
+
+BO_ 48 TSS3_EPS_TELEMETRY: 32 EPS
+ SG_ ADDITIVE_BYTE_7 : 63|8@0+ (1,0) [0|255] "" XXX
+
+BO_ 170 WHEEL_SPEEDS: 8 XXX
+ SG_ WHEEL_SPEED_FR_FAULT : 7|1@0+ (1,0) [0|1] "" XXX
+ SG_ WHEEL_SPEED_FR : 6|15@0+ (0.01,-67.67) [-67.67|260] "km/h" XXX
+ SG_ WHEEL_SPEED_FL_FAULT : 23|1@0+ (1,0) [0|1] "" XXX
+ SG_ WHEEL_SPEED_FL : 22|15@0+ (0.01,-67.67) [-67.67|260] "km/h" XXX
+ SG_ WHEEL_SPEED_RR_FAULT : 39|1@0+ (1,0) [0|1] "" XXX
+ SG_ WHEEL_SPEED_RR : 38|15@0+ (0.01,-67.67) [-67.67|260] "km/h" XXX
+ SG_ WHEEL_SPEED_RL_FAULT : 55|1@0+ (1,0) [0|1] "" XXX
+ SG_ WHEEL_SPEED_RL : 54|15@0+ (0.01,-67.67) [-67.67|260] "km/h" XXX
+
+BO_ 182 TSS3_LATERAL_CONTROL: 32 XXX
+ SG_ TARGET_LATERAL_ID : 29|6@0+ (1,0) [0|63] "" XXX
+ SG_ TARGET_STEERING_ANGLE : 39|16@0- (0.057302742,0) [-1877|1877] "deg" XXX
+ SG_ SEQUENCE : 61|6@0+ (1,0) [0|63] "" XXX
+
+BO_ 257 BRAKE_MODULE: 8 XXX
+ SG_ BRAKE_PRESSED : 3|1@0+ (1,0) [0|1] "" XXX
+ SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
+
+BO_ 278 GAS_PEDAL: 8 XXX
+ SG_ GAS_PEDAL_USER : 15|8@0+ (0.005,0) [0|1.275] "" XXX
+
+BO_ 295 GEAR_PACKET_HYBRID: 8 XXX
+ SG_ GEAR : 47|4@0+ (1,0) [0|15] "" XXX
+ SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
+
+BO_ 374 PCM_CRUISE: 8 XXX
+ SG_ CRUISE_ACTIVE : 5|1@0+ (1,0) [0|1] "" XXX
+ SG_ CRUISE_STATE : 31|4@0+ (1,0) [0|15] "" XXX
+ SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
+
+BO_ 1556 BLINKERS_STATE: 8 XXX
+ SG_ TURN_SIGNALS : 29|2@0+ (1,0) [0|3] "" XXX
+
+BO_ 1568 BODY_CONTROL_STATE: 8 XXX
+ SG_ PARKING_BRAKE : 60|1@0+ (1,0) [0|1] "" XXX
+
+CM_ BO_ 37 "TSS3 Corolla uses the legacy steering angle/fraction/rate bit positions inside a 32-byte CAN-FD PDU; exact H firmware and two driving captures support these fields.";
+CM_ BO_ 48 "Exact H/F EPS transmits this 32-byte PDU. Byte 7 equals sum(bytes 0..6)+0x38 modulo 256; other fields remain intentionally unnamed.";
+CM_ BO_ 182 "Exact H/F protected lateral receiver PDU. Receiver-side fields are defined for analysis only; transmission remains disabled.";
+CM_ SG_ 182 TARGET_LATERAL_ID "Techstream Target Lateral ID; exact H accepts 1=PCS, 4=LDA, 10=Hands Off LTA, 11=LTA/LCA, 19=PDA. 0 means no request.";
+CM_ SG_ 182 TARGET_STEERING_ANGLE "Controller-equivalent scale is exactly 1024/17870 deg/count (~0.057302742 deg/count). OEM wire-unit label remains unjoined.";
+CM_ SG_ 182 SEQUENCE "Exact H receiver treats this as a modulo-64 sequence counter with effective gap cap 8.";
+CM_ SG_ 295 GEAR "Only raw 3=D has been dynamically validated on the tracked TSS3 Corolla capture; remaining enum values are retained from Toyota prior art pending target transitions.";
+CM_ SG_ 374 CRUISE_ACTIVE "Wire location/checksum are retained Toyota prior art and observed on moving TSS3 Corolla captures; an active cruise transition has not yet been captured.";
+
+VAL_ 182 TARGET_LATERAL_ID 27 "Remote Parking" 25 "AP" 19 "PDA" 11 "LTA/LCA" 10 "Hands Off LTA" 4 "LDA" 1 "PCS" 0 "No Request";
+VAL_ 295 GEAR 4 "B" 3 "D" 2 "N" 1 "R" 0 "P";
+VAL_ 1556 TURN_SIGNALS 3 "hazard" 2 "right" 1 "left" 0 "none";

@@ -24,6 +24,34 @@ class CarInterface(CarInterfaceBase):
   @staticmethod
   def _get_params(ret: structs.CarParams, candidate, fingerprint, car_fw, alpha_long, is_release, docs) -> structs.CarParams:
     ret.brand = "toyota"
+
+    if ret.flags & ToyotaFlags.TSS3:
+      # Initial TSS3 Corolla support is observation-only. Keep Panda in noOutput
+      # even before openpilot's passive-mode override, and do not reuse the old
+      # Toyota LTA safety flag/controller path for the new B6 command family.
+      ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.noOutput)]
+      ret.dashcamOnly = True
+      ret.secOcRequired = True
+      ret.steerControlType = SteerControlType.angle
+      ret.radarUnavailable = True
+      ret.openpilotLongitudinalControl = False
+      ret.autoResumeSng = False
+      ret.minEnableSpeed = -1.
+      ret.centerToFront = ret.wheelbase * 0.44
+
+      # The tracked Span driving capture has the target state network on the
+      # unmodified Toyota-B CAN1 path. A relay-correct repin moves it to bus 0.
+      # Select bus 1 only when the startup fingerprint proves that topology;
+      # otherwise default to the production relay-correct bus-0 placement.
+      bus0 = fingerprint.get(0, {})
+      bus1 = fingerprint.get(1, {})
+      bus0_tss3 = bus0.get(0x025) == 32 and bus0.get(0x0AA) == 8
+      bus1_tss3 = bus1.get(0x025) == 32 and bus1.get(0x0AA) == 8
+      if bus1_tss3 and not bus0_tss3:
+        ret.flags |= ToyotaFlags.TSS3_PT_BUS1.value
+
+      return ret
+
     ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.toyota)]
     ret.safetyConfigs[0].safetyParam = EPS_SCALE[candidate]
 

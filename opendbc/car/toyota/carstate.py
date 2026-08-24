@@ -51,8 +51,64 @@ class CarState(CarStateBase):
     self.gvc = 0.0
     self.secoc_synchronization = None
 
+  def _update_tss3(self, cp: CANParser) -> structs.CarState:
+    # Initial TSS3 Corolla support is intentionally read-only. Only fields with
+    # direct firmware/dynamic evidence are promoted into CarState; unresolved
+    # driver-torque, EPS-fault, set-speed and follow-distance roles remain
+    # neutral rather than borrowing TSS2 semantics.
+    ret = structs.CarState()
+
+    self.secoc_synchronization = copy.copy(cp.vl["SECOC_SYNCHRONIZATION"])
+
+    ret.brakePressed = cp.vl["BRAKE_MODULE"]["BRAKE_PRESSED"] != 0
+    ret.gasPressed = cp.vl["GAS_PEDAL"]["GAS_PEDAL_USER"] > 0
+
+    self.parse_wheel_speeds(ret,
+      cp.vl["WHEEL_SPEEDS"]["WHEEL_SPEED_FL"],
+      cp.vl["WHEEL_SPEEDS"]["WHEEL_SPEED_FR"],
+      cp.vl["WHEEL_SPEEDS"]["WHEEL_SPEED_RL"],
+      cp.vl["WHEEL_SPEEDS"]["WHEEL_SPEED_RR"],
+    )
+    ret.vEgoCluster = ret.vEgo
+    ret.standstill = abs(ret.vEgoRaw) < 1e-3
+    ret.vehicleSensorsInvalid = any(cp.vl["WHEEL_SPEEDS"][f"WHEEL_SPEED_{whl}_FAULT"]
+                                    for whl in ("FL", "FR", "RL", "RR"))
+
+    ret.steeringAngleDeg = cp.vl["STEER_ANGLE_SENSOR"]["STEER_ANGLE"] + cp.vl["STEER_ANGLE_SENSOR"]["STEER_FRACTION"]
+    ret.steeringRateDeg = cp.vl["STEER_ANGLE_SENSOR"]["STEER_RATE"]
+
+    can_gear = int(cp.vl["GEAR_PACKET_HYBRID"]["GEAR"])
+    # Only raw 3=D is exercised in the tracked TSS3 capture. Do not promote the
+    # inherited P/R/N/B value table into CarState until those transitions exist.
+    ret.gearShifter = structs.CarState.GearShifter.drive if can_gear == 3 else structs.CarState.GearShifter.unknown
+
+    ret.leftBlinker = cp.vl["BLINKERS_STATE"]["TURN_SIGNALS"] == 1
+    ret.rightBlinker = cp.vl["BLINKERS_STATE"]["TURN_SIGNALS"] == 2
+    ret.parkingBrake = cp.vl["BODY_CONTROL_STATE"]["PARKING_BRAKE"] == 1
+
+    # 0x176's wire shape/checksum are retained on both observed TSS3 Corolla
+    # captures, but neither exercises an active-cruise transition. Keep cruise
+    # neutral in CarState until that semantic transition is observed; the raw
+    # prior-art fields remain available in the DBC for inspection.
+    ret.cruiseState.enabled = False
+    ret.cruiseState.available = False
+
+    # TSS3 replacements for legacy 0x260/0x262 are not dynamically joined yet.
+    # This platform is dashcamOnly + noOutput, so these neutral values cannot be
+    # used to authorize steering.
+    ret.steeringTorque = 0.0
+    ret.steeringTorqueEps = 0.0
+    ret.steeringPressed = False
+    ret.steerFaultTemporary = False
+    ret.steerFaultPermanent = False
+
+    return ret
+
   def update(self, can_parsers) -> structs.CarState:
     cp = can_parsers[Bus.pt]
+    if self.CP.flags & ToyotaFlags.TSS3:
+      return self._update_tss3(cp)
+
     cp_cam = can_parsers[Bus.cam]
 
     ret = structs.CarState()
@@ -203,6 +259,24 @@ class CarState(CarStateBase):
 
   @staticmethod
   def get_can_parsers(CP):
+    if CP.flags & ToyotaFlags.TSS3:
+      # Required signals are present in both tracked driving captures. Gear,
+      # cruise and low-rate body state are useful but specimen/trim dependent,
+      # so they are ignored for alive checking.
+      pt_messages = [
+        ("SECOC_SYNCHRONIZATION", 10),
+        ("STEER_ANGLE_SENSOR", 100),
+        ("WHEEL_SPEEDS", 100),
+        ("BRAKE_MODULE", 50),
+        ("GAS_PEDAL", 40),
+        ("GEAR_PACKET_HYBRID", float('nan')),
+        ("PCM_CRUISE", float('nan')),
+        ("BLINKERS_STATE", float('nan')),
+        ("BODY_CONTROL_STATE", float('nan')),
+      ]
+      pt_bus = 1 if CP.flags & ToyotaFlags.TSS3_PT_BUS1 else 0
+      return {Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, pt_bus)}
+
     pt_messages = [
       ("BLINKERS_STATE", float('nan')),
     ]
