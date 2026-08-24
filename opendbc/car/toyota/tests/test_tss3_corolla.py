@@ -13,6 +13,9 @@ from opendbc.car.toyota.values import CAR, DBC, ToyotaFlags
 SPAN_FRAMES = {
   0x00F: bytes.fromhex("162d0040d8a0a606"),
   0x025: bytes.fromhex("0ff800005fff0092000000000000000000000000000000000000000091f9fcc0"),
+  # Exact H/F 0x030 format. This real frame reconstructs Steering Wheel
+  # Torque as 1.06 Nm: B8=11 -> 1.1 Nm plus signed low nibble -4 -> -0.04 Nm.
+  0x030: bytes.fromhex("0a000000220450b80b002000380006d4020c00000038033b00000000706253c1"),
   0x0AA: bytes.fromhex("1abd1a6f1aba1a6f"),
   0x101: bytes.fromhex("8800003a000000cc"),
   0x116: bytes.fromhex("000200007a353eaa"),
@@ -79,8 +82,45 @@ class TestToyotaCorollaTSS3(unittest.TestCase):
     self.assertGreater(CS.vEgoRaw, 0.0)
     self.assertFalse(CS.vehicleSensorsInvalid)
     self.assertFalse(CS.cruiseState.enabled)
-    self.assertEqual(CS.steeringTorque, 0.0)
+    self.assertAlmostEqual(CS.steeringTorque, 1.06, places=6)
     self.assertEqual(CS.steeringTorqueEps, 0.0)
+    # The physical torque is promoted, but the old raw-domain override threshold
+    # and 0x262 fault classes are deliberately not transplanted.
+    self.assertFalse(CS.steeringPressed)
+    self.assertFalse(CS.steerFaultTemporary)
+    self.assertFalse(CS.steerFaultPermanent)
+
+  def test_real_span_030_driver_torque_and_fault_gates(self):
+    parser = CANParser("toyota_tss3_pt_generated", [("TSS3_EPS_TELEMETRY", float('nan'))], 1)
+    parser.update([(1_000_000_000, [CanData(0x030, SPAN_FRAMES[0x030], 1)])])
+    eps = parser.vl["TSS3_EPS_TELEMETRY"]
+
+    self.assertAlmostEqual(eps["STEERING_WHEEL_TORQUE_TRUNC"], 1.0)
+    self.assertAlmostEqual(eps["STEERING_WHEEL_TORQUE_COARSE"], 1.1)
+    self.assertAlmostEqual(eps["STEERING_WHEEL_TORQUE_FINE"], -0.04)
+    self.assertEqual(eps["EPS_FAULT_INHIBIT"], 0)
+    self.assertEqual(eps["DRIVER_TORQUE_INVALID"], 0)
+
+  def test_driver_torque_invalid_suppresses_carstate_value_without_inventing_fault_class(self):
+    CP = CarInterface.get_params(CAR.TOYOTA_COROLLA_TSS3, fingerprint_on(1), [], False, False, False)
+    CI = CarInterface(CP)
+    packer = CANPacker("toyota_tss3_pt_generated")
+    invalid_030 = packer.make_can_msg("TSS3_EPS_TELEMETRY", 1, {
+      "STEERING_WHEEL_TORQUE_COARSE": 5.0,
+      "STEERING_WHEEL_TORQUE_FINE": 0.04,
+      "DRIVER_TORQUE_INVALID": 1,
+      "EPS_FAULT_INHIBIT": 1,
+    })
+    packet = [CanData(address, dat, 1) for address, dat in SPAN_FRAMES.items() if address != 0x030] + [invalid_030]
+
+    CS = None
+    for i in range(20):
+      CS = CI.update([(1_000_000_000 + i * 10_000_000, packet)])
+    assert CS is not None
+
+    self.assertTrue(CS.canValid)
+    self.assertEqual(CS.steeringTorque, 0.0)
+    self.assertFalse(CS.steeringPressed)
     self.assertFalse(CS.steerFaultTemporary)
     self.assertFalse(CS.steerFaultPermanent)
 

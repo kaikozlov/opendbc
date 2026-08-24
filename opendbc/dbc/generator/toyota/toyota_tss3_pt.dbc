@@ -21,7 +21,14 @@ BO_ 37 STEER_ANGLE_SENSOR: 32 XXX
  SG_ STEER_RATE : 35|12@0- (1,0) [-2000|2000] "deg/s" XXX
 
 BO_ 48 TSS3_EPS_TELEMETRY: 32 EPS
+ SG_ STEERING_WHEEL_TORQUE_TRUNC : 7|8@0- (0.1,0) [-12.8|12.7] "Nm" XXX
+ SG_ EPS_STATUS_B6_BIT3 : 51|1@0+ (1,0) [0|1] "" XXX
+ SG_ EPS_FAULT_INHIBIT : 50|1@0+ (1,0) [0|1] "" XXX
+ SG_ EPS_STATUS_B6_BIT1 : 49|1@0+ (1,0) [0|1] "" XXX
+ SG_ DRIVER_TORQUE_INVALID : 48|1@0+ (1,0) [0|1] "" XXX
  SG_ ADDITIVE_BYTE_7 : 63|8@0+ (1,0) [0|255] "" XXX
+ SG_ STEERING_WHEEL_TORQUE_COARSE : 71|8@0- (0.1,0) [-12.8|12.7] "Nm" XXX
+ SG_ STEERING_WHEEL_TORQUE_FINE : 139|4@0- (0.01,0) [-0.08|0.07] "Nm" XXX
 
 BO_ 170 WHEEL_SPEEDS: 8 XXX
  SG_ WHEEL_SPEED_FR_FAULT : 7|1@0+ (1,0) [0|1] "" XXX
@@ -61,7 +68,14 @@ BO_ 1568 BODY_CONTROL_STATE: 8 XXX
  SG_ PARKING_BRAKE : 60|1@0+ (1,0) [0|1] "" XXX
 
 CM_ BO_ 37 "TSS3 Corolla uses the legacy steering angle/fraction/rate bit positions inside a 32-byte CAN-FD PDU; exact H firmware and two driving captures support these fields.";
-CM_ BO_ 48 "Exact H/F EPS transmits this 32-byte PDU. Byte 7 equals sum(bytes 0..6)+0x38 modulo 256; other fields remain intentionally unnamed.";
+CM_ BO_ 48 "Exact H/F EPS transmits this 32-byte PDU. Driver torque and B6 safety/status gates are target-native recovered fields; byte 7 equals sum(bytes 0..6)+0x38 modulo 256.";
+CM_ SG_ 48 STEERING_WHEEL_TORQUE_TRUNC "DID 0x1035 Steering Wheel Torque source, saturating truncation-toward-zero 0.1 Nm view. It can differ from COARSE by one count due to firmware rounding.";
+CM_ SG_ 48 STEERING_WHEEL_TORQUE_COARSE "Coarse component of exact physical Steering Wheel Torque reconstruction.";
+CM_ SG_ 48 STEERING_WHEEL_TORQUE_FINE "Signed hundredths remainder. Exact torque = COARSE + FINE; Span exercises -0.05..+0.05 Nm remainder.";
+CM_ SG_ 48 EPS_FAULT_INHIBIT "Target-native EPS fault/inhibit aggregate from FEBE7DAE; nominal-clear in all 6000 tracked Span frames. Do not infer temporary/permanent openpilot fault class.";
+CM_ SG_ 48 DRIVER_TORQUE_INVALID "Target-native driver-torque invalid/inhibit gate from FEBE7DB2; nominal-clear in all 6000 tracked Span frames.";
+CM_ SG_ 48 EPS_STATUS_B6_BIT1 "Runtime status bit from FEBE7DB3; exact OEM meaning unresolved.";
+CM_ SG_ 48 EPS_STATUS_B6_BIT3 "Runtime status bit from FEBE7E09; exact OEM meaning unresolved.";
 CM_ BO_ 182 "Exact H/F protected lateral receiver PDU. Receiver-side fields are defined for analysis only; transmission remains disabled.";
 CM_ SG_ 182 TARGET_LATERAL_ID "Techstream Target Lateral ID; exact H accepts 1=PCS, 4=LDA, 10=Hands Off LTA, 11=LTA/LCA, 19=PDA. 0 means no request.";
 CM_ SG_ 182 TARGET_STEERING_ANGLE "Controller-equivalent scale is exactly 1024/17870 deg/count (~0.057302742 deg/count). OEM wire-unit label remains unjoined.";

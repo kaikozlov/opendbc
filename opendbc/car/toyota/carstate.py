@@ -52,10 +52,9 @@ class CarState(CarStateBase):
     self.secoc_synchronization = None
 
   def _update_tss3(self, cp: CANParser) -> structs.CarState:
-    # Initial TSS3 Corolla support is intentionally read-only. Only fields with
-    # direct firmware/dynamic evidence are promoted into CarState; unresolved
-    # driver-torque, EPS-fault, set-speed and follow-distance roles remain
-    # neutral rather than borrowing TSS2 semantics.
+    # TSS3 Corolla support remains intentionally read-only. Promote only fields
+    # with target-native firmware + dynamic evidence; do not borrow TSS2 fault,
+    # override-threshold, cruise, or readiness semantics.
     ret = structs.CarState()
 
     self.secoc_synchronization = copy.copy(cp.vl["SECOC_SYNCHRONIZATION"])
@@ -93,11 +92,21 @@ class CarState(CarStateBase):
     ret.cruiseState.enabled = False
     ret.cruiseState.available = False
 
-    # TSS3 replacements for legacy 0x260/0x262 are not dynamically joined yet.
-    # This platform is dashcamOnly + noOutput, so these neutral values cannot be
-    # used to authorize steering.
-    ret.steeringTorque = 0.0
+    # Exact H/F firmware + Techstream close physical driver torque on 0x030:
+    # signed B8 * 0.1 Nm + signed B17[3:0] * 0.01 Nm. The DBC applies those
+    # component scales, so addition reconstructs the native torque intermediate.
+    # If the target-native validity gate asserts, suppress the value rather than
+    # exposing an invalid torque sample.
+    driver_torque_valid = cp.vl["TSS3_EPS_TELEMETRY"]["DRIVER_TORQUE_INVALID"] == 0
+    ret.steeringTorque = (cp.vl["TSS3_EPS_TELEMETRY"]["STEERING_WHEEL_TORQUE_COARSE"] +
+                          cp.vl["TSS3_EPS_TELEMETRY"]["STEERING_WHEEL_TORQUE_FINE"]) if driver_torque_valid else 0.0
     ret.steeringTorqueEps = 0.0
+
+    # The legacy Toyota STEER_THRESHOLD is in the old 0x260 raw domain. No H/F
+    # physical driver-override threshold has been validated yet, so do not reuse
+    # it for the N.m quantity above. Likewise, EPS_FAULT_INHIBIT is a proved raw
+    # fault/inhibit aggregate but there is no safe mapping to openpilot's
+    # temporary/permanent fault split or to DID 0x1033 Ready Status yet.
     ret.steeringPressed = False
     ret.steerFaultTemporary = False
     ret.steerFaultPermanent = False
@@ -266,6 +275,7 @@ class CarState(CarStateBase):
       pt_messages = [
         ("SECOC_SYNCHRONIZATION", 10),
         ("STEER_ANGLE_SENSOR", 100),
+        ("TSS3_EPS_TELEMETRY", 100),
         ("WHEEL_SPEEDS", 100),
         ("BRAKE_MODULE", 50),
         ("GAS_PEDAL", 40),
