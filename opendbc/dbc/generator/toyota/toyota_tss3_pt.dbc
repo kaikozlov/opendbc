@@ -23,7 +23,7 @@ BO_ 37 STEER_ANGLE_SENSOR: 32 XXX
 BO_ 48 TSS3_EPS_TELEMETRY: 32 EPS
  SG_ STEERING_WHEEL_TORQUE_TRUNC : 7|8@0- (0.1,0) [-12.8|12.7] "Nm" XXX
  SG_ EPS_STATUS_B6_BIT3 : 51|1@0+ (1,0) [0|1] "" XXX
- SG_ EPS_FAULT_INHIBIT : 50|1@0+ (1,0) [0|1] "" XXX
+ SG_ STEERING_FAULT_INHIBIT_STATUS : 50|1@0+ (1,0) [0|1] "" XXX
  SG_ EPS_STATUS_B6_BIT1 : 49|1@0+ (1,0) [0|1] "" XXX
  SG_ DRIVER_TORQUE_INVALID : 48|1@0+ (1,0) [0|1] "" XXX
  SG_ ADDITIVE_BYTE_7 : 63|8@0+ (1,0) [0|255] "" XXX
@@ -72,7 +72,7 @@ CM_ BO_ 48 "Exact H/F EPS transmits this 32-byte PDU. Driver torque and B6 safet
 CM_ SG_ 48 STEERING_WHEEL_TORQUE_TRUNC "DID 0x1035 Steering Wheel Torque source, saturating truncation-toward-zero 0.1 Nm view. It can differ from COARSE by one count due to firmware rounding.";
 CM_ SG_ 48 STEERING_WHEEL_TORQUE_COARSE "Coarse component of exact physical Steering Wheel Torque reconstruction.";
 CM_ SG_ 48 STEERING_WHEEL_TORQUE_FINE "Signed hundredths remainder. Exact torque = COARSE + FINE; Span exercises -0.05..+0.05 Nm remainder.";
-CM_ SG_ 48 EPS_FAULT_INHIBIT "Target-native EPS fault/inhibit aggregate from FEBE7DAE; nominal-clear in all 6000 tracked Span frames. Do not infer temporary/permanent openpilot fault class.";
+CM_ SG_ 48 STEERING_FAULT_INHIBIT_STATUS "Target-native selected steering fault/inhibit status aggregate from FEBE7DAE; nominal-clear in all 6000 tracked Span frames. This is not an exhaustive EPS-fault bitmap. Do not infer temporary/permanent openpilot fault class.";
 CM_ SG_ 48 DRIVER_TORQUE_INVALID "Target-native driver-torque invalid/inhibit gate from FEBE7DB2; nominal-clear in all 6000 tracked Span frames.";
 CM_ SG_ 48 EPS_STATUS_B6_BIT1 "Runtime status bit from FEBE7DB3; exact OEM meaning unresolved.";
 CM_ SG_ 48 EPS_STATUS_B6_BIT3 "Runtime status bit from FEBE7E09; exact OEM meaning unresolved.";

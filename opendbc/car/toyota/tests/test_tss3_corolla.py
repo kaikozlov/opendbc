@@ -98,7 +98,7 @@ class TestToyotaCorollaTSS3(unittest.TestCase):
     self.assertAlmostEqual(eps["STEERING_WHEEL_TORQUE_TRUNC"], 1.0)
     self.assertAlmostEqual(eps["STEERING_WHEEL_TORQUE_COARSE"], 1.1)
     self.assertAlmostEqual(eps["STEERING_WHEEL_TORQUE_FINE"], -0.04)
-    self.assertEqual(eps["EPS_FAULT_INHIBIT"], 0)
+    self.assertEqual(eps["STEERING_FAULT_INHIBIT_STATUS"], 0)
     self.assertEqual(eps["DRIVER_TORQUE_INVALID"], 0)
 
   def test_driver_torque_invalid_suppresses_carstate_value_without_inventing_fault_class(self):
@@ -109,7 +109,7 @@ class TestToyotaCorollaTSS3(unittest.TestCase):
       "STEERING_WHEEL_TORQUE_COARSE": 5.0,
       "STEERING_WHEEL_TORQUE_FINE": 0.04,
       "DRIVER_TORQUE_INVALID": 1,
-      "EPS_FAULT_INHIBIT": 1,
+      "STEERING_FAULT_INHIBIT_STATUS": 1,
     })
     packet = [CanData(address, dat, 1) for address, dat in SPAN_FRAMES.items() if address != 0x030] + [invalid_030]
 

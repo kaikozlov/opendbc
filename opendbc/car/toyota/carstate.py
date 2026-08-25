@@ -104,8 +104,9 @@ class CarState(CarStateBase):
 
     # The legacy Toyota STEER_THRESHOLD is in the old 0x260 raw domain. No H/F
     # physical driver-override threshold has been validated yet, so do not reuse
-    # it for the N.m quantity above. Likewise, EPS_FAULT_INHIBIT is a proved raw
-    # fault/inhibit aggregate but there is no safe mapping to openpilot's
+    # it for the N.m quantity above. Likewise, STEERING_FAULT_INHIBIT_STATUS is a
+    # proved selected steering fault/inhibit aggregate, not an exhaustive EPS-fault
+    # state, and there is no safe mapping to openpilot's
     # temporary/permanent fault split or to DID 0x1033 Ready Status yet.
     ret.steeringPressed = False
     ret.steerFaultTemporary = False
