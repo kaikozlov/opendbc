@@ -61,6 +61,9 @@ BO_ 374 PCM_CRUISE: 8 XXX
  SG_ CRUISE_STATE : 31|4@0+ (1,0) [0|15] "" XXX
  SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
 
+BO_ 1310 TSS3_READY_STATUS: 8 XXX
+ SG_ READY_STATUS : 7|1@0+ (1,0) [0|1] "" XXX
+
 BO_ 1556 BLINKERS_STATE: 8 XXX
  SG_ TURN_SIGNALS : 29|2@0+ (1,0) [0|3] "" XXX
 
@@ -82,6 +85,7 @@ CM_ SG_ 182 TARGET_STEERING_ANGLE "Controller-equivalent scale is exactly 1024/1
 CM_ SG_ 182 SEQUENCE "Exact H receiver treats this as a modulo-64 sequence counter with effective gap cap 8.";
 CM_ SG_ 295 GEAR "Only raw 3=D has been dynamically validated on the tracked TSS3 Corolla capture; remaining enum values are retained from Toyota prior art pending target transitions.";
 CM_ SG_ 374 CRUISE_ACTIVE "Wire location/checksum are retained Toyota prior art and observed on moving TSS3 Corolla captures; an active cruise transition has not yet been captured.";
+CM_ SG_ 1310 READY_STATUS "Exact H PDU29 signal154: incoming 0x51E B0[7] feeds DID 0x1033 Ready Status. Both retained operational captures show value 1 only; do not infer Ready=0 fault policy without a transition.";
 
 VAL_ 182 TARGET_LATERAL_ID 27 "Remote Parking" 25 "AP" 19 "PDA" 11 "LTA/LCA" 10 "Hands Off LTA" 4 "LDA" 1 "PCS" 0 "No Request";
 VAL_ 295 GEAR 4 "B" 3 "D" 2 "N" 1 "R" 0 "P";

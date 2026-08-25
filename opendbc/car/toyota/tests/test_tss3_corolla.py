@@ -21,6 +21,8 @@ SPAN_FRAMES = {
   0x116: bytes.fromhex("000200007a353eaa"),
   0x127: bytes.fromhex("001000000738d857"),
   0x176: bytes.fromhex("8800000000000007"),
+  # Exact H 0x51E Ready Status input; Span's moving rlog carries B0[7]=1.
+  0x51E: bytes.fromhex("86001a0000000000"),
   0x614: bytes.fromhex("000036300000ef04"),
   0x620: bytes.fromhex("0000000080000000"),
 }
@@ -87,6 +89,21 @@ class TestToyotaCorollaTSS3(unittest.TestCase):
     # The physical torque is promoted, but the old raw-domain override threshold
     # and 0x262 fault classes are deliberately not transplanted.
     self.assertFalse(CS.steeringPressed)
+    self.assertFalse(CS.steerFaultTemporary)
+    self.assertFalse(CS.steerFaultPermanent)
+
+  def test_real_span_51e_ready_status_is_observable_without_policy_mapping(self):
+    parser = CANParser("toyota_tss3_pt_generated", [("TSS3_READY_STATUS", float('nan'))], 1)
+    parser.update([(1_000_000_000, [CanData(0x51E, SPAN_FRAMES[0x51E], 1)])])
+    self.assertEqual(parser.vl["TSS3_READY_STATUS"]["READY_STATUS"], 1)
+
+    CP = CarInterface.get_params(CAR.TOYOTA_COROLLA_TSS3, fingerprint_on(1), [], False, False, False)
+    CI = CarInterface(CP)
+    packet = [CanData(address, dat, 1) for address, dat in SPAN_FRAMES.items()]
+    CS = None
+    for i in range(20):
+      CS = CI.update([(1_000_000_000 + i * 10_000_000, packet)])
+    assert CS is not None
     self.assertFalse(CS.steerFaultTemporary)
     self.assertFalse(CS.steerFaultPermanent)
 

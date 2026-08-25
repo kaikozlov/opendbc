@@ -282,6 +282,9 @@ class CarState(CarStateBase):
         ("GAS_PEDAL", 40),
         ("GEAR_PACKET_HYBRID", float('nan')),
         ("PCM_CRUISE", float('nan')),
+        # Exact H PDU29 signal154: 0x51E B0[7] -> DID 0x1033 Ready Status.
+        # Parse for read-only observation; policy use remains gated on a Ready transition.
+        ("TSS3_READY_STATUS", float('nan')),
         ("BLINKERS_STATE", float('nan')),
         ("BODY_CONTROL_STATE", float('nan')),
       ]
