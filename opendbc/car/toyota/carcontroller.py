@@ -1,6 +1,6 @@
 import math
 import numpy as np
-from opendbc.car import Bus, make_tester_present_msg, rate_limit, structs, ACCELERATION_DUE_TO_GRAVITY, DT_CTRL
+from opendbc.car import Bus, CanData, make_tester_present_msg, rate_limit, structs, ACCELERATION_DUE_TO_GRAVITY, DT_CTRL
 from opendbc.car.lateral import apply_meas_steer_torque_limits, apply_std_steer_angle_limits, common_fault_avoidance
 from opendbc.car.carlog import carlog
 from opendbc.car.common.filter_simple import FirstOrderFilter, HighPassFilter
@@ -8,7 +8,8 @@ from opendbc.car.common.pid import PIDController
 from opendbc.car.secoc import add_mac, add_mac28_zero_marker, build_sync_mac
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.toyota import toyotacan
-from opendbc.car.toyota.tss3 import (TSS3B6CompanionFields, TSS3B6Template, TSS3PandaSafetyCandidate,
+from opendbc.car.toyota.tss3 import (TSS3B6CompanionFields, TSS3B6Template, TSS3Gate2DevelopmentConfig,
+                                     TSS3Gate2DevelopmentSender, TSS3PandaSafetyCandidate, TSS3_B6_ADDR,
                                      TSS3_B6_TARGET_LATERAL_ID_INACTIVE, TSS3_B6_TARGET_LATERAL_ID_LTA_LCA,
                                      build_b6_application, target_angle_deg_to_raw)
 from opendbc.car.toyota.values import CAR, CarControllerParams, ToyotaFlags
@@ -90,6 +91,14 @@ class CarController(CarControllerBase):
     self.tss3_safety_candidate = TSS3PandaSafetyCandidate()
     self.tss3_last_application = None
     self.tss3_last_safety_decision = None
+    self.tss3_development_sender: TSS3Gate2DevelopmentSender | None = None
+
+  def configure_tss3_gate2_development(self, config: TSS3Gate2DevelopmentConfig) -> None:
+    if not self.CP.flags & ToyotaFlags.TSS3:
+      raise ValueError("TSS3 Gate-2 development sender requires a TSS3 platform")
+    if self.CP.flags & ToyotaFlags.TSS3_PT_BUS1:
+      raise ValueError("TSS3 Gate-2 development sender requires relay-correct bus-0 topology")
+    self.tss3_development_sender = TSS3Gate2DevelopmentSender(config)
 
   def update(self, CC, CS, now_nanos):
     if self.CP.flags & ToyotaFlags.TSS3:
@@ -115,11 +124,33 @@ class CarController(CarControllerBase):
         now_nanos=now_nanos,
       )
 
-      # Non-enabling invariant: TSS3 CarParams uses SafetyModel.noOutput and the
-      # controller returns no CAN even when the shadow candidate passes every
-      # recovered static F33 limit.
+      can_sends = []
+      if self.tss3_development_sender is not None:
+        if CS.secoc_synchronization is not None:
+          self.tss3_development_sender.observe_sync_unverified_for_gate2_development(CS.secoc_synchronization)
+        if CC.latActive:
+          development_frame = self.tss3_development_sender.build_if_due(
+            frame=self.frame,
+            desired_target_raw=target_angle_raw,
+            steering_angle_velocity_raw=int(round(CS.out.steeringRateDeg)),
+            now_nanos=now_nanos,
+            companions=self.tss3_companions,
+          )
+          if development_frame is not None:
+            self.tss3_last_application = development_frame.application
+            self.tss3_last_safety_decision = development_frame.safety
+            can_sends.append(CanData(TSS3_B6_ADDR, development_frame.data, 0))
+        else:
+          # Do not invent an OEM inactive/restart template. Absence lets the
+          # exact receiver's 35-ms supervision fail safe; a later activation
+          # must anchor to a strictly newer stock synchronization epoch.
+          self.tss3_development_sender.note_inactive()
+
+      # Default invariant remains zero CAN. The development sender exists only
+      # after an explicit exact-F33 runtime configuration supplies every live
+      # gate that static analysis intentionally leaves unknown.
       self.frame += 1
-      return CC.actuators.as_builder(), []
+      return CC.actuators.as_builder(), can_sends
 
     actuators = CC.actuators
     stopping = actuators.longControlState == LongCtrlState.stopping

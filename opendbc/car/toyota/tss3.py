@@ -1,10 +1,10 @@
-"""Non-enabling Toyota TSS3 lateral candidate support.
+"""Toyota TSS3 lateral contracts and explicitly gated development sender.
 
 The helpers in this module encode the target-native 2026 Camry/F33 receiver
-contract without authorizing CAN transmission.  Production output remains gated
-on live evidence that is intentionally not represented as a guessed constant:
-stock B6 cadence/template, exclusive relay authority, driver override/current
-policy, and provisioned command-5 permission/latency.
+contract. Production output remains gated on live evidence that is intentionally
+not represented as a guessed constant. A separate Gate-2 development sender can
+be configured only with a stock-validated B6 template/cadence and explicit live
+attestations; it uses an invalid MAC on purpose and is not a production signer.
 """
 
 from __future__ import annotations
@@ -310,6 +310,104 @@ class TSS3SignedB6:
   freshness: TSS3Freshness
   auth_input: bytes
   data: bytes
+
+
+@dataclass(frozen=True)
+class TSS3Gate2DevelopmentConfig:
+  """Live-supplied gates for the exact-F33 persistent-bypass development path.
+
+  Nothing in this object is inferred from static analysis. `template` and
+  `cadence_frames` come from the relay-correct stock capture, while the two
+  booleans record completed live causal/topology checks. Production code must
+  use an authenticated signer instead.
+  """
+
+  template: TSS3B6Template
+  cadence_frames: int
+  gate2_bypass_validated: bool
+  exclusive_b6_authority_validated: bool
+
+  def __post_init__(self):
+    if not self.template.stock_validated:
+      raise ValueError("development B6 template must be stock-validated")
+    if not 1 <= self.cadence_frames <= 100:
+      raise ValueError("development B6 cadence must be 1..100 control frames")
+    if not self.gate2_bypass_validated:
+      raise ValueError("exact-F33 Gate-2 bypass must be live-validated")
+    if not self.exclusive_b6_authority_validated:
+      raise ValueError("exclusive B6 relay/source authority must be live-validated")
+
+
+@dataclass(frozen=True)
+class TSS3Gate2DevelopmentFrame:
+  application: TSS3B6Application
+  freshness: TSS3Freshness
+  data: bytes
+  safety: TSS3SafetyDecision
+
+
+class TSS3Gate2DevelopmentSender:
+  """Fail-closed invalid-MAC sender for the exact F33 Gate-2 experiment.
+
+  This deliberately trusts stock 0x00F only inside the already-live-validated
+  development configuration. It never claims local authentication. On any
+  inactive interval it disarms and requires a strictly newer sync epoch before
+  another active command, avoiding hidden restart/counter assumptions.
+  """
+
+  def __init__(self, config: TSS3Gate2DevelopmentConfig):
+    self.config = config
+    self.freshness = TSS3ReplacementFreshnessState()
+    self.safety = TSS3PandaSafetyCandidate()
+    self.previous_target_raw: int | None = None
+    self._inactive = True
+
+  def observe_sync_unverified_for_gate2_development(self, sync: dict[str, float]) -> bool:
+    return self.freshness.observe_sync(int(sync["TRIP_CNT"]), int(sync["RESET_CNT"]), authenticated=True)
+
+  def note_inactive(self) -> None:
+    if not self._inactive:
+      self.freshness.armed = False
+      self.safety = TSS3PandaSafetyCandidate()
+    self._inactive = True
+
+  def build_if_due(self, *, frame: int, desired_target_raw: int, steering_angle_velocity_raw: int, now_nanos: int,
+                   companions: TSS3B6CompanionFields | None = None) -> TSS3Gate2DevelopmentFrame | None:
+    if frame % self.config.cadence_frames != 0 or not self.freshness.armed:
+      return None
+
+    desired_target_raw = max(-TSS3_B6_TARGET_ANGLE_MAX_RAW, min(TSS3_B6_TARGET_ANGLE_MAX_RAW, desired_target_raw))
+    if self.previous_target_raw is not None:
+      desired_target_raw = max(self.previous_target_raw - TSS3_B6_TARGET_DELTA_MAX_PER_GAP_RAW,
+                               min(self.previous_target_raw + TSS3_B6_TARGET_DELTA_MAX_PER_GAP_RAW, desired_target_raw))
+
+    sequence = self.freshness.application_sequence
+    decision = self.safety.check(
+      target_lateral_id=TSS3_B6_TARGET_LATERAL_ID_LTA_LCA,
+      target_angle_raw=desired_target_raw,
+      sequence=sequence,
+      steering_angle_velocity_raw=steering_angle_velocity_raw,
+      now_nanos=now_nanos,
+    )
+    if not decision.static_limits_ok:
+      return None
+
+    freshness, actual_sequence = self.freshness.next()
+    if actual_sequence != sequence:
+      raise AssertionError("development freshness/application sequence drift")
+    application = build_b6_application(
+      target_lateral_id=TSS3_B6_TARGET_LATERAL_ID_LTA_LCA,
+      target_angle_raw=desired_target_raw,
+      sequence=sequence,
+      template=self.config.template,
+      companions=companions,
+    )
+    # Intentionally invalid MAC: this path exists only after exact-F33 Gate-2
+    # bypass behavior has been causally validated live. Keep the FV4 nibble real.
+    data = application.data + build_b6_trailer(freshness, bytes(16))
+    self.previous_target_raw = desired_target_raw
+    self._inactive = False
+    return TSS3Gate2DevelopmentFrame(application, freshness, data, decision)
 
 
 def target_angle_deg_to_raw(angle_deg: float) -> int:

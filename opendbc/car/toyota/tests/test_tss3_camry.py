@@ -14,6 +14,8 @@ from opendbc.car.toyota.tss3 import (
   TSS3B6CompanionFields,
   TSS3B6Template,
   TSS3Freshness,
+  TSS3Gate2DevelopmentConfig,
+  TSS3Gate2DevelopmentSender,
   TSS3PandaSafetyCandidate,
   TSS3ReplacementFreshnessState,
   TSS3SignerResult,
@@ -26,7 +28,7 @@ from opendbc.car.toyota.tss3 import (
   build_b6_trailer,
   sign_b6,
 )
-from opendbc.car.toyota.values import CAR, DBC, FW_QUERY_CONFIG, TSS3_EXACT_FW_VERSIONS, ToyotaFlags
+from opendbc.car.toyota.values import CAR, DBC, FW_QUERY_CONFIG, TSS3_EXACT_FW_VERSIONS, ToyotaFlags, ToyotaSafetyFlags
 from opendbc.safety.tests.libsafety import libsafety_py
 
 Ecu = structs.CarParams.Ecu
@@ -61,12 +63,20 @@ def fingerprint_on(bus: int) -> dict[int, dict[int, int]]:
   return fp
 
 
-def update_with_frame_set(ci: CarInterface, frames: dict[int, bytes], repeats: int = 20):
-  packet = [CanData(address, dat, 1) for address, dat in frames.items()]
+def update_with_frame_set(ci: CarInterface, frames: dict[int, bytes], repeats: int = 20, bus: int = 1):
+  packet = [CanData(address, dat, bus) for address, dat in frames.items()]
   ret = None
   for i in range(repeats):
     ret = ci.update([(1_000_000_000 + i * 10_000_000, packet)])
   return ret
+
+
+def exact_camry_car_fw() -> list[structs.CarParams.CarFw]:
+  car_fw = []
+  for (ecu, address, sub_address), versions in TSS3_EXACT_FW_VERSIONS[CAR.TOYOTA_CAMRY_TSS3].items():
+    car_fw.append(structs.CarParams.CarFw(ecu=ecu, address=address, subAddress=0 if sub_address is None else sub_address,
+                                          fwVersion=versions[0], brand="toyota"))
+  return car_fw
 
 
 class _AesCmacSigner:
@@ -248,6 +258,62 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
     self.assertTrue(CI.CC.tss3_last_safety_decision.static_limits_ok)
     self.assertFalse(CI.CC.tss3_last_safety_decision.production_allowed)
 
+  def test_development_config_is_exact_f181_and_relay_topology_bound(self):
+    b6_template = bytes(range(28))
+    CP = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint_on(0), exact_camry_car_fw(), False, False, False)
+    CP.carFw = exact_camry_car_fw()
+    CI = CarInterface(CP)
+    CI.configure_tss3_gate2_development_lateral(
+      expected_f181="8965F3307000", b6_template=b6_template, cadence_frames=2,
+      gate2_bypass_validated=True, exclusive_b6_authority_validated=True,
+    )
+    self.assertFalse(CI.CP.dashcamOnly)
+    self.assertTrue(CI.CP.secOcKeyAvailable)
+    self.assertEqual(CI.CP.safetyConfigs[0].safetyModel, structs.CarParams.SafetyModel.toyota)
+    self.assertEqual(CI.CP.safetyConfigs[0].safetyParam, ToyotaSafetyFlags.TSS3_DEV_LATERAL)
+
+    CP_bus1 = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint_on(1), exact_camry_car_fw(), False, False, False)
+    CP_bus1.carFw = exact_camry_car_fw()
+    CI_bus1 = CarInterface(CP_bus1)
+    with self.assertRaisesRegex(ValueError, "bus-0 topology"):
+      CI_bus1.configure_tss3_gate2_development_lateral(
+        expected_f181="8965F3307000", b6_template=b6_template, cadence_frames=2,
+        gate2_bypass_validated=True, exclusive_b6_authority_validated=True,
+      )
+
+  def test_development_controller_emits_only_after_newer_sync_epoch(self):
+    CP = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint_on(0), exact_camry_car_fw(), False, False, False)
+    CP.carFw = exact_camry_car_fw()
+    CI = CarInterface(CP)
+    template = bytes(range(28))
+    CI.configure_tss3_gate2_development_lateral(
+      expected_f181="8965F3307000", b6_template=template, cadence_frames=1,
+      gate2_bypass_validated=True, exclusive_b6_authority_validated=True,
+    )
+    CC = structs.CarControl()
+    CC.enabled = True
+    CC.latActive = True
+    CC.actuators.steeringAngleDeg = 2 * TSS3_B6_TARGET_ANGLE_SCALE_DEG
+
+    baseline = CAMRY_COMMON | {0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]}
+    update_with_frame_set(CI, baseline, bus=0)
+    _, sends = CI.apply(CC.as_reader(), 2_000_000_000)
+    self.assertEqual(sends, [])
+
+    packer = CANPacker("toyota_tss3_pt_generated")
+    newer_sync = packer.make_can_msg("SECOC_SYNCHRONIZATION", 0, {
+      "TRIP_CNT": 434, "RESET_CNT": 5213, "AUTHENTICATOR": 0,
+    })[1]
+    update_with_frame_set(CI, baseline | {0x00F: newer_sync}, bus=0)
+    _, sends = CI.apply(CC.as_reader(), 2_010_000_000)
+    self.assertEqual(len(sends), 1)
+    self.assertEqual((sends[0].address, sends[0].src, len(sends[0].dat)), (0x0B6, 0, 32))
+    self.assertEqual(sends[0].dat[:3], template[:3])
+    self.assertEqual(sends[0].dat[3] & 0x3F, 11)
+    self.assertEqual(int.from_bytes(sends[0].dat[4:6], "big", signed=True), 2)
+    self.assertEqual(sends[0].dat[28] >> 4, 0x5)  # message1/reset-low2=1
+    self.assertEqual(int.from_bytes(sends[0].dat[28:], "big") & 0x0FFFFFFF, 0)
+
 
 class TestToyotaTSS3B6Contract(unittest.TestCase):
   def test_application_packer_preserves_unknown_template_bits(self):
@@ -371,6 +437,31 @@ class TestToyotaTSS3B6Contract(unittest.TestCase):
       self.assertFalse(decision.static_limits_ok)
       self.assertFalse(decision.production_allowed)
 
+  def test_gate2_development_sender_requires_live_supplied_gates(self):
+    with self.assertRaises(ValueError):
+      TSS3Gate2DevelopmentConfig(TSS3B6Template(bytes(28), stock_validated=False), 1, True, True)
+    with self.assertRaises(ValueError):
+      TSS3Gate2DevelopmentConfig(TSS3B6Template(bytes(28), stock_validated=True), 1, False, True)
+
+    sender = TSS3Gate2DevelopmentSender(TSS3Gate2DevelopmentConfig(
+      TSS3B6Template(bytes(range(28)), stock_validated=True), 2, True, True,
+    ))
+    baseline = {"TRIP_CNT": 1, "RESET_CNT": 100, "AUTHENTICATOR": 0}
+    newer = {"TRIP_CNT": 1, "RESET_CNT": 101, "AUTHENTICATOR": 0}
+    self.assertFalse(sender.observe_sync_unverified_for_gate2_development(baseline))
+    self.assertTrue(sender.observe_sync_unverified_for_gate2_development(newer))
+    self.assertIsNone(sender.build_if_due(frame=1, desired_target_raw=1000, steering_angle_velocity_raw=0, now_nanos=1_000_000))
+    out = sender.build_if_due(frame=2, desired_target_raw=1000, steering_angle_velocity_raw=0, now_nanos=2_000_000)
+    self.assertIsNotNone(out)
+    self.assertEqual(out.application.target_angle_raw, 1000)
+    self.assertEqual(int.from_bytes(out.data[28:], "big") & 0x0FFFFFFF, 0)
+    # The next command is clamped to the exact-F33 +78 raw replacement step.
+    out2 = sender.build_if_due(frame=4, desired_target_raw=1500, steering_angle_velocity_raw=0, now_nanos=12_000_000)
+    self.assertIsNotNone(out2)
+    self.assertEqual(out2.application.target_angle_raw, 1078)
+    sender.note_inactive()
+    self.assertIsNone(sender.build_if_due(frame=6, desired_target_raw=1000, steering_angle_velocity_raw=0, now_nanos=22_000_000))
+
 
 class TestToyotaTSS3PandaShadowSafety(unittest.TestCase):
   def test_c_candidate_limits(self):
@@ -393,6 +484,43 @@ class TestToyotaTSS3PandaShadowSafety(unittest.TestCase):
     s.init_tests()
     candidate = libsafety_py.make_CANPacket(0x0B6, 0, bytes(32))
     self.assertFalse(s.safety_tx_hook(candidate))
+
+  def test_debug_panda_path_is_b6_only_and_enforces_f33_limits(self):
+    s = libsafety_py.libsafety
+    self.assertEqual(s.set_safety_hooks(structs.CarParams.SafetyModel.toyota, ToyotaSafetyFlags.TSS3_DEV_LATERAL), 0)
+    s.init_tests()
+
+    def b6(angle: int, sequence: int, target_id: int = 11):
+      dat = bytearray(32)
+      dat[3] = target_id
+      dat[4:6] = angle.to_bytes(2, "big", signed=True)
+      dat[7] = sequence
+      return libsafety_py.make_CANPacket(0x0B6, 0, bytes(dat))
+
+    # No command before both target-native steering-rate and stock sync inputs.
+    self.assertFalse(s.safety_tx_hook(b6(100, 0)))
+    self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x025, 0, CAMRY_COMMON[0x025])))
+    self.assertFalse(s.safety_tx_hook(b6(100, 0)))
+    self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x00F, 0, CAMRY_COMMON[0x00F])))
+    self.assertTrue(s.safety_tx_hook(b6(100, 0)))
+    s.set_timer(10_000)
+    self.assertTrue(s.safety_tx_hook(b6(178, 1)))
+    s.set_timer(20_000)
+    self.assertFalse(s.safety_tx_hook(b6(257, 2)))  # >78 raw step
+    self.assertFalse(s.safety_tx_hook(b6(178, 3, target_id=4)))
+    self.assertFalse(s.safety_tx_hook(libsafety_py.make_CANPacket(0x191, 0, bytes(8))))
+    self.assertFalse(s.safety_tx_hook(libsafety_py.make_CANPacket(0x0B6, 1, bytes(32))))
+
+    # A strictly changed stock sync epoch resets sequence history; a high-rate
+    # exact-F33 0x025 input still blocks actuation independently.
+    newer_sync = bytearray(CAMRY_COMMON[0x00F])
+    newer_sync[3] += 0x10
+    self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x00F, 0, bytes(newer_sync))))
+    high_rate = bytearray(CAMRY_COMMON[0x025])
+    high_rate[4] = (high_rate[4] & 0xF0) | 0x0
+    high_rate[5] = 101
+    self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x025, 0, bytes(high_rate))))
+    self.assertFalse(s.safety_tx_hook(b6(100, 0)))
 
 
 if __name__ == "__main__":

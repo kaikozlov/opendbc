@@ -56,6 +56,9 @@ class ToyotaSafetyFlags(IntFlag):
   STOCK_LONGITUDINAL = (2 << 8)
   LTA = (4 << 8)
   SECOC = (8 << 8)
+  # Development-only exact-F33 B6 mode. Panda compiles this path only with
+  # ALLOW_DEBUG and uses a dedicated 0x0B6-only whitelist/safety contract.
+  TSS3_DEV_LATERAL = (16 << 8)
 
 
 class ToyotaFlags(IntFlag):

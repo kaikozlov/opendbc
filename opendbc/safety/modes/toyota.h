@@ -63,10 +63,19 @@ static bool toyota_lta = false;
 static int toyota_dbc_eps_torque_factor = 100;   // conversion factor for STEER_TORQUE_EPS in %: see dbc file
 
 #ifdef ALLOW_DEBUG
-// Exact 8965F3307000 shadow lateral contract. This helper is intentionally NOT
-// called from toyota_tx_hook and 0x0B6 is intentionally absent from every Toyota
-// TX whitelist. It exists only to lock the candidate limits in C before the
-// remaining live policy/signing/relay gates are closed.
+static bool toyota_tss3_dev_lateral = false;
+static bool toyota_tss3_steering_rate_seen = false;
+static int toyota_tss3_steering_rate_raw = 0;
+static bool toyota_tss3_sync_seen = false;
+static uint64_t toyota_tss3_sync_epoch = 0U;
+static bool toyota_tss3_has_previous = false;
+static int toyota_tss3_previous_angle_raw = 0;
+static uint8_t toyota_tss3_previous_sequence = 0U;
+static uint32_t toyota_tss3_previous_tx_ts = 0U;
+
+// Exact 8965F3307000 lateral contract. Ordinary Toyota modes still cannot send
+// 0x0B6; only the ALLOW_DEBUG TSS3 development mode below installs a dedicated
+// B6-only whitelist and calls this helper after its live gates are attested.
 #define TOYOTA_TSS3_TARGET_LATERAL_ID_LTA_LCA 11U
 #define TOYOTA_TSS3_TARGET_ANGLE_MAX_RAW 1745
 #define TOYOTA_TSS3_TARGET_DELTA_PER_GAP_RAW 78
@@ -94,6 +103,25 @@ static bool toyota_tss3_candidate_limits_check(uint8_t target_lateral_id, int ta
   }
 
   return !violation;
+}
+
+static void toyota_tss3_dev_rx(const CANPacket_t *msg) {
+  if ((msg->bus == 0U) && (msg->addr == 0x25U)) {
+    int steering_rate = ((msg->data[4] & 0xFU) << 8U) | msg->data[5];
+    toyota_tss3_steering_rate_raw = to_signed(steering_rate, 12);
+    toyota_tss3_steering_rate_seen = true;
+  }
+
+  if ((msg->bus == 0U) && (msg->addr == 0x0FU)) {
+    const uint32_t trip_counter = (msg->data[0] << 8U) | msg->data[1];
+    const uint32_t reset_counter = (msg->data[2] << 12U) | (msg->data[3] << 4U) | (msg->data[4] >> 4U);
+    const uint64_t epoch = (((uint64_t)trip_counter) << 20U) | reset_counter;
+    if (!toyota_tss3_sync_seen || (epoch != toyota_tss3_sync_epoch)) {
+      toyota_tss3_sync_epoch = epoch;
+      toyota_tss3_sync_seen = true;
+      toyota_tss3_has_previous = false;
+    }
+  }
 }
 
 #endif  // ALLOW_DEBUG
@@ -131,6 +159,13 @@ static bool toyota_get_quality_flag_valid(const CANPacket_t *msg) {
 }
 
 static void toyota_rx_hook(const CANPacket_t *msg) {
+#ifdef ALLOW_DEBUG
+  if (toyota_tss3_dev_lateral) {
+    toyota_tss3_dev_rx(msg);
+    return;
+  }
+#endif
+
   if (msg->bus == 0U) {
 
     // get eps motor torque (0.66 factor in dbc)
@@ -249,6 +284,33 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
   };
 
   bool tx = true;
+
+#ifdef ALLOW_DEBUG
+  if (toyota_tss3_dev_lateral) {
+    if ((msg->bus != 0U) || (msg->addr != 0x0B6U) || (GET_LEN(msg) != 32U) ||
+        !toyota_tss3_steering_rate_seen || !toyota_tss3_sync_seen) {
+      return false;
+    }
+
+    const uint8_t target_lateral_id = msg->data[3] & 0x3FU;
+    int target_angle_raw = (msg->data[4] << 8U) | msg->data[5];
+    target_angle_raw = to_signed(target_angle_raw, 16);
+    const uint8_t sequence = msg->data[7] & 0x3FU;
+    const uint32_t now = microsecond_timer_get();
+    const uint32_t elapsed = toyota_tss3_has_previous ? safety_get_ts_elapsed(now, toyota_tss3_previous_tx_ts) : 0U;
+
+    tx = toyota_tss3_candidate_limits_check(target_lateral_id, target_angle_raw, sequence,
+                                             toyota_tss3_previous_angle_raw, toyota_tss3_previous_sequence,
+                                             toyota_tss3_steering_rate_raw, elapsed, toyota_tss3_has_previous);
+    if (tx) {
+      toyota_tss3_previous_angle_raw = target_angle_raw;
+      toyota_tss3_previous_sequence = sequence;
+      toyota_tss3_previous_tx_ts = now;
+      toyota_tss3_has_previous = true;
+    }
+    return tx;
+  }
+#endif
 
   // Check if msg is sent on BUS 0
   if (msg->bus == 0U) {
@@ -415,7 +477,13 @@ static safety_config toyota_init(uint16_t param) {
 
 #ifdef ALLOW_DEBUG
   const uint32_t TOYOTA_PARAM_SECOC = 8UL << TOYOTA_PARAM_OFFSET;
+  const uint32_t TOYOTA_PARAM_TSS3_DEV_LATERAL = 16UL << TOYOTA_PARAM_OFFSET;
   toyota_secoc = GET_FLAG(param, TOYOTA_PARAM_SECOC);
+  toyota_tss3_dev_lateral = GET_FLAG(param, TOYOTA_PARAM_TSS3_DEV_LATERAL);
+  toyota_tss3_steering_rate_seen = false;
+  toyota_tss3_sync_seen = false;
+  toyota_tss3_has_previous = false;
+  toyota_tss3_previous_tx_ts = 0U;
 #endif
 
   toyota_alt_brake = GET_FLAG(param, TOYOTA_PARAM_ALT_BRAKE);
@@ -424,6 +492,21 @@ static safety_config toyota_init(uint16_t param) {
   toyota_dbc_eps_torque_factor = param & TOYOTA_EPS_FACTOR;
 
   safety_config ret;
+#ifdef ALLOW_DEBUG
+  if (toyota_tss3_dev_lateral) {
+    static const CanMsg TOYOTA_TSS3_DEV_TX_MSGS[] = {
+      {0x0B6, 0, 32, .check_relay = true},
+    };
+    static RxCheck toyota_tss3_dev_rx_checks[] = {
+      {.msg = {{0x025, 0, 32, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
+      {.msg = {{0x00F, 0, 8, 10U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
+    };
+    SET_TX_MSGS(TOYOTA_TSS3_DEV_TX_MSGS, ret);
+    SET_RX_CHECKS(toyota_tss3_dev_rx_checks, ret);
+    return ret;
+  }
+#endif
+
   if (toyota_secoc) {
     if (toyota_stock_longitudinal) {
       SET_TX_MSGS(TOYOTA_SECOC_TX_MSGS, ret);
