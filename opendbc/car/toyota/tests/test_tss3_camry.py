@@ -20,6 +20,7 @@ from opendbc.car.toyota.tss3 import (
   TSS3_B6_AUTH_INPUT_LEN,
   TSS3_B6_TARGET_ANGLE_MAX_RAW,
   TSS3_B6_TARGET_ANGLE_SCALE_DEG,
+  decode_eps_394_state_candidates,
   build_b6_application,
   build_b6_auth_input,
   build_b6_trailer,
@@ -198,6 +199,37 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
     self.assertEqual((CI.CS.tss3_status_351_code, CI.CS.tss3_status_351_flag), (7, True))
     self.assertTrue(CI.CS.tss3_fault_394_seen)
     self.assertEqual(CI.CS.tss3_fault_394_projection, (2, 3, 4, 1))
+    self.assertEqual(CI.CS.tss3_fault_394_state_candidates, ())
+    self.assertIsNone(CI.CS.tss3_fault_394_state)
+    self.assertFalse(CS.steerFaultTemporary)
+    self.assertFalse(CS.steerFaultPermanent)
+
+  def test_exact_f33_394_projection_decodes_internal_state_candidates_only(self):
+    # Target-native F33 state table at CodeFlash 0x2A19C. The four-tuple is
+    # (column4, column1, column2, column3), exactly the fields carried by 0x394.
+    self.assertEqual(decode_eps_394_state_candidates((0, 0, 0, 0)), (0,))
+    self.assertEqual(decode_eps_394_state_candidates((2, 3, 2, 1)), (6,))
+    self.assertEqual(decode_eps_394_state_candidates((1, 7, 1, 1)), (10,))
+    self.assertEqual(decode_eps_394_state_candidates((0, 3, 0, 0)), (1, 3, 4))
+    self.assertEqual(decode_eps_394_state_candidates((0, 7, 0, 0)), (2, 16))
+    self.assertEqual(decode_eps_394_state_candidates((3, 7, 7, 1)), ())
+
+    CP = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint_on(1), [], False, False, False)
+    CI = CarInterface(CP)
+    packer = CANPacker("toyota_tss3_pt_generated")
+    clear_394 = packer.make_can_msg("TSS3_EPS_FAULT_STATUS_394", 1, {
+      "STATUS_TABLE_COLUMN_4": 0, "STATUS_TABLE_COLUMN_1": 0,
+      "STATUS_TABLE_COLUMN_2": 0, "STATUS_TABLE_COLUMN_3": 0,
+    })[1]
+    CS = update_with_frame_set(CI, CAMRY_COMMON | {
+      0x127: CAMRY_GEAR[structs.CarState.GearShifter.park], 0x394: clear_394,
+    })
+    self.assertEqual(CI.CS.tss3_fault_394_state_candidates, (0,))
+    self.assertEqual(CI.CS.tss3_fault_394_state, 0)
+    # Internal state0 is not independently a Ready authorization bit or an
+    # openpilot temporary/permanent fault policy.
+    self.assertFalse(CS.steerFaultTemporary)
+    self.assertFalse(CS.steerFaultPermanent)
 
   def test_controller_computes_shadow_candidate_but_emits_no_can(self):
     CP = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint_on(1), [], False, False, False)

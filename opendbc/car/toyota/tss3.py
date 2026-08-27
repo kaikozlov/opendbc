@@ -30,6 +30,37 @@ TSS3_B6_EFFECTIVE_GAP_MAX = 8
 TSS3_B6_RX_TIMEOUT_NS = 35_000_000
 TSS3_STEERING_ANGLE_VELOCITY_MAX_RAW = 100
 
+# Exact F33 0x394 classifier table projection. The EPS state table at CodeFlash
+# 0x2A19C has five columns; 0x394 carries columns (4, 1, 2, 3). Two wire
+# tuples are intentionally lossy, so callers receive candidate sets rather than
+# a fabricated unique internal state. This is OEM-internal status, not an
+# openpilot temporary/permanent fault policy.
+TSS3_EPS_394_STATE_CANDIDATES: dict[tuple[int, int, int, int], tuple[int, ...]] = {
+  (0, 0, 0, 0): (0,),
+  (0, 1, 0, 0): (5,),
+  (0, 2, 0, 0): (15,),
+  (0, 3, 0, 0): (1, 3, 4),
+  (0, 3, 2, 1): (7,),
+  (0, 3, 3, 0): (9,),
+  (0, 7, 0, 0): (2, 16),
+  (1, 7, 1, 1): (10,),
+  (1, 7, 4, 1): (11,),
+  (1, 7, 5, 0): (14,),
+  (1, 7, 6, 0): (13,),
+  (1, 7, 7, 0): (12,),
+  (2, 3, 2, 1): (6,),
+  (2, 3, 3, 0): (8,),
+}
+
+
+def decode_eps_394_state_candidates(projection: tuple[int, int, int, int]) -> tuple[int, ...]:
+  """Return exact-F33 internal classifier states compatible with 0x394.
+
+  An empty tuple means the wire tuple is not present in the target-native
+  17-row table. It is deliberately not converted into an openpilot fault.
+  """
+  return TSS3_EPS_394_STATE_CANDIDATES.get(projection, ())
+
 
 @dataclass(frozen=True)
 class TSS3B6Template:

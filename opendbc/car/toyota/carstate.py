@@ -5,6 +5,7 @@ from opendbc.car import Bus, DT_CTRL, create_button_events, structs
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.common.filter_simple import FirstOrderFilter
 from opendbc.car.interfaces import CarStateBase
+from opendbc.car.toyota.tss3 import decode_eps_394_state_candidates
 from opendbc.car.toyota.values import ToyotaFlags, CAR, DBC, STEER_THRESHOLD, EPS_SCALE
 
 ButtonType = structs.CarState.ButtonEvent.Type
@@ -63,6 +64,8 @@ class CarState(CarStateBase):
     self.tss3_status_351_flag = False
     self.tss3_fault_394_seen = False
     self.tss3_fault_394_projection = (0, 0, 0, 0)
+    self.tss3_fault_394_state_candidates: tuple[int, ...] = ()
+    self.tss3_fault_394_state: int | None = None
 
   @staticmethod
   def _tss3_message_seen(cp: CANParser, message: str) -> bool:
@@ -143,6 +146,8 @@ class CarState(CarStateBase):
       int(cp.vl["TSS3_EPS_FAULT_STATUS_394"]["STATUS_TABLE_COLUMN_2"]),
       int(cp.vl["TSS3_EPS_FAULT_STATUS_394"]["STATUS_TABLE_COLUMN_3"]),
     )
+    self.tss3_fault_394_state_candidates = decode_eps_394_state_candidates(self.tss3_fault_394_projection) if self.tss3_fault_394_seen else ()
+    self.tss3_fault_394_state = self.tss3_fault_394_state_candidates[0] if len(self.tss3_fault_394_state_candidates) == 1 else None
 
     # The legacy Toyota STEER_THRESHOLD is in the old 0x260 raw domain. No H/F
     # physical driver-override threshold has been validated yet, so do not reuse
