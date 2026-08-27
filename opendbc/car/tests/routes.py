@@ -36,6 +36,9 @@ non_tested_cars = [
   # Read-only TSS3 port is validated against a tracked raw Span rlog in its
   # dedicated Toyota test; no fetchable comma route with native carParams yet.
   TOYOTA.TOYOTA_COROLLA_TSS3,
+  # Exact 2026 Camry TSS3 is replay-validated against retained local capture
+  # fixtures; there is no fetchable comma route with native carParams yet.
+  TOYOTA.TOYOTA_CAMRY_TSS3,
   TOYOTA.TOYOTA_RAV4H,
 
 ]

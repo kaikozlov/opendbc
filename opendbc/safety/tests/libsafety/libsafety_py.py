@@ -103,6 +103,10 @@ void set_cruise_engaged_prev(bool engaged);
 bool get_vehicle_moving(void);
 void set_timer(uint32_t t);
 
+bool test_toyota_tss3_candidate_limits_check(uint8_t target_lateral_id, int target_angle_raw, uint8_t sequence,
+                                               int previous_angle_raw, uint8_t previous_sequence, int steering_rate_raw,
+                                               uint32_t elapsed_us, bool has_previous);
+
 void safety_tick_current_safety_config();
 bool safety_config_valid();
 

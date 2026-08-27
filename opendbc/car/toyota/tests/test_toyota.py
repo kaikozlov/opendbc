@@ -37,11 +37,13 @@ class TestToyotaInterfaces(unittest.TestCase):
         assert dbc[Bus.pt] == "toyota_nodsu_pt_generated"
 
   def test_tss3_control_and_security_axes_are_independent(self):
-    flags = CAR.TOYOTA_COROLLA_TSS3.config.flags
-    assert flags & ToyotaFlags.TSS3
-    assert flags & ToyotaFlags.SECOC
-    assert not flags & ToyotaFlags.TSS2
-    assert DBC[CAR.TOYOTA_COROLLA_TSS3][Bus.pt] == "toyota_tss3_pt_generated"
+    for platform in (CAR.TOYOTA_COROLLA_TSS3, CAR.TOYOTA_CAMRY_TSS3):
+      with self.subTest(platform=platform):
+        flags = platform.config.flags
+        assert flags & ToyotaFlags.TSS3
+        assert flags & ToyotaFlags.SECOC
+        assert not flags & ToyotaFlags.TSS2
+        assert DBC[platform][Bus.pt] == "toyota_tss3_pt_generated"
 
   def test_essential_ecus(self):
     # Asserts standard ECUs exist for each platform

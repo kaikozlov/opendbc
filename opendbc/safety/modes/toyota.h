@@ -62,6 +62,42 @@ static bool toyota_stock_longitudinal = false;
 static bool toyota_lta = false;
 static int toyota_dbc_eps_torque_factor = 100;   // conversion factor for STEER_TORQUE_EPS in %: see dbc file
 
+#ifdef ALLOW_DEBUG
+// Exact 8965F3307000 shadow lateral contract. This helper is intentionally NOT
+// called from toyota_tx_hook and 0x0B6 is intentionally absent from every Toyota
+// TX whitelist. It exists only to lock the candidate limits in C before the
+// remaining live policy/signing/relay gates are closed.
+#define TOYOTA_TSS3_TARGET_LATERAL_ID_LTA_LCA 11U
+#define TOYOTA_TSS3_TARGET_ANGLE_MAX_RAW 1745
+#define TOYOTA_TSS3_TARGET_DELTA_PER_GAP_RAW 78
+#define TOYOTA_TSS3_STEER_RATE_MAX_RAW 100
+#define TOYOTA_TSS3_RX_TIMEOUT_US 35000U
+
+static bool toyota_tss3_candidate_limits_check(uint8_t target_lateral_id, int target_angle_raw, uint8_t sequence,
+                                                int previous_angle_raw, uint8_t previous_sequence, int steering_rate_raw,
+                                                uint32_t elapsed_us, bool has_previous) {
+  bool violation = false;
+  const bool active = target_lateral_id != 0U;
+
+  violation |= active && (target_lateral_id != TOYOTA_TSS3_TARGET_LATERAL_ID_LTA_LCA);
+  violation |= !active && (target_angle_raw != 0);
+  violation |= SAFETY_ABS(target_angle_raw) > TOYOTA_TSS3_TARGET_ANGLE_MAX_RAW;
+  violation |= SAFETY_ABS(steering_rate_raw) > TOYOTA_TSS3_STEER_RATE_MAX_RAW;
+
+  if (has_previous) {
+    const uint8_t sequence_gap = (sequence - previous_sequence) & 0x3FU;
+    // Replacement policy is deliberately stricter than the EPS's capped-8
+    // tolerated gap: production candidates must advance exactly +1.
+    violation |= sequence_gap != 1U;
+    violation |= SAFETY_ABS(target_angle_raw - previous_angle_raw) > TOYOTA_TSS3_TARGET_DELTA_PER_GAP_RAW;
+    violation |= active && (elapsed_us > TOYOTA_TSS3_RX_TIMEOUT_US);
+  }
+
+  return !violation;
+}
+
+#endif  // ALLOW_DEBUG
+
 static uint32_t toyota_compute_checksum(const CANPacket_t *msg) {
   int len = GET_LEN(msg);
   uint8_t checksum = (uint8_t)(msg->addr) + (uint8_t)((unsigned int)(msg->addr) >> 8U) + (uint8_t)(len);

@@ -8,6 +8,9 @@ from opendbc.car.common.pid import PIDController
 from opendbc.car.secoc import add_mac, add_mac28_zero_marker, build_sync_mac
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.toyota import toyotacan
+from opendbc.car.toyota.tss3 import (TSS3B6CompanionFields, TSS3B6Template, TSS3PandaSafetyCandidate,
+                                     TSS3_B6_TARGET_LATERAL_ID_INACTIVE, TSS3_B6_TARGET_LATERAL_ID_LTA_LCA,
+                                     build_b6_application, target_angle_deg_to_raw)
 from opendbc.car.toyota.values import CAR, CarControllerParams, ToyotaFlags
 from opendbc.can import CANPacker
 
@@ -78,12 +81,43 @@ class CarController(CarControllerBase):
     # deployment. Default behavior remains ordinary key-backed SecOC.
     self.ephemeral_secoc_bridge = False
 
+    # TSS3 shadow sender state. This is deliberately not a scheduler or CAN
+    # output path: the stock application template/cadence and live signing/relay
+    # gates are still open. It exists so the exact F33 command and safety
+    # contract can be exercised by unit/replay tests before output is enabled.
+    self.tss3_template = TSS3B6Template()
+    self.tss3_companions = TSS3B6CompanionFields()
+    self.tss3_safety_candidate = TSS3PandaSafetyCandidate()
+    self.tss3_last_application = None
+    self.tss3_last_safety_decision = None
+
   def update(self, CC, CS, now_nanos):
     if self.CP.flags & ToyotaFlags.TSS3:
-      # TSS3 B6 receiver geometry is known, but the sender cadence/full payload,
-      # SecOC freshness/source, stock suppression point and safety limits are
-      # not. This read-only platform must emit no CAN traffic under any control
-      # request until those contracts are closed.
+      # Compute the exact-F33 *shadow* B6 application command for inspection and
+      # replay, but do not schedule it, authenticate it, or return it as CAN.
+      # A real sender sequence is owned by TSS3ReplacementFreshnessState only
+      # after a newer authenticated 0x00F epoch and validated stock cadence.
+      target_lateral_id = TSS3_B6_TARGET_LATERAL_ID_LTA_LCA if CC.latActive else TSS3_B6_TARGET_LATERAL_ID_INACTIVE
+      target_angle_raw = target_angle_deg_to_raw(CC.actuators.steeringAngleDeg) if CC.latActive else 0
+      shadow_sequence = self.frame & 0x3F
+      self.tss3_last_application = build_b6_application(
+        target_lateral_id=target_lateral_id,
+        target_angle_raw=target_angle_raw,
+        sequence=shadow_sequence,
+        template=self.tss3_template,
+        companions=self.tss3_companions,
+      )
+      self.tss3_last_safety_decision = self.tss3_safety_candidate.check(
+        target_lateral_id=target_lateral_id,
+        target_angle_raw=target_angle_raw,
+        sequence=shadow_sequence,
+        steering_angle_velocity_raw=int(round(CS.out.steeringRateDeg)),
+        now_nanos=now_nanos,
+      )
+
+      # Non-enabling invariant: TSS3 CarParams uses SafetyModel.noOutput and the
+      # controller returns no CAN even when the shadow candidate passes every
+      # recovered static F33 limit.
       self.frame += 1
       return CC.actuators.as_builder(), []
 

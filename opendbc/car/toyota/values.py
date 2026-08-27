@@ -200,6 +200,12 @@ class CAR(Platforms):
     ],
     TOYOTA_CAMRY.specs,
   )
+  # Exact maintainer-operated F33 specimen. Read-only until the remaining
+  # stock-sender/signing/relay/live-policy gates are closed.
+  TOYOTA_CAMRY_TSS3 = ToyotaTSS3PlatformConfig(
+    [ToyotaTSS3CarDocs("Toyota Camry Hybrid 2026")],
+    TOYOTA_CAMRY.specs,
+  )
   TOYOTA_CHR = PlatformConfig(
     [
       ToyotaCarDocs("Toyota C-HR 2017-20"),
@@ -438,6 +444,26 @@ class CAR(Platforms):
   )
 
 
+# Identity-bound TSS3 research platforms whose exact diagnostic routes are known
+# but whose complete production firmware inventory/query routing is not yet closed.
+# Keep these out of FW_VERSIONS: the generic exact matcher requires a complete set
+# of essential ECUs. Toyota's custom matcher below uses the exact EPS F181 as the
+# required discriminator and treats the other known identities as corroboration.
+TSS3_EXACT_FW_VERSIONS = {
+  CAR.TOYOTA_CAMRY_TSS3: {
+    (Ecu.eps, 0x7A1, None): [
+      b'\x028965F3307000\x00\x00\x00\x008A3113303100\x00\x00\x00\x00',
+    ],
+    (Ecu.fwdCamera, 0x792, None): [
+      b'\x018646F3315000\x00\x00\x00\x00',
+    ],
+    (Ecu.abs, 0x7B0, None): [
+      b'\x01F152633K0000\x00\x00\x00\x00',
+    ],
+  },
+}
+
+
 def get_platform_codes(fw_versions: list[bytes]) -> dict[bytes, set[bytes]]:
   # Returns sub versions in a dict so comparisons can be made within part-platform-major_version combos
   codes = defaultdict(set)  # Optional[part]-platform-major_version: set of sub_version
@@ -483,6 +509,28 @@ def get_platform_codes(fw_versions: list[bytes]) -> dict[bytes, set[bytes]]:
 
 
 def match_fw_to_car_fuzzy(live_fw_versions, vin, offline_fw_versions) -> set[str]:
+  # TSS3 research platforms are intentionally excluded from FW_VERSIONS until a
+  # complete production query inventory exists. Match the exact target EPS F181
+  # first; any corroborating identity that is present must also match exactly.
+  for candidate, fws in TSS3_EXACT_FW_VERSIONS.items():
+    eps_ecus = [ecu for ecu in fws if ecu[0] == Ecu.eps]
+    if len(eps_ecus) != 1:
+      continue
+
+    eps_ecu = eps_ecus[0]
+    eps_found = live_fw_versions.get(eps_ecu[1:], set())
+    if not any(version in fws[eps_ecu] for version in eps_found):
+      continue
+
+    conflict = False
+    for ecu, expected_versions in fws.items():
+      found_versions = live_fw_versions.get(ecu[1:], set())
+      if found_versions and not any(version in expected_versions for version in found_versions):
+        conflict = True
+        break
+    if not conflict:
+      return {str(candidate)}
+
   candidates = set()
 
   for candidate, fws in offline_fw_versions.items():

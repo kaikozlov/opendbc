@@ -199,6 +199,15 @@ int get_curvature_meas_max(void){
 }
 
 
+#ifdef ALLOW_DEBUG
+bool test_toyota_tss3_candidate_limits_check(uint8_t target_lateral_id, int target_angle_raw, uint8_t sequence,
+                                               int previous_angle_raw, uint8_t previous_sequence, int steering_rate_raw,
+                                               uint32_t elapsed_us, bool has_previous) {
+  return toyota_tss3_candidate_limits_check(target_lateral_id, target_angle_raw, sequence, previous_angle_raw,
+                                            previous_sequence, steering_rate_raw, elapsed_us, has_previous);
+}
+#endif  // ALLOW_DEBUG
+
 // ***** car specific helpers *****
 
 void set_honda_alt_brake_msg(bool c){

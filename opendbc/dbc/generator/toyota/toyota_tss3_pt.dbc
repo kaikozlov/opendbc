@@ -30,6 +30,24 @@ BO_ 48 TSS3_EPS_TELEMETRY: 32 EPS
  SG_ STEERING_WHEEL_TORQUE_COARSE : 71|8@0- (0.1,0) [-12.8|12.7] "Nm" XXX
  SG_ STEERING_WHEEL_TORQUE_FINE : 139|4@0- (0.01,0) [-0.08|0.07] "Nm" XXX
 
+BO_ 849 TSS3_EPS_STATUS_351: 4 XXX
+ SG_ STATUS_CODE : 23|3@0+ (1,0) [0|7] "" XXX
+ SG_ STATUS_FLAG : 20|1@0+ (1,0) [0|1] "" XXX
+
+BO_ 916 TSS3_EPS_FAULT_STATUS_394: 3 XXX
+ SG_ STATUS_TABLE_COLUMN_4 : 15|2@0+ (1,0) [0|3] "" XXX
+ SG_ STATUS_TABLE_COLUMN_1 : 13|3@0+ (1,0) [0|7] "" XXX
+ SG_ STATUS_TABLE_COLUMN_2 : 19|3@0+ (1,0) [0|7] "" XXX
+ SG_ STATUS_TABLE_COLUMN_3 : 16|1@0+ (1,0) [0|1] "" XXX
+
+BO_ 1187 TSS3_ALT_STEERING_TELEMETRY: 8 XXX
+ SG_ MARKER_BIT : 5|1@0+ (1,0) [0|1] "" XXX
+ SG_ STEERING_FAULT_INHIBIT_STATUS : 0|1@0+ (1,0) [0|1] "" XXX
+ SG_ STEER_ANGLE_COARSE : 11|12@0- (1.5,0) [-3072|3070.5] "deg" XXX
+ SG_ STEER_ANGLE_FILTERED_COARSE : 27|12@0- (1.5,0) [-3072|3070.5] "deg" XXX
+ SG_ STEERING_WHEEL_TORQUE : 47|8@0- (0.1,0) [-12.8|12.7] "Nm" XXX
+ SG_ MOTOR_CURRENT_ALT_RAW : 55|16@0- (1,0) [-32768|32767] "" XXX
+
 BO_ 170 WHEEL_SPEEDS: 8 XXX
  SG_ WHEEL_SPEED_FR_FAULT : 7|1@0+ (1,0) [0|1] "" XXX
  SG_ WHEEL_SPEED_FR : 6|15@0+ (0.01,-67.67) [-67.67|260] "km/h" XXX
@@ -42,8 +60,21 @@ BO_ 170 WHEEL_SPEEDS: 8 XXX
 
 BO_ 182 TSS3_LATERAL_CONTROL: 32 XXX
  SG_ TARGET_LATERAL_ID : 29|6@0+ (1,0) [0|63] "" XXX
- SG_ TARGET_STEERING_ANGLE : 39|16@0- (0.057302742,0) [-1877|1877] "deg" XXX
+ SG_ TARGET_STEERING_ANGLE : 39|16@0- (0.057302742,0) [-99.9933|99.9933] "deg" XXX
+ SG_ SIGNAL263_B6_BIT7 : 55|1@0+ (1,0) [0|1] "" XXX
+ SG_ SIGNAL264_B6_BITS6_4 : 54|3@0+ (1,0) [0|7] "" XXX
+ SG_ ADDITIVE_TERM_SUPPRESS : 50|1@0+ (1,0) [0|1] "" XXX
+ SG_ SIGNAL266_B6_BITS1_0 : 49|2@0+ (1,0) [0|3] "" XXX
+ SG_ SIGNAL267_B7_BITS7_6 : 63|2@0+ (1,0) [0|3] "" XXX
  SG_ SEQUENCE : 61|6@0+ (1,0) [0|63] "" XXX
+ SG_ CONTRIBUTION_PCT_1 : 71|8@0+ (1,0) [0|255] "%" XXX
+ SG_ CONTRIBUTION_PCT_2 : 79|8@0+ (1,0) [0|255] "%" XXX
+ SG_ SIGNAL271_B10_BIT7 : 87|1@0+ (1,0) [0|1] "" XXX
+ SG_ SIGNAL272_B10_BIT5 : 85|1@0+ (1,0) [0|1] "" XXX
+ SG_ SIGNAL273_B10_BITS2_0 : 82|3@0+ (1,0) [0|7] "" XXX
+ SG_ FRESHNESS_MESSAGE_LSB2 : 231|2@0+ (1,0) [0|3] "" XXX
+ SG_ FRESHNESS_RESET_LSB2 : 229|2@0+ (1,0) [0|3] "" XXX
+ SG_ CMAC_MSB28 : 227|28@0+ (1,0) [0|268435455] "" XXX
 
 BO_ 257 BRAKE_MODULE: 8 XXX
  SG_ BRAKE_PRESSED : 3|1@0+ (1,0) [0|1] "" XXX
@@ -70,6 +101,19 @@ BO_ 1556 BLINKERS_STATE: 8 XXX
 BO_ 1568 BODY_CONTROL_STATE: 8 XXX
  SG_ PARKING_BRAKE : 60|1@0+ (1,0) [0|1] "" XXX
 
+CM_ BO_ 849 "F33/H/F retained EPS status PDU. Only B2[7:5] status code and B2[4] companion flag are statically closed; do not map to temporary/permanent fault without live transitions.";
+CM_ BO_ 916 "F33/H/F retained EPS 17-state fault/status projection. The four transmitted table columns are lossy; state 0 is clear/normal candidate only, not a Ready or openpilot fault policy.";
+CM_ BO_ 1187 "Exact F33 packers 0x4C000/0x4C14E/0x4C7AA close this retained alternate steering telemetry PDU. Current Camry normal-harness captures do not observe its route, so availability/policy stays live-bound.";
+CM_ SG_ 1187 STEER_ANGLE_COARSE "Exact F33: signed12 0x025 coarse steering-angle source, 1.5 deg/count, packed in B1[3:0]:B2.";
+CM_ SG_ 1187 STEER_ANGLE_FILTERED_COARSE "Exact F33: filtered/voted signed12 steering-angle quantity derived from the same 0x025 coarse source, packed in B3[3:0]:B4.";
+CM_ SG_ 1187 MOTOR_CURRENT_ALT_RAW "Exact F33 0x4C000 producer computes this signed16 packed integer as source GP-0x50E8 * -100 / 0x80 before B6:B7. H/F joins the homologous source to Motor Actual Current (Q Axis), but F33 DID 0x1151 reads GP-0x50F2 instead; no physical unit is assigned until a target-native source join or live correlation closes it.";
+CM_ SG_ 1187 STEERING_WHEEL_TORQUE "Techstream DID 0x1035 Steering Wheel Torque, 0.1 Nm/count.";
+CM_ SG_ 182 ADDITIVE_TERM_SUPPRESS "Exact F33 receiver: value 1 suppresses one recovered additive steering term. This is not an OEM field-name claim.";
+CM_ SG_ 182 CONTRIBUTION_PCT_1 "Exact F33 receiver consumes this byte as a /100 contribution; zero removes the contribution. OEM field name remains unknown.";
+CM_ SG_ 182 CONTRIBUTION_PCT_2 "Exact F33 receiver consumes this byte as a /100 contribution; zero removes the contribution. OEM field name remains unknown.";
+CM_ SG_ 182 FRESHNESS_MESSAGE_LSB2 "SecOC FV4 high two bits: message-counter low2.";
+CM_ SG_ 182 FRESHNESS_RESET_LSB2 "SecOC FV4 low two bits: reset-counter low2.";
+CM_ SG_ 182 CMAC_MSB28 "SecOC transmitted authenticator: AES-CMAC MSB28 over DataID 0x00B6, B0..B27, and full freshness.";
 CM_ BO_ 37 "TSS3 Corolla uses the legacy steering angle/fraction/rate bit positions inside a 32-byte CAN-FD PDU; exact H firmware and two driving captures support these fields.";
 CM_ BO_ 48 "Exact H/F EPS transmits this 32-byte PDU. Driver torque and B6 safety/status gates are target-native recovered fields; byte 7 equals sum(bytes 0..6)+0x38 modulo 256.";
 CM_ SG_ 48 STEERING_WHEEL_TORQUE_TRUNC "DID 0x1035 Steering Wheel Torque source, saturating truncation-toward-zero 0.1 Nm view. It can differ from COARSE by one count due to firmware rounding.";
@@ -88,5 +132,5 @@ CM_ SG_ 374 CRUISE_ACTIVE "Wire location/checksum are retained Toyota prior art 
 CM_ SG_ 1310 READY_STATUS "Exact H PDU29 signal154: incoming 0x51E B0[7] feeds DID 0x1033 Ready Status. Both retained operational captures show value 1 only; do not infer Ready=0 fault policy without a transition.";
 
 VAL_ 182 TARGET_LATERAL_ID 27 "Remote Parking" 25 "AP" 19 "PDA" 11 "LTA/LCA" 10 "Hands Off LTA" 4 "LDA" 1 "PCS" 0 "No Request";
-VAL_ 295 GEAR 4 "B" 3 "D" 2 "N" 1 "R" 0 "P";
+VAL_ 295 GEAR 0 "P" 1 "R" 2 "N" 3 "D" 4 "B" ;
 VAL_ 1556 TURN_SIGNALS 3 "hazard" 2 "right" 1 "left" 0 "none";

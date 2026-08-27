@@ -50,6 +50,23 @@ class CarState(CarStateBase):
     self.lkas_hud = {}
     self.gvc = 0.0
     self.secoc_synchronization = None
+    # Read-only TSS3 policy inputs. These remain outside the public CarState
+    # fault/engagement contract until their live transitions are validated.
+    self.tss3_ready_status = False
+    self.tss3_steering_fault_inhibit_status = False
+    self.tss3_driver_torque_invalid = False
+    self.tss3_alt_telemetry_seen = False
+    self.tss3_motor_current_alt_raw = 0
+    self.tss3_alt_steering_torque = 0.0
+    self.tss3_status_351_seen = False
+    self.tss3_status_351_code = 0
+    self.tss3_status_351_flag = False
+    self.tss3_fault_394_seen = False
+    self.tss3_fault_394_projection = (0, 0, 0, 0)
+
+  @staticmethod
+  def _tss3_message_seen(cp: CANParser, message: str) -> bool:
+    return any(int(ts) != 0 for ts in cp.ts_nanos[message].values())
 
   def _update_tss3(self, cp: CANParser) -> structs.CarState:
     # TSS3 Corolla support remains intentionally read-only. Promote only fields
@@ -77,9 +94,13 @@ class CarState(CarStateBase):
     ret.steeringRateDeg = cp.vl["STEER_ANGLE_SENSOR"]["STEER_RATE"]
 
     can_gear = int(cp.vl["GEAR_PACKET_HYBRID"]["GEAR"])
-    # Only raw 3=D is exercised in the tracked TSS3 capture. Do not promote the
-    # inherited P/R/N/B value table into CarState until those transitions exist.
-    ret.gearShifter = structs.CarState.GearShifter.drive if can_gear == 3 else structs.CarState.GearShifter.unknown
+    if self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:
+      # Exact same-car captures close P=0/R=1/N=2/D=3/B=4 with valid Toyota checksums.
+      ret.gearShifter = self.parse_gear_shifter(self.shifter_values.get(can_gear, None))
+    else:
+      # The retained Corolla route only exercises raw 3=D; do not transfer the
+      # Camry selector enum across platforms merely because the DBC carrier is shared.
+      ret.gearShifter = structs.CarState.GearShifter.drive if can_gear == 3 else structs.CarState.GearShifter.unknown
 
     ret.leftBlinker = cp.vl["BLINKERS_STATE"]["TURN_SIGNALS"] == 1
     ret.rightBlinker = cp.vl["BLINKERS_STATE"]["TURN_SIGNALS"] == 2
@@ -101,6 +122,27 @@ class CarState(CarStateBase):
     ret.steeringTorque = (cp.vl["TSS3_EPS_TELEMETRY"]["STEERING_WHEEL_TORQUE_COARSE"] +
                           cp.vl["TSS3_EPS_TELEMETRY"]["STEERING_WHEEL_TORQUE_FINE"]) if driver_torque_valid else 0.0
     ret.steeringTorqueEps = 0.0
+    self.tss3_ready_status = bool(cp.vl["TSS3_READY_STATUS"]["READY_STATUS"])
+    self.tss3_driver_torque_invalid = not driver_torque_valid
+    self.tss3_steering_fault_inhibit_status = bool(cp.vl["TSS3_EPS_TELEMETRY"]["STEERING_FAULT_INHIBIT_STATUS"])
+
+    # 0x4A3/0x351/0x394 are retained by the exact F33 Tx table. Their static
+    # wire projections are useful policy inputs, but the current normal-harness
+    # Camry captures do not observe their route. Track both value and presence so
+    # an absent message cannot be confused with a valid all-zero/normal value.
+    self.tss3_alt_telemetry_seen = self._tss3_message_seen(cp, "TSS3_ALT_STEERING_TELEMETRY")
+    self.tss3_motor_current_alt_raw = int(cp.vl["TSS3_ALT_STEERING_TELEMETRY"]["MOTOR_CURRENT_ALT_RAW"])
+    self.tss3_alt_steering_torque = cp.vl["TSS3_ALT_STEERING_TELEMETRY"]["STEERING_WHEEL_TORQUE"]
+    self.tss3_status_351_seen = self._tss3_message_seen(cp, "TSS3_EPS_STATUS_351")
+    self.tss3_status_351_code = int(cp.vl["TSS3_EPS_STATUS_351"]["STATUS_CODE"])
+    self.tss3_status_351_flag = bool(cp.vl["TSS3_EPS_STATUS_351"]["STATUS_FLAG"])
+    self.tss3_fault_394_seen = self._tss3_message_seen(cp, "TSS3_EPS_FAULT_STATUS_394")
+    self.tss3_fault_394_projection = (
+      int(cp.vl["TSS3_EPS_FAULT_STATUS_394"]["STATUS_TABLE_COLUMN_4"]),
+      int(cp.vl["TSS3_EPS_FAULT_STATUS_394"]["STATUS_TABLE_COLUMN_1"]),
+      int(cp.vl["TSS3_EPS_FAULT_STATUS_394"]["STATUS_TABLE_COLUMN_2"]),
+      int(cp.vl["TSS3_EPS_FAULT_STATUS_394"]["STATUS_TABLE_COLUMN_3"]),
+    )
 
     # The legacy Toyota STEER_THRESHOLD is in the old 0x260 raw domain. No H/F
     # physical driver-override threshold has been validated yet, so do not reuse
@@ -285,6 +327,10 @@ class CarState(CarStateBase):
         # Exact H PDU29 signal154: 0x51E B0[7] -> DID 0x1033 Ready Status.
         # Parse for read-only observation; policy use remains gated on a Ready transition.
         ("TSS3_READY_STATUS", float('nan')),
+        # Exact F33 static Tx carriers; no alive check until relay-correct live observation.
+        ("TSS3_ALT_STEERING_TELEMETRY", float('nan')),
+        ("TSS3_EPS_STATUS_351", float('nan')),
+        ("TSS3_EPS_FAULT_STATUS_394", float('nan')),
         ("BLINKERS_STATE", float('nan')),
         ("BODY_CONTROL_STATE", float('nan')),
       ]
