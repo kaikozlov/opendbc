@@ -442,6 +442,8 @@ class TestToyotaTSS3B6Contract(unittest.TestCase):
       TSS3Gate2DevelopmentConfig(TSS3B6Template(bytes(28), stock_validated=False), 1, True, True)
     with self.assertRaises(ValueError):
       TSS3Gate2DevelopmentConfig(TSS3B6Template(bytes(28), stock_validated=True), 1, False, True)
+    with self.assertRaises(ValueError):
+      TSS3Gate2DevelopmentConfig(TSS3B6Template(bytes(28), stock_validated=True), 4, True, True)
 
     sender = TSS3Gate2DevelopmentSender(TSS3Gate2DevelopmentConfig(
       TSS3B6Template(bytes(range(28)), stock_validated=True), 2, True, True,
@@ -503,6 +505,11 @@ class TestToyotaTSS3PandaShadowSafety(unittest.TestCase):
     self.assertFalse(s.safety_tx_hook(b6(100, 0)))
     self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x00F, 0, CAMRY_COMMON[0x00F])))
     self.assertTrue(s.safety_tx_hook(b6(100, 0)))
+    # An older epoch must not reset the Panda sequence baseline.
+    stale_sync = bytearray(CAMRY_COMMON[0x00F])
+    stale_sync[3] -= 0x10
+    self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x00F, 0, bytes(stale_sync))))
+    self.assertFalse(s.safety_tx_hook(b6(178, 0)))
     s.set_timer(10_000)
     self.assertTrue(s.safety_tx_hook(b6(178, 1)))
     s.set_timer(20_000)

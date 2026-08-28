@@ -116,10 +116,16 @@ static void toyota_tss3_dev_rx(const CANPacket_t *msg) {
     const uint32_t trip_counter = (msg->data[0] << 8U) | msg->data[1];
     const uint32_t reset_counter = (msg->data[2] << 12U) | (msg->data[3] << 4U) | (msg->data[4] >> 4U);
     const uint64_t epoch = (((uint64_t)trip_counter) << 20U) | reset_counter;
-    if (!toyota_tss3_sync_seen || (epoch != toyota_tss3_sync_epoch)) {
+    if (!toyota_tss3_sync_seen) {
       toyota_tss3_sync_epoch = epoch;
       toyota_tss3_sync_seen = true;
       toyota_tss3_has_previous = false;
+    } else {
+      const uint64_t delta = (epoch - toyota_tss3_sync_epoch) & 0xFFFFFFFFFULL;
+      if ((delta > 0U) && (delta < 0x800000000ULL)) {
+        toyota_tss3_sync_epoch = epoch;
+        toyota_tss3_has_previous = false;
+      }
     }
   }
 }

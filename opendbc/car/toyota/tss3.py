@@ -330,8 +330,8 @@ class TSS3Gate2DevelopmentConfig:
   def __post_init__(self):
     if not self.template.stock_validated:
       raise ValueError("development B6 template must be stock-validated")
-    if not 1 <= self.cadence_frames <= 100:
-      raise ValueError("development B6 cadence must be 1..100 control frames")
+    if not 1 <= self.cadence_frames <= 3:
+      raise ValueError("development B6 cadence must be 1..3 control frames (<=30 ms)")
     if not self.gate2_bypass_validated:
       raise ValueError("exact-F33 Gate-2 bypass must be live-validated")
     if not self.exclusive_b6_authority_validated:
