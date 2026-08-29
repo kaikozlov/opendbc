@@ -31,9 +31,24 @@ BO_ 48 TSS3_EPS_TELEMETRY: 32 EPS
  SG_ STEERING_WHEEL_TORQUE_FINE : 139|4@0- (0.01,0) [-0.08|0.07] "Nm" XXX
 
 BO_ 138 TSS3_LATERAL_REQUEST: 32 XXX
+ SG_ CRUISE_OPERATING_LATCH : 27|1@0+ (1,0) [0|1] "" XXX
+ SG_ CRUISE_SUBSTATE_1 : 55|8@0+ (1,0) [0|255] "" XXX
+ SG_ CRUISE_SUBSTATE_2 : 63|8@0+ (1,0) [0|255] "" XXX
+ SG_ REQUEST_WORD_B8 : 71|16@0- (1,0) [-32768|32767] "" XXX
+ SG_ SET_SPEED : 87|8@0+ (1,0) [0|255] "km/h" XXX
+ SG_ REQUEST_WORD_B8_MIRROR : 95|16@0- (1,0) [-32768|32767] "" XXX
+ SG_ RESERVED_16BIT_B13 : 111|16@0- (1,0) [-32768|32767] "" XXX
+ SG_ RESERVED_16BIT_B16 : 135|16@0- (1,0) [-32768|32767] "" XXX
  SG_ TARGET_STEERING_ANGLE_AFTER_OUTPUT_COMPENSATION : 151|16@0- (0.057302742,0) [-1877.696|1877.639] "deg" XXX
+ SG_ CRUISE_STATE_B20 : 167|2@0+ (1,0) [0|3] "" XXX
  SG_ TARGET_LATERAL_ID : 173|6@0+ (1,0) [0|63] "" XXX
+ SG_ CRUISE_STATE_B22 : 180|1@0+ (1,0) [0|1] "" XXX
+ SG_ COOPERATIVE_SUBSTATE_FLAG : 189|1@0+ (1,0) [0|1] "" XXX
+ SG_ LATERAL_REQUEST_LEVEL : 199|8@0+ (1,0) [0|255] "%" XXX
  SG_ SEQUENCE : 213|6@0+ (1,0) [0|63] "" XXX
+ SG_ FRESHNESS_MESSAGE_LSB2 : 231|2@0+ (1,0) [0|3] "" XXX
+ SG_ FRESHNESS_RESET_LSB2 : 229|2@0+ (1,0) [0|3] "" XXX
+ SG_ CMAC_MSB28 : 227|28@0+ (1,0) [0|268435455] "" XXX
 
 BO_ 849 TSS3_EPS_STATUS_351: 4 XXX
  SG_ STATUS_CODE : 23|3@0+ (1,0) [0|7] "" XXX
@@ -106,10 +121,25 @@ BO_ 1556 BLINKERS_STATE: 8 XXX
 BO_ 1568 BODY_CONTROL_STATE: 8 XXX
  SG_ PARKING_BRAKE : 60|1@0+ (1,0) [0|1] "" XXX
 
-CM_ BO_ 138 "Exact 2026 Camry lateral-request carrier recovered from two relay-correct drives. This is not exact-F33 normal ingress or generated-COM transmit and is defined for passive analysis only. B28:B31 strongly match Toyota ordinary-P5 FV4+MAC28 structure; exact producer/profile/key/CMAC remain unresolved. Stock LTA does not establish or require an 0x08A-to-B6 transform.";
-CM_ SG_ 138 TARGET_STEERING_ANGLE_AFTER_OUTPUT_COMPENSATION "Signed B18:B19. Manual Target Lateral ID 0 tracks measured 0x025 angle at the numerically matching exact-F33 B6 controller-equivalent factor 1024/17870 deg/count; under ID11 its correlation shifts forward toward future measured angle. The matching scale does not establish an 0x08A-to-B6 conversion path. Name is independently corroborated by current category-405 EMPS_P5 DID 0x1CEE.";
-CM_ SG_ 138 TARGET_LATERAL_ID "Current GTS+ Target Lateral ID dictionary; retained Camry states are exactly 0=Manual, 11=LTA/LCA, and 18=SDG. Upper two bits are zero in all retained frames and the GTS+ diagnostic field is 8-bit, so the 6-bit boundary is an encoding assumption.";
-CM_ SG_ 138 SEQUENCE "Modulo-64 application sequence counter; upper two bits never observed nonzero, so the 6-bit boundary is an encoding assumption. B28:B31 separately make a strong Toyota ordinary-P5 FV4+MAC28 structural match; exact sender security implementation remains unresolved.";
+CM_ BO_ 138 "Exact 2026 Camry lateral-request carrier recovered from two relay-correct drives (44,613 deduped bus-0 frames; every field boundary in this message is backed by a full both-drive byte census partitioned by B21 state). This is not exact-F33 normal ingress or generated-COM transmit and is defined for passive analysis only. B28:B31 strongly match Toyota ordinary-P5 FV4+MAC28 structure; exact producer/profile/key/CMAC remain unresolved. Stock LTA does not establish or require an 0x08A-to-B6 transform.";
+CM_ SG_ 138 TARGET_STEERING_ANGLE_AFTER_OUTPUT_COMPENSATION "Signed B18:B19. Manual Target Lateral ID 0 tracks measured 0x025 angle at the numerically matching exact-F33 B6 controller-equivalent factor 1024/17870 deg/count; under ID11 its correlation shifts forward toward future measured angle. The matching scale does not establish an 0x08A-to-B6 conversion path. Name is independently corroborated by current category-405 EMPS_P5 DID 0x1CEE monitor 2071 (Target Steering Angle After Output Compensation, signed16, 1.5 deg/count diagnostic view).";
+CM_ SG_ 138 TARGET_LATERAL_ID "Current GTS+ Target Lateral ID dictionary (EMPS_P5 DID 0x1CEE monitor 2069, 19-value generation-20 pattern set); retained Camry states are exactly 0=No Request (Manual Operation), 11=LTA/LCA, and 18=SDG. Upper two bits are zero in all retained frames and the GTS+ diagnostic field is 8-bit, so the 6-bit boundary is an encoding assumption.";
+CM_ SG_ 138 SEQUENCE "Modulo-64 application sequence counter; upper two bits never observed nonzero, so the 6-bit boundary is an encoding assumption. On every same-reset B26+1 pair in both retained drives the B28 FV4 message-low2 also advances +1 (18,727 / 21,989 pairs), consistent with the freshness counter tracking this sequence.";
+CM_ SG_ 138 CRUISE_OPERATING_LATCH "B3[3]; value 8 is a reproducible cruise operating-state latch: six rising edges follow six effective MAIN presses by 0.17..0.29 s and CANCEL clears it within 0.03..0.07 s. B21=11 occurs only with this latch set and B21=18 only with it clear.";
+CM_ SG_ 138 CRUISE_SUBSTATE_1 "B6 mirrors cruise engagement sub-state: 0 with cruise off, 45 during LTA/LCA-active cruise, 44 in a second cruise sub-mode (604 drive-B frames). Structural name; not OEM-joined.";
+CM_ SG_ 138 CRUISE_SUBSTATE_2 "B7 mirrors cruise engagement sub-state: 18 with cruise off, 71 during LTA/LCA-active cruise, 70 in a second cruise sub-mode, 146 in 33 transitional drive-A frames. Structural name; not OEM-joined.";
+CM_ SG_ 138 REQUEST_WORD_B8 "Signed16 B8:B9, byte-identical to B11:B12 in all 44,613 deduped retained bus-0 frames (redundant duplicate). Observed raw range -1146..995 with dwell near -82/-41 in cruise-off manual. Uncorrelated (|r|<=0.07) in the retained drive with speed-derived acceleration, 0x025 steering angle, 0x030 driver torque, and the B18:B19 target-angle rate, so no physical unit is assigned. Not OEM-joined.";
+CM_ SG_ 138 REQUEST_WORD_B8_MIRROR "Byte-identical redundant copy of REQUEST_WORD_B8 at B11:B12; equality holds in 44,613/44,613 deduped retained bus-0 frames across both drives.";
+CM_ SG_ 138 SET_SPEED "B10 latched cruise set speed, 1 km/h/count: three RES+ presses change 66->67->68->70 and SET-/CANCEL transitions close through independent 0x0AA vehicle speed. Zero when cruise is off. FRC_P5 DID 0x1901 Memory Vehicle Speed corroborates the set-speed concept in km/h without proving the wire mapping.";
+CM_ SG_ 138 RESERVED_16BIT_B13 "B13:B14 constant 0x7FFF in all retained frames; plausibly an unused signed16 slot, not OEM-joined.";
+CM_ SG_ 138 RESERVED_16BIT_B16 "B16:B17 constant 0x7FFF in all retained frames; plausibly an unused signed16 slot, not OEM-joined.";
+CM_ SG_ 138 CRUISE_STATE_B20 "B20[7:6]: 0b11 exactly when the cruise operating latch is set (0b10 in 26 transitional frames); zero with cruise off. Structural name; not OEM-joined.";
+CM_ SG_ 138 CRUISE_STATE_B22 "B22[4] set exactly when the cruise operating latch is set. Structural name; not OEM-joined.";
+CM_ SG_ 138 COOPERATIVE_SUBSTATE_FLAG "B23[5] is set in every retained SDG (B21=18) row and toggles 0/1 within LTA/LCA intervals (drive A 376/646 frames set; drive B 229/2288). EMPS_P5 DID 0x1CEE monitor 2070 carries a 0/1 Cooperative Control in Progress Flag; identity with this bit is unjoined.";
+CM_ SG_ 138 LATERAL_REQUEST_LEVEL "B24: 100 throughout every retained LTA/LCA (B21=11) frame, 50 throughout every SDG (B21=18) frame, and 0/50/100 during manual (B21=0). Percent unit is bounded from the observed 0/50/100 value set, not OEM-joined; exact-F33's B6 receiver independently consumes /100 contribution percentages (signals 269/270).";
+CM_ SG_ 138 FRESHNESS_MESSAGE_LSB2 "SecOC FV4 B28[7:6] message-counter low2; advances +1 on every same-reset B26+1 pair (CORR-135 structural match against preceding authenticated 0x00F).";
+CM_ SG_ 138 FRESHNESS_RESET_LSB2 "SecOC FV4 B28[5:4] reset-counter low2; agrees with the preceding authenticated 0x00F on 19,868/20,615 drive-A and 23,093/23,996 drive-B eligible frames.";
+CM_ SG_ 138 CMAC_MSB28 "B28[3:0]..B31[7:4]: effectively frame-unique in both retained drives, matching the Toyota ordinary-P5 transmitted MAC28. Exact sender key/profile remains unrecovered.";
 CM_ BO_ 849 "F33/H/F retained EPS status PDU. Only B2[7:5] status code and B2[4] companion flag are statically closed; do not map to temporary/permanent fault without live transitions.";
 CM_ BO_ 916 "F33/H/F retained EPS 17-state fault/status projection. The four transmitted table columns are lossy; state 0 is clear/normal candidate only, not a Ready or openpilot fault policy.";
 CM_ BO_ 1187 "Exact F33 packers 0x4C000/0x4C14E/0x4C7AA close this retained alternate steering telemetry PDU. Current Camry normal-harness captures do not observe its route, so availability/policy stays live-bound.";
@@ -140,7 +170,7 @@ CM_ SG_ 295 GEAR "Only raw 3=D has been dynamically validated on the tracked TSS
 CM_ SG_ 374 CRUISE_ACTIVE "Wire location/checksum are retained Toyota prior art and observed on moving TSS3 Corolla captures; an active cruise transition has not yet been captured.";
 CM_ SG_ 1310 READY_STATUS "Exact H PDU29 signal154: incoming 0x51E B0[7] feeds DID 0x1033 Ready Status. Both retained operational captures show value 1 only; do not infer Ready=0 fault policy without a transition.";
 
-VAL_ 138 TARGET_LATERAL_ID 27 "Remote Parking" 25 "AP" 19 "PDA" 18 "SDG" 11 "LTA/LCA" 10 "Hands Off LTA" 4 "LDA" 1 "PCS" 0 "No Request";
-VAL_ 182 TARGET_LATERAL_ID 27 "Remote Parking" 25 "AP" 19 "PDA" 11 "LTA/LCA" 10 "Hands Off LTA" 4 "LDA" 1 "PCS" 0 "No Request";
+VAL_ 138 TARGET_LATERAL_ID 63 "Driver Operation" 49 "Self-Propelled Transport" 45 "DES (Lv.4)" 43 "EM (Lv.4)" 41 "AD (Lv.4)" 39 "DES (Lv.3)" 37 "EM (Lv.3)" 35 "AD (Lv.3)" 27 "Remote Parking" 25 "AP" 19 "PDA" 18 "SDG" 15 "DESA (Deceleration Stop Control)" 13 "DESA (Slow Deceleration Control)" 11 "LTA/LCA" 10 "Hands Off LTA" 4 "LDA" 1 "PCS" 0 "No Request (Manual Operation)";
+VAL_ 182 TARGET_LATERAL_ID 63 "Driver Operation" 49 "Self-Propelled Transport" 45 "DES (Lv.4)" 43 "EM (Lv.4)" 41 "AD (Lv.4)" 39 "DES (Lv.3)" 37 "EM (Lv.3)" 35 "AD (Lv.3)" 27 "Remote Parking" 25 "AP" 19 "PDA" 18 "SDG" 15 "DESA (Deceleration Stop Control)" 13 "DESA (Slow Deceleration Control)" 11 "LTA/LCA" 10 "Hands Off LTA" 4 "LDA" 1 "PCS" 0 "No Request (Manual Operation)";
 VAL_ 295 GEAR 0 "P" 1 "R" 2 "N" 3 "D" 4 "B" ;
 VAL_ 1556 TURN_SIGNALS 3 "hazard" 2 "right" 1 "left" 0 "none";
