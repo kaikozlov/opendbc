@@ -1,10 +1,9 @@
-"""Toyota TSS3 lateral contracts and explicitly gated development sender.
+"""Toyota TSS3 lateral analysis and receiver contracts.
 
-The helpers in this module encode the target-native 2026 Camry/F33 receiver
-contract. Production output remains gated on live evidence that is intentionally
-not represented as a guessed constant. A separate Gate-2 development sender can
-be configured only with a stock-validated B6 template/cadence and explicit live
-attestations; it uses an invalid MAC on purpose and is not a production signer.
+The helpers in this module encode the target-native 2026 Camry/F33 protected-B6
+receiver contract. Production output remains disabled. Historical Gate-2 sender
+helpers are retained only for deterministic analysis/tests; no CarInterface or
+CarController runtime path selects them after the upstream 0x08A request recovery.
 """
 
 from __future__ import annotations
@@ -72,7 +71,7 @@ class TSS3B6Template:
 
   application: bytes = bytes(TSS3_B6_APPLICATION_LEN)
   stock_validated: bool = False
-  provenance: str = "explicit-zero-candidate; stock B6 template not captured"
+  provenance: str = "explicit-zero-candidate; no stock B6 observed in retained factory-LTA intervals"
 
   def __post_init__(self):
     if len(self.application) != TSS3_B6_APPLICATION_LEN:
@@ -347,12 +346,11 @@ class TSS3Gate2DevelopmentFrame:
 
 
 class TSS3Gate2DevelopmentSender:
-  """Fail-closed invalid-MAC sender for the exact F33 Gate-2 experiment.
+  """Historical fail-closed invalid-MAC Gate-2 experiment helper.
 
-  This deliberately trusts stock 0x00F only inside the already-live-validated
-  development configuration. It never claims local authentication. On any
-  inactive interval it disarms and requires a strictly newer sync epoch before
-  another active command, avoiding hidden restart/counter assumptions.
+  No production/runtime Toyota interface selects this class. It remains only to
+  preserve deterministic receiver/freshness experiments while the real 0x08A
+  producer-to-protected-B6 chain is unresolved.
   """
 
   def __init__(self, config: TSS3Gate2DevelopmentConfig):

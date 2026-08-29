@@ -107,7 +107,7 @@ BO_ 1568 BODY_CONTROL_STATE: 8 XXX
  SG_ PARKING_BRAKE : 60|1@0+ (1,0) [0|1] "" XXX
 
 CM_ BO_ 138 "Exact 2026 Camry upstream lateral-request carrier recovered from two relay-correct drives. This is not exact-F33 EPS ingress and is defined for passive analysis only; authentication/integrity and upstream-to-protected-B6 transformation remain unresolved.";
-CM_ SG_ 138 TARGET_STEERING_ANGLE_AFTER_OUTPUT_COMPENSATION "Signed B18:B19. Manual Target Lateral ID 0 tracks measured 0x025 angle at the exact downstream F33-B6 factor 1024/17870 deg/count; under ID11 its correlation shifts forward toward future measured angle. Name is independently corroborated by current EMPS2_P5 DID 0x1CEE.";
+CM_ SG_ 138 TARGET_STEERING_ANGLE_AFTER_OUTPUT_COMPENSATION "Signed B18:B19. Manual Target Lateral ID 0 tracks measured 0x025 angle at the exact downstream F33-B6 factor 1024/17870 deg/count; under ID11 its correlation shifts forward toward future measured angle. Name is independently corroborated by current category-405 EMPS_P5 DID 0x1CEE.";
 CM_ SG_ 138 TARGET_LATERAL_ID "Current GTS+ Target Lateral ID dictionary; retained Camry states are exactly 0=Manual, 11=LTA/LCA, and 18=SDG. Upper two bits are zero in all retained frames and the GTS+ diagnostic field is 8-bit, so the 6-bit boundary is an encoding assumption.";
 CM_ SG_ 138 SEQUENCE "Modulo-64 sequence counter; upper two bits never observed nonzero, so the 6-bit boundary is an encoding assumption. Trailer/authentication semantics remain unresolved.";
 CM_ BO_ 849 "F33/H/F retained EPS status PDU. Only B2[7:5] status code and B2[4] companion flag are statically closed; do not map to temporary/permanent fault without live transitions.";
