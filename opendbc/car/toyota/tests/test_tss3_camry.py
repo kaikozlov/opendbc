@@ -174,14 +174,14 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
       self.assertFalse(CS.steerFaultTemporary)
       self.assertFalse(CS.steerFaultPermanent)
 
-  def test_source_real_upstream_lateral_request_is_observable_only(self):
+  def test_source_real_lateral_request_is_observable_only(self):
     CP = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint_on(1), [], False, False, False)
     CI = CarInterface(CP)
     CS = update_with_frame_set(CI, CAMRY_COMMON | {0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]})
-    self.assertTrue(CI.CS.tss3_upstream_lateral_seen)
+    self.assertTrue(CI.CS.tss3_lateral_request_seen)
     self.assertEqual(CI.CS.tss3_target_lateral_id, 11)
     self.assertAlmostEqual(CI.CS.tss3_target_steering_angle, -203 * TSS3_B6_TARGET_ANGLE_SCALE_DEG)
-    self.assertEqual(CI.CS.tss3_upstream_lateral_sequence, 60)
+    self.assertEqual(CI.CS.tss3_lateral_request_sequence, 60)
     self.assertTrue(CP.dashcamOnly)
     self.assertEqual(CP.safetyConfigs[0].safetyModel, structs.CarParams.SafetyModel.noOutput)
     self.assertFalse(CS.cruiseState.enabled)

@@ -82,8 +82,10 @@ class CarController(CarControllerBase):
     self.ephemeral_secoc_bridge = False
 
     # Exact-F33 shadow state remains analysis-only. The former bus-0 B6
-    # development sender was removed after 0x08A was recovered as the upstream
-    # lateral request on the other side of an unresolved producer transform.
+    # development sender was removed after retained factory LTA/LCA proved zero
+    # stock B6; exact F33 has a separate B6-independent internal assist path.
+    # 0x08A producer/SecOC ownership is a separate network question, not proof
+    # of an 0x08A-to-B6 stock-LTA transform.
     self.tss3_template = TSS3B6Template()
     self.tss3_companions = TSS3B6CompanionFields()
     self.tss3_safety_candidate = TSS3PandaSafetyCandidate()

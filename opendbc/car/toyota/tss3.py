@@ -349,8 +349,9 @@ class TSS3Gate2DevelopmentSender:
   """Historical fail-closed invalid-MAC Gate-2 experiment helper.
 
   No production/runtime Toyota interface selects this class. It remains only to
-  preserve deterministic receiver/freshness experiments while the real 0x08A
-  producer-to-protected-B6 chain is unresolved.
+  preserve deterministic B6 receiver/freshness experiments. Retained Camry
+  factory LTA/LCA uses zero B6 and exact F33 has a B6-independent internal
+  assist path; 0x08A producer/SecOC ownership is a separate network question.
   """
 
   def __init__(self, config: TSS3Gate2DevelopmentConfig):
