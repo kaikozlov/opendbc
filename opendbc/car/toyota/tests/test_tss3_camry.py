@@ -5,6 +5,7 @@ from Crypto.Hash import CMAC
 
 from opendbc.can import CANPacker, CANParser
 from opendbc.car import Bus, CanData, structs
+from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.fw_query_definitions import StdQueries
 from opendbc.car.fw_versions import build_fw_dict, match_fw_to_car
 from opendbc.car.toyota.fingerprints import FINGERPRINTS, FW_VERSIONS, TSS3_CAN_CENSUS
@@ -184,9 +185,27 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
     self.assertEqual(CI.CS.tss3_target_lateral_id, 11)
     self.assertAlmostEqual(CI.CS.tss3_lateral_request_angle, -203 * TSS3_B6_TARGET_ANGLE_SCALE_DEG)
     self.assertEqual(CI.CS.tss3_lateral_request_sequence, 60)
+    self.assertAlmostEqual(CI.CS.tss3_steering_assist_gain, 1.0)
     self.assertTrue(CP.dashcamOnly)
     self.assertEqual(CP.safetyConfigs[0].safetyModel, structs.CarParams.SafetyModel.noOutput)
+    self.assertTrue(CS.cruiseState.enabled)
+    self.assertTrue(CS.cruiseState.available)
+    self.assertAlmostEqual(CS.cruiseState.speed, 42 * CV.KPH_TO_MS, places=5)
+
+  def test_camry_cruise_latch_off_clears_enabled(self):
+    CP = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint_on(1), [], False, False, False)
+    CI = CarInterface(CP)
+    off = bytearray(CAMRY_COMMON[0x08A])
+    off[3] = 0
+    off[10] = 0
+    CS = update_with_frame_set(CI, CAMRY_COMMON | {
+      0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive],
+      0x08A: bytes(off),
+    })
     self.assertFalse(CS.cruiseState.enabled)
+    self.assertFalse(CS.cruiseState.available)
+    self.assertEqual(CS.cruiseState.speed, 0.0)
+    self.assertEqual(CP.safetyConfigs[0].safetyModel, structs.CarParams.SafetyModel.noOutput)
 
   def test_static_f33_status_carriers_are_presence_bounded(self):
     CP = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint_on(1), [], False, False, False)

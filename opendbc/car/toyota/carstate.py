@@ -70,15 +70,16 @@ class CarState(CarStateBase):
     self.tss3_target_lateral_id = 0
     self.tss3_lateral_request_angle = 0.0
     self.tss3_lateral_request_sequence = 0
+    self.tss3_steering_assist_gain = 0.0
 
   @staticmethod
   def _tss3_message_seen(cp: CANParser, message: str) -> bool:
     return any(int(ts) != 0 for ts in cp.ts_nanos[message].values())
 
   def _update_tss3(self, cp: CANParser) -> structs.CarState:
-    # TSS3 Corolla support remains intentionally read-only. Promote only fields
-    # with target-native firmware + dynamic evidence; do not borrow TSS2 fault,
-    # override-threshold, cruise, or readiness semantics.
+    # TSS3 remains read-only / noOutput. Promote only fields with
+    # target-native firmware + dynamic evidence. Camry cruise comes from
+    # same-car 0x08A latch/set-speed; Corolla 0x176 cruise stays unpromoted.
     ret = structs.CarState()
 
     self.secoc_synchronization = copy.copy(cp.vl["SECOC_SYNCHRONIZATION"])
@@ -113,12 +114,21 @@ class CarState(CarStateBase):
     ret.rightBlinker = cp.vl["BLINKERS_STATE"]["TURN_SIGNALS"] == 2
     ret.parkingBrake = cp.vl["BODY_CONTROL_STATE"]["PARKING_BRAKE"] == 1
 
-    # 0x176's wire shape/checksum are retained on both observed TSS3 Corolla
-    # captures, but neither exercises an active-cruise transition. Keep cruise
-    # neutral in CarState until that semantic transition is observed; the raw
-    # prior-art fields remain available in the DBC for inspection.
-    ret.cruiseState.enabled = False
-    ret.cruiseState.available = False
+    if self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:
+      # Same-car 0x08A: B3[3] is the cruise operating latch and B10 is set
+      # speed in km/h. Passive observation only; dashcamOnly/noOutput stays.
+      cruise_latch = bool(cp.vl["TSS3_LATERAL_REQUEST"]["CRUISE_OPERATING_LATCH"])
+      set_speed_kph = float(cp.vl["TSS3_LATERAL_REQUEST"]["SET_SPEED"])
+      ret.cruiseState.enabled = cruise_latch
+      ret.cruiseState.available = cruise_latch
+      ret.cruiseState.speed = set_speed_kph * CV.KPH_TO_MS if cruise_latch and set_speed_kph > 0 else 0.0
+    else:
+      # 0x176's wire shape/checksum are retained on both observed TSS3 Corolla
+      # captures, but neither exercises an active-cruise transition. Keep cruise
+      # neutral in CarState until that semantic transition is observed; the raw
+      # prior-art fields remain available in the DBC for inspection.
+      ret.cruiseState.enabled = False
+      ret.cruiseState.available = False
 
     # Exact H/F firmware + Techstream close physical driver torque on 0x030:
     # signed B8 * 0.1 Nm + signed B17[3:0] * 0.01 Nm. The DBC applies those
@@ -140,6 +150,9 @@ class CarState(CarStateBase):
     self.tss3_target_lateral_id = int(cp.vl["TSS3_LATERAL_REQUEST"]["TARGET_LATERAL_ID"])
     self.tss3_lateral_request_angle = cp.vl["TSS3_LATERAL_REQUEST"]["LATERAL_REQUEST_ANGLE"]
     self.tss3_lateral_request_sequence = int(cp.vl["TSS3_LATERAL_REQUEST"]["SEQUENCE"])
+    # TSS3 recorder 5282 / LTA 5631: steering assist gain LSB 0.01. Live B24 is
+    # 100 in every ID11 frame and 50 in every ID18 frame.
+    self.tss3_steering_assist_gain = float(cp.vl["TSS3_LATERAL_REQUEST"]["LATERAL_REQUEST_LEVEL"]) / 100.0
 
     # 0x4A3/0x351/0x394 are retained by the exact F33 Tx table. Their static
     # wire projections are useful policy inputs, but the current normal-harness
