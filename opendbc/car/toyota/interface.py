@@ -1,7 +1,6 @@
 from opendbc.car import Bus, structs, get_safety_config, uds
 from opendbc.car.toyota.carstate import CarState
 from opendbc.car.toyota.carcontroller import CarController
-from opendbc.car.toyota.tss3 import TSS3B6Template, TSS3Gate2DevelopmentConfig
 from opendbc.car.toyota.radar_interface import RadarInterface
 from opendbc.car.toyota.values import Ecu, CAR, DBC, ToyotaFlags, CarControllerParams, MIN_ACC_SPEED, \
                                                   EPS_SCALE, ToyotaSafetyFlags
@@ -22,37 +21,6 @@ class CarInterface(CarInterfaceBase):
   def get_pid_accel_limits(CP, current_speed, cruise_speed):
     return CarControllerParams(CP).ACCEL_MIN, CarControllerParams(CP).ACCEL_MAX
 
-  def configure_tss3_gate2_development_lateral(self, *, expected_f181: str, b6_template: bytes, cadence_frames: int,
-                                                gate2_bypass_validated: bool, exclusive_b6_authority_validated: bool) -> None:
-    """Enable the explicit exact-F33 development sender after live gates close.
-
-    Ordinary TSS3 CarParams remain dashcam/noOutput. This method is intentionally
-    target-bound and rejects the unsplit bus-1 topology, an unvalidated template,
-    or missing live attestations.
-    """
-    if self.CP.carFingerprint != CAR.TOYOTA_CAMRY_TSS3:
-      raise ValueError("TSS3 Gate-2 development lateral is exact-Camry-only")
-    if self.CP.flags & ToyotaFlags.TSS3_PT_BUS1:
-      raise ValueError("TSS3 Gate-2 development lateral requires relay-correct bus-0 topology")
-    if expected_f181 != "8965F3307000":
-      raise ValueError("TSS3 Gate-2 development lateral requires exact F181 8965F3307000")
-    eps_versions = [bytes(fw.fwVersion) for fw in self.CP.carFw if fw.ecu == Ecu.eps]
-    if not any(expected_f181.encode() in version for version in eps_versions):
-      raise ValueError("current EPS F181 does not match exact development target")
-
-    config = TSS3Gate2DevelopmentConfig(
-      template=TSS3B6Template(b6_template, stock_validated=True, provenance="relay-correct exact-F181 stock-LTA capture"),
-      cadence_frames=cadence_frames,
-      gate2_bypass_validated=gate2_bypass_validated,
-      exclusive_b6_authority_validated=exclusive_b6_authority_validated,
-    )
-    self.CC.configure_tss3_gate2_development(config)
-    self.CP.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.toyota)]
-    self.CP.safetyConfigs[0].safetyParam = ToyotaSafetyFlags.TSS3_DEV_LATERAL.value
-    self.CP.dashcamOnly = False
-    # This field also represents a target-bound alternate SecOC transport in the
-    # current openpilot startup gate (see ephemeral bridge handling in card.py).
-    self.CP.secOcKeyAvailable = True
 
   @staticmethod
   def _get_params(ret: structs.CarParams, candidate, fingerprint, car_fw, alpha_long, is_release, docs) -> structs.CarParams:

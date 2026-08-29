@@ -39,6 +39,7 @@ Ecu = structs.CarParams.Ecu
 CAMRY_COMMON = {
   0x00F: bytes.fromhex("01b20145cde4b47d"),
   0x025: bytes.fromhex("000100005000007e0000000000000000000000000000000000000000bb6fee54"),
+  0x08A: bytes.fromhex("0000000880002d47fe462afe467fff007fffff35c00b100064003c005db7797f"),
   0x030: bytes.fromhex("00000000170001500000100026820000000000010000ffff00000000b280595f"),
   0x0AA: bytes.fromhex("1a6f1a6f1a6f1a6f"),
   0x101: bytes.fromhex("800000010000008b"),
@@ -71,12 +72,6 @@ def update_with_frame_set(ci: CarInterface, frames: dict[int, bytes], repeats: i
   return ret
 
 
-def exact_camry_car_fw() -> list[structs.CarParams.CarFw]:
-  car_fw = []
-  for (ecu, address, sub_address), versions in TSS3_EXACT_FW_VERSIONS[CAR.TOYOTA_CAMRY_TSS3].items():
-    car_fw.append(structs.CarParams.CarFw(ecu=ecu, address=address, subAddress=0 if sub_address is None else sub_address,
-                                          fwVersion=versions[0], brand="toyota"))
-  return car_fw
 
 
 class _AesCmacSigner:
@@ -179,6 +174,18 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
       self.assertFalse(CS.steerFaultTemporary)
       self.assertFalse(CS.steerFaultPermanent)
 
+  def test_source_real_upstream_lateral_request_is_observable_only(self):
+    CP = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint_on(1), [], False, False, False)
+    CI = CarInterface(CP)
+    CS = update_with_frame_set(CI, CAMRY_COMMON | {0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]})
+    self.assertTrue(CI.CS.tss3_upstream_lateral_seen)
+    self.assertEqual(CI.CS.tss3_target_lateral_id, 11)
+    self.assertAlmostEqual(CI.CS.tss3_target_steering_angle, -203 * TSS3_B6_TARGET_ANGLE_SCALE_DEG)
+    self.assertEqual(CI.CS.tss3_upstream_lateral_sequence, 60)
+    self.assertTrue(CP.dashcamOnly)
+    self.assertEqual(CP.safetyConfigs[0].safetyModel, structs.CarParams.SafetyModel.noOutput)
+    self.assertFalse(CS.cruiseState.enabled)
+
   def test_static_f33_status_carriers_are_presence_bounded(self):
     CP = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint_on(1), [], False, False, False)
     CI = CarInterface(CP)
@@ -258,61 +265,6 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
     self.assertTrue(CI.CC.tss3_last_safety_decision.static_limits_ok)
     self.assertFalse(CI.CC.tss3_last_safety_decision.production_allowed)
 
-  def test_development_config_is_exact_f181_and_relay_topology_bound(self):
-    b6_template = bytes(range(28))
-    CP = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint_on(0), exact_camry_car_fw(), False, False, False)
-    CP.carFw = exact_camry_car_fw()
-    CI = CarInterface(CP)
-    CI.configure_tss3_gate2_development_lateral(
-      expected_f181="8965F3307000", b6_template=b6_template, cadence_frames=2,
-      gate2_bypass_validated=True, exclusive_b6_authority_validated=True,
-    )
-    self.assertFalse(CI.CP.dashcamOnly)
-    self.assertTrue(CI.CP.secOcKeyAvailable)
-    self.assertEqual(CI.CP.safetyConfigs[0].safetyModel, structs.CarParams.SafetyModel.toyota)
-    self.assertEqual(CI.CP.safetyConfigs[0].safetyParam, ToyotaSafetyFlags.TSS3_DEV_LATERAL)
-
-    CP_bus1 = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint_on(1), exact_camry_car_fw(), False, False, False)
-    CP_bus1.carFw = exact_camry_car_fw()
-    CI_bus1 = CarInterface(CP_bus1)
-    with self.assertRaisesRegex(ValueError, "bus-0 topology"):
-      CI_bus1.configure_tss3_gate2_development_lateral(
-        expected_f181="8965F3307000", b6_template=b6_template, cadence_frames=2,
-        gate2_bypass_validated=True, exclusive_b6_authority_validated=True,
-      )
-
-  def test_development_controller_emits_only_after_newer_sync_epoch(self):
-    CP = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint_on(0), exact_camry_car_fw(), False, False, False)
-    CP.carFw = exact_camry_car_fw()
-    CI = CarInterface(CP)
-    template = bytes(range(28))
-    CI.configure_tss3_gate2_development_lateral(
-      expected_f181="8965F3307000", b6_template=template, cadence_frames=1,
-      gate2_bypass_validated=True, exclusive_b6_authority_validated=True,
-    )
-    CC = structs.CarControl()
-    CC.enabled = True
-    CC.latActive = True
-    CC.actuators.steeringAngleDeg = 2 * TSS3_B6_TARGET_ANGLE_SCALE_DEG
-
-    baseline = CAMRY_COMMON | {0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]}
-    update_with_frame_set(CI, baseline, bus=0)
-    _, sends = CI.apply(CC.as_reader(), 2_000_000_000)
-    self.assertEqual(sends, [])
-
-    packer = CANPacker("toyota_tss3_pt_generated")
-    newer_sync = packer.make_can_msg("SECOC_SYNCHRONIZATION", 0, {
-      "TRIP_CNT": 434, "RESET_CNT": 5213, "AUTHENTICATOR": 0,
-    })[1]
-    update_with_frame_set(CI, baseline | {0x00F: newer_sync}, bus=0)
-    _, sends = CI.apply(CC.as_reader(), 2_010_000_000)
-    self.assertEqual(len(sends), 1)
-    self.assertEqual((sends[0].address, sends[0].src, len(sends[0].dat)), (0x0B6, 0, 32))
-    self.assertEqual(sends[0].dat[:3], template[:3])
-    self.assertEqual(sends[0].dat[3] & 0x3F, 11)
-    self.assertEqual(int.from_bytes(sends[0].dat[4:6], "big", signed=True), 2)
-    self.assertEqual(sends[0].dat[28] >> 4, 0x5)  # message1/reset-low2=1
-    self.assertEqual(int.from_bytes(sends[0].dat[28:], "big") & 0x0FFFFFFF, 0)
 
 
 class TestToyotaTSS3B6Contract(unittest.TestCase):

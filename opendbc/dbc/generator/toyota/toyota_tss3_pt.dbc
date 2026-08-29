@@ -30,6 +30,11 @@ BO_ 48 TSS3_EPS_TELEMETRY: 32 EPS
  SG_ STEERING_WHEEL_TORQUE_COARSE : 71|8@0- (0.1,0) [-12.8|12.7] "Nm" XXX
  SG_ STEERING_WHEEL_TORQUE_FINE : 139|4@0- (0.01,0) [-0.08|0.07] "Nm" XXX
 
+BO_ 138 TSS3_UPSTREAM_LATERAL_REQUEST: 32 XXX
+ SG_ TARGET_STEERING_ANGLE_AFTER_OUTPUT_COMPENSATION : 151|16@0- (0.057302742,0) [-1877.696|1877.639] "deg" XXX
+ SG_ TARGET_LATERAL_ID : 173|6@0+ (1,0) [0|63] "" XXX
+ SG_ SEQUENCE : 213|6@0+ (1,0) [0|63] "" XXX
+
 BO_ 849 TSS3_EPS_STATUS_351: 4 XXX
  SG_ STATUS_CODE : 23|3@0+ (1,0) [0|7] "" XXX
  SG_ STATUS_FLAG : 20|1@0+ (1,0) [0|1] "" XXX
@@ -101,6 +106,10 @@ BO_ 1556 BLINKERS_STATE: 8 XXX
 BO_ 1568 BODY_CONTROL_STATE: 8 XXX
  SG_ PARKING_BRAKE : 60|1@0+ (1,0) [0|1] "" XXX
 
+CM_ BO_ 138 "Exact 2026 Camry upstream lateral-request carrier recovered from two relay-correct drives. This is not exact-F33 EPS ingress and is defined for passive analysis only; authentication/integrity and upstream-to-protected-B6 transformation remain unresolved.";
+CM_ SG_ 138 TARGET_STEERING_ANGLE_AFTER_OUTPUT_COMPENSATION "Signed B18:B19. Manual Target Lateral ID 0 tracks measured 0x025 angle at the exact downstream F33-B6 factor 1024/17870 deg/count; ID11 becomes a leading target. Name is independently corroborated by current EMPS2_P5 DID 0x1CEE.";
+CM_ SG_ 138 TARGET_LATERAL_ID "Current GTS+ Target Lateral ID dictionary; retained Camry states are exactly 0=Manual, 11=LTA/LCA, and 18=SDG.";
+CM_ SG_ 138 SEQUENCE "Observed B26 low6 modulo-64 sequence. Trailer/authentication semantics remain unresolved.";
 CM_ BO_ 849 "F33/H/F retained EPS status PDU. Only B2[7:5] status code and B2[4] companion flag are statically closed; do not map to temporary/permanent fault without live transitions.";
 CM_ BO_ 916 "F33/H/F retained EPS 17-state fault/status projection. The four transmitted table columns are lossy; state 0 is clear/normal candidate only, not a Ready or openpilot fault policy.";
 CM_ BO_ 1187 "Exact F33 packers 0x4C000/0x4C14E/0x4C7AA close this retained alternate steering telemetry PDU. Current Camry normal-harness captures do not observe its route, so availability/policy stays live-bound.";
@@ -131,6 +140,7 @@ CM_ SG_ 295 GEAR "Only raw 3=D has been dynamically validated on the tracked TSS
 CM_ SG_ 374 CRUISE_ACTIVE "Wire location/checksum are retained Toyota prior art and observed on moving TSS3 Corolla captures; an active cruise transition has not yet been captured.";
 CM_ SG_ 1310 READY_STATUS "Exact H PDU29 signal154: incoming 0x51E B0[7] feeds DID 0x1033 Ready Status. Both retained operational captures show value 1 only; do not infer Ready=0 fault policy without a transition.";
 
+VAL_ 138 TARGET_LATERAL_ID 27 "Remote Parking" 25 "AP" 19 "PDA" 18 "SDG" 11 "LTA/LCA" 10 "Hands Off LTA" 4 "LDA" 1 "PCS" 0 "No Request";
 VAL_ 182 TARGET_LATERAL_ID 27 "Remote Parking" 25 "AP" 19 "PDA" 11 "LTA/LCA" 10 "Hands Off LTA" 4 "LDA" 1 "PCS" 0 "No Request";
 VAL_ 295 GEAR 0 "P" 1 "R" 2 "N" 3 "D" 4 "B" ;
 VAL_ 1556 TURN_SIGNALS 3 "hazard" 2 "right" 1 "left" 0 "none";

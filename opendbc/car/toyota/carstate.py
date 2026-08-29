@@ -66,6 +66,10 @@ class CarState(CarStateBase):
     self.tss3_fault_394_projection = (0, 0, 0, 0)
     self.tss3_fault_394_state_candidates: tuple[int, ...] = ()
     self.tss3_fault_394_state: int | None = None
+    self.tss3_upstream_lateral_seen = False
+    self.tss3_target_lateral_id = 0
+    self.tss3_target_steering_angle = 0.0
+    self.tss3_upstream_lateral_sequence = 0
 
   @staticmethod
   def _tss3_message_seen(cp: CANParser, message: str) -> bool:
@@ -128,6 +132,13 @@ class CarState(CarStateBase):
     self.tss3_ready_status = bool(cp.vl["TSS3_READY_STATUS"]["READY_STATUS"])
     self.tss3_driver_torque_invalid = not driver_torque_valid
     self.tss3_steering_fault_inhibit_status = bool(cp.vl["TSS3_EPS_TELEMETRY"]["STEERING_FAULT_INHIBIT_STATUS"])
+    # Camry 0x08A is the upstream lateral request, not exact-F33 EPS ingress.
+    # Expose its recovered fields read-only; unresolved integrity and the
+    # upstream-to-protected-B6 transform prohibit using it for output.
+    self.tss3_upstream_lateral_seen = self._tss3_message_seen(cp, "TSS3_UPSTREAM_LATERAL_REQUEST")
+    self.tss3_target_lateral_id = int(cp.vl["TSS3_UPSTREAM_LATERAL_REQUEST"]["TARGET_LATERAL_ID"])
+    self.tss3_target_steering_angle = cp.vl["TSS3_UPSTREAM_LATERAL_REQUEST"]["TARGET_STEERING_ANGLE_AFTER_OUTPUT_COMPENSATION"]
+    self.tss3_upstream_lateral_sequence = int(cp.vl["TSS3_UPSTREAM_LATERAL_REQUEST"]["SEQUENCE"])
 
     # 0x4A3/0x351/0x394 are retained by the exact F33 Tx table. Their static
     # wire projections are useful policy inputs, but the current normal-harness
@@ -332,6 +343,8 @@ class CarState(CarStateBase):
         # Exact H PDU29 signal154: 0x51E B0[7] -> DID 0x1033 Ready Status.
         # Parse for read-only observation; policy use remains gated on a Ready transition.
         ("TSS3_READY_STATUS", float('nan')),
+        # Upstream lateral request; passive only and not alive-critical.
+        ("TSS3_UPSTREAM_LATERAL_REQUEST", float('nan')),
         # Exact F33 static Tx carriers; no alive check until relay-correct live observation.
         ("TSS3_ALT_STEERING_TELEMETRY", float('nan')),
         ("TSS3_EPS_STATUS_351", float('nan')),
