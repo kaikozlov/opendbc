@@ -39,7 +39,7 @@ BO_ 138 TSS3_LATERAL_REQUEST: 32 XXX
  SG_ REQUEST_WORD_B8_MIRROR : 95|16@0- (1,0) [-32768|32767] "" XXX
  SG_ RESERVED_16BIT_B13 : 111|16@0- (1,0) [-32768|32767] "" XXX
  SG_ RESERVED_16BIT_B16 : 135|16@0- (1,0) [-32768|32767] "" XXX
- SG_ TARGET_STEERING_ANGLE_AFTER_OUTPUT_COMPENSATION : 151|16@0- (0.057302742,0) [-1877.696|1877.639] "deg" XXX
+ SG_ LATERAL_REQUEST_ANGLE : 151|16@0- (0.057302742,0) [-1877.696|1877.639] "deg" XXX
  SG_ CRUISE_STATE_B20 : 167|2@0+ (1,0) [0|3] "" XXX
  SG_ TARGET_LATERAL_ID : 173|6@0+ (1,0) [0|63] "" XXX
  SG_ CRUISE_STATE_B22 : 180|1@0+ (1,0) [0|1] "" XXX
@@ -122,8 +122,8 @@ BO_ 1568 BODY_CONTROL_STATE: 8 XXX
  SG_ PARKING_BRAKE : 60|1@0+ (1,0) [0|1] "" XXX
 
 CM_ BO_ 138 "Exact 2026 Camry lateral-request carrier recovered from two relay-correct drives (44,613 deduped bus-0 frames; every field boundary in this message is backed by a full both-drive byte census partitioned by B21 state). This is not exact-F33 normal ingress or generated-COM transmit and is defined for passive analysis only. B28:B31 strongly match Toyota ordinary-P5 FV4+MAC28 structure; exact producer/profile/key/CMAC remain unresolved. Stock LTA does not establish or require an 0x08A-to-B6 transform.";
-CM_ SG_ 138 TARGET_STEERING_ANGLE_AFTER_OUTPUT_COMPENSATION "Signed B18:B19. Manual Target Lateral ID 0 tracks measured 0x025 angle at the numerically matching exact-F33 B6 controller-equivalent factor 1024/17870 deg/count; under ID11 its correlation shifts forward toward future measured angle. The matching scale does not establish an 0x08A-to-B6 conversion path. Name is independently corroborated by current category-405 EMPS_P5 DID 0x1CEE monitor 2071 (Target Steering Angle After Output Compensation, signed16, 1.5 deg/count diagnostic view).";
-CM_ SG_ 138 TARGET_LATERAL_ID "Current GTS+ Target Lateral ID dictionary (EMPS_P5 DID 0x1CEE monitor 2069, 19-value generation-20 pattern set); retained Camry states are exactly 0=No Request (Manual Operation), 11=LTA/LCA, and 18=SDG. Upper two bits are zero in all retained frames and the GTS+ diagnostic field is 8-bit, so the 6-bit boundary is an encoding assumption.";
+CM_ SG_ 138 LATERAL_REQUEST_ANGLE "Signed B18:B19 structural request-angle quantity. Under ID0 it tracks measured 0x025 angle at 1024/17870 deg/count; under ID11 its correlation shifts toward future measured angle. Current EMPS_P5 DID 0x1CEE monitor 2071 has a different 1.5 deg/count diagnostic representation, and exact 8965F3307000 does not implement DID 0x1CEE, so that OEM name is not transferred to this wire field. The matching scale does not establish an 0x08A-to-B6 path.";
+CM_ SG_ 138 TARGET_LATERAL_ID "Retained Camry states are exactly 0, 11, and 18. Current EMPS_P5 DID 0x1CEE monitor 2069 provides the generic generation-20 Target Lateral ID dictionary, while exact 8965F3307000 does not implement that DID; the matching values therefore corroborate interpretation but do not form an exact-target diagnostic join. Upper two bits are zero in all retained frames, so the 6-bit boundary remains an encoding assumption.";
 CM_ SG_ 138 SEQUENCE "Modulo-64 application sequence counter; upper two bits never observed nonzero, so the 6-bit boundary is an encoding assumption. On every same-reset B26+1 pair in both retained drives the B28 FV4 message-low2 also advances +1 (18,727 / 21,989 pairs), consistent with the freshness counter tracking this sequence.";
 CM_ SG_ 138 CRUISE_OPERATING_LATCH "B3[3]; value 8 is a reproducible cruise operating-state latch: six rising edges follow six effective MAIN presses by 0.17..0.29 s and CANCEL clears it within 0.03..0.07 s. B21=11 occurs only with this latch set and B21=18 only with it clear.";
 CM_ SG_ 138 CRUISE_SUBSTATE_1 "B6 mirrors cruise engagement sub-state: 0 with cruise off, 45 during LTA/LCA-active cruise, 44 in a second cruise sub-mode (604 drive-B frames). Structural name; not OEM-joined.";

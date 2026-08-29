@@ -27,9 +27,9 @@ class CarInterface(CarInterfaceBase):
     ret.brand = "toyota"
 
     if ret.flags & ToyotaFlags.TSS3:
-      # Initial TSS3 Corolla support is observation-only. Keep Panda in noOutput
-      # even before openpilot's passive-mode override, and do not reuse the old
-      # Toyota LTA safety flag/controller path for the new B6 command family.
+      # TSS3 remains observation-only. Exact F33 accepts target angle only on
+      # protected 0x0B6; captured 0x08A is not EPS ingress, and no authenticated
+      # B6 sender or validated target-side bypass is configured.
       ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.noOutput)]
       ret.dashcamOnly = True
       ret.secOcRequired = True

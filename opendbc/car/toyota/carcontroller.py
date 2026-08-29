@@ -8,9 +8,10 @@ from opendbc.car.common.pid import PIDController
 from opendbc.car.secoc import add_mac, add_mac28_zero_marker, build_sync_mac
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.toyota import toyotacan
-from opendbc.car.toyota.tss3 import (TSS3B6CompanionFields, TSS3B6Template, TSS3PandaSafetyCandidate,
+from opendbc.car.toyota.tss3 import (TSS3B6CompanionFields, TSS3B6Template, TSS3Freshness, TSS3PandaSafetyCandidate,
+                                     TSS3_B6_TARGET_ANGLE_MAX_RAW, TSS3_B6_TARGET_DELTA_MAX_PER_GAP_RAW,
                                      TSS3_B6_TARGET_LATERAL_ID_INACTIVE, TSS3_B6_TARGET_LATERAL_ID_LTA_LCA,
-                                     build_b6_application, target_angle_deg_to_raw)
+                                     build_b6_application, build_b6_zero_marker_frame, target_angle_deg_to_raw)
 from opendbc.car.toyota.values import CAR, CarControllerParams, ToyotaFlags
 from opendbc.can import CANPacker
 
@@ -92,6 +93,15 @@ class CarController(CarControllerBase):
     self.tss3_last_application = None
     self.tss3_last_safety_decision = None
 
+    # Zero-MAC28 bridge sender state (exact F33). Anchored to the observed
+    # 0x00F epoch; sequence advances exactly +1 per sent frame so the
+    # ALLOW_DEBUG panda TSS3 dev hook always sees a valid progression.
+    self.tss3_bridge_epoch: int | None = None
+    self.tss3_bridge_safety_candidate = TSS3PandaSafetyCandidate()
+    self.tss3_bridge_sequence = 0
+    self.tss3_bridge_message_counter = 0
+    self.tss3_bridge_prev_angle_raw: int | None = None
+
   def update(self, CC, CS, now_nanos):
     if self.CP.flags & ToyotaFlags.TSS3:
       # Compute the exact-F33 *shadow* B6 application command for inspection and
@@ -118,7 +128,74 @@ class CarController(CarControllerBase):
 
       can_sends = []
 
-      # Invariant: passive TSS3 computation emits zero CAN.
+      if self.ephemeral_secoc_bridge:
+        # Development-only zero-MAC28 sender for an installed exact-F33
+        # EPS bridge. One frame per cycle on bus 0; the ALLOW_DEBUG panda
+        # TSS3 hook independently enforces the same F33 envelope on every
+        # transmitted frame.
+        sync = CS.secoc_synchronization
+        epoch = (int(sync['TRIP_CNT']) << 20) | int(sync['RESET_CNT'])
+        if self.tss3_bridge_epoch != epoch:
+          # New 0x00F epoch: re-anchor progression. The panda hook resets
+          # its previous-frame state on a strictly newer epoch as well.
+          self.tss3_bridge_epoch = epoch
+          self.tss3_bridge_sequence = 0
+          self.tss3_bridge_message_counter = 0
+          self.tss3_bridge_prev_angle_raw = None
+          self.tss3_bridge_safety_candidate = TSS3PandaSafetyCandidate()
+
+        want_active = CC.latActive
+        desired_raw = target_angle_raw if want_active else 0
+
+        # Stay inside the receiver's per-gap slew envelope so the panda
+        # hook never has to drop a frame.
+        if self.tss3_bridge_prev_angle_raw is not None:
+          desired_raw = max(self.tss3_bridge_prev_angle_raw - TSS3_B6_TARGET_DELTA_MAX_PER_GAP_RAW,
+                            min(self.tss3_bridge_prev_angle_raw + TSS3_B6_TARGET_DELTA_MAX_PER_GAP_RAW,
+                                desired_raw))
+        desired_raw = max(-TSS3_B6_TARGET_ANGLE_MAX_RAW, min(TSS3_B6_TARGET_ANGLE_MAX_RAW, desired_raw))
+
+        # Ramp to zero while still active, then release with a clean
+        # inactive frame: the per-gap slew applies to every transmitted
+        # frame, including the inactive one.
+        send_active = want_active or desired_raw != 0
+        send_id = TSS3_B6_TARGET_LATERAL_ID_LTA_LCA if send_active else TSS3_B6_TARGET_LATERAL_ID_INACTIVE
+        send_raw = desired_raw if send_active else 0
+
+        decision = self.tss3_bridge_safety_candidate.check(
+          target_lateral_id=send_id,
+          target_angle_raw=send_raw,
+          sequence=self.tss3_bridge_sequence,
+          steering_angle_velocity_raw=int(round(CS.out.steeringRateDeg)),
+          now_nanos=now_nanos,
+        )
+        if not decision.static_limits_ok:
+          # Never emit a frame the EPS-side envelope would reject; hold
+          # position with an inactive request once the ramp reaches zero.
+          send_active = False
+          send_id = TSS3_B6_TARGET_LATERAL_ID_INACTIVE
+          send_raw = 0 if (self.tss3_bridge_prev_angle_raw is None or
+                           abs(self.tss3_bridge_prev_angle_raw) <= TSS3_B6_TARGET_DELTA_MAX_PER_GAP_RAW) else \
+              self.tss3_bridge_prev_angle_raw - TSS3_B6_TARGET_DELTA_MAX_PER_GAP_RAW * (1 if self.tss3_bridge_prev_angle_raw > 0 else -1)
+          send_active = send_raw != 0
+          if send_active:
+            send_id = TSS3_B6_TARGET_LATERAL_ID_LTA_LCA
+
+        application = build_b6_application(
+          target_lateral_id=send_id,
+          target_angle_raw=send_raw,
+          sequence=self.tss3_bridge_sequence,
+          template=self.tss3_template,
+          companions=self.tss3_companions,
+        )
+        freshness = TSS3Freshness(int(sync['TRIP_CNT']), int(sync['RESET_CNT']),
+                                  self.tss3_bridge_message_counter)
+        can_sends.append(build_b6_zero_marker_frame(application, freshness))
+
+        self.tss3_bridge_sequence = (self.tss3_bridge_sequence + 1) & 0x3F
+        self.tss3_bridge_message_counter = (self.tss3_bridge_message_counter + 1) & 0xFF
+        self.tss3_bridge_prev_angle_raw = send_raw
+
       self.frame += 1
       return CC.actuators.as_builder(), can_sends
 

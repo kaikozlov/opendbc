@@ -461,6 +461,22 @@ def build_b6_trailer(freshness: TSS3Freshness, cmac128: bytes) -> bytes:
   return bytes.fromhex(f"{freshness.transmitted_nibble:x}{cmac128.hex()[:7]}")
 
 
+def build_b6_zero_marker_frame(application: TSS3B6Application, freshness: TSS3Freshness) -> tuple[int, bytes, int]:
+  """32-byte zero-MAC28 0x0B6 FD frame for an installed exact-F33 bridge.
+
+  B28[7:4] keeps the stock FV4 freshness nibble; all 28 MAC bits
+  (B28[3:0], B29, B30, B31) are zero. Only an installed EPS-side
+  ephemeral bridge accepts this marker; stock SecOC verification
+  rejects it, so this frame is inert on an unmodified EPS.
+  """
+  if len(application.data) != TSS3_B6_APPLICATION_LEN:
+    raise ValueError(f"B6 application must be {TSS3_B6_APPLICATION_LEN} bytes")
+  data = application.data + bytes.fromhex(f"{freshness.transmitted_nibble:x}0000000")
+  if len(data) != TSS3_B6_LEN:
+    raise AssertionError("internal B6 zero-marker payload length drift")
+  return (TSS3_B6_ADDR, data, 0)
+
+
 def sign_b6(application: TSS3B6Application, freshness: TSS3Freshness, signer: TSS3Signer) -> TSS3SignedB6:
   auth_input = build_b6_auth_input(application.data, freshness)
   result = signer.sign_cmac128(auth_input)

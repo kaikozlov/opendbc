@@ -68,7 +68,7 @@ class CarState(CarStateBase):
     self.tss3_fault_394_state: int | None = None
     self.tss3_lateral_request_seen = False
     self.tss3_target_lateral_id = 0
-    self.tss3_target_steering_angle = 0.0
+    self.tss3_lateral_request_angle = 0.0
     self.tss3_lateral_request_sequence = 0
 
   @staticmethod
@@ -138,7 +138,7 @@ class CarState(CarStateBase):
     # LTA does not establish or require an 0x08A-to-B6 transform.
     self.tss3_lateral_request_seen = self._tss3_message_seen(cp, "TSS3_LATERAL_REQUEST")
     self.tss3_target_lateral_id = int(cp.vl["TSS3_LATERAL_REQUEST"]["TARGET_LATERAL_ID"])
-    self.tss3_target_steering_angle = cp.vl["TSS3_LATERAL_REQUEST"]["TARGET_STEERING_ANGLE_AFTER_OUTPUT_COMPENSATION"]
+    self.tss3_lateral_request_angle = cp.vl["TSS3_LATERAL_REQUEST"]["LATERAL_REQUEST_ANGLE"]
     self.tss3_lateral_request_sequence = int(cp.vl["TSS3_LATERAL_REQUEST"]["SEQUENCE"])
 
     # 0x4A3/0x351/0x394 are retained by the exact F33 Tx table. Their static

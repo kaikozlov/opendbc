@@ -203,8 +203,8 @@ class CAR(Platforms):
     ],
     TOYOTA_CAMRY.specs,
   )
-  # Exact maintainer-operated F33 specimen. Read-only until the remaining
-  # stock-sender/signing/relay/live-policy gates are closed.
+  # Exact maintainer-operated F33 specimen. Read-only: protected 0x0B6 is the
+  # only recovered external angle command, and this integration cannot authenticate it.
   TOYOTA_CAMRY_TSS3 = ToyotaTSS3PlatformConfig(
     [ToyotaTSS3CarDocs("Toyota Camry Hybrid 2026")],
     TOYOTA_CAMRY.specs,

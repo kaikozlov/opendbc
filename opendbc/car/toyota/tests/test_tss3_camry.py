@@ -21,12 +21,14 @@ from opendbc.car.toyota.tss3 import (
   TSS3SignerResult,
   TSS3_B6_AUTH_INPUT_LEN,
   TSS3_B6_TARGET_ANGLE_MAX_RAW,
+  TSS3_B6_TARGET_DELTA_MAX_PER_GAP_RAW,
   TSS3_B6_TARGET_ANGLE_SCALE_DEG,
   decode_eps_394_state_candidates,
   build_b6_application,
   build_b6_auth_input,
   build_b6_trailer,
   sign_b6,
+  target_angle_deg_to_raw,
 )
 from opendbc.car.toyota.values import CAR, DBC, FW_QUERY_CONFIG, TSS3_EXACT_FW_VERSIONS, ToyotaFlags, ToyotaSafetyFlags
 from opendbc.safety.tests.libsafety import libsafety_py
@@ -180,7 +182,7 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
     CS = update_with_frame_set(CI, CAMRY_COMMON | {0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]})
     self.assertTrue(CI.CS.tss3_lateral_request_seen)
     self.assertEqual(CI.CS.tss3_target_lateral_id, 11)
-    self.assertAlmostEqual(CI.CS.tss3_target_steering_angle, -203 * TSS3_B6_TARGET_ANGLE_SCALE_DEG)
+    self.assertAlmostEqual(CI.CS.tss3_lateral_request_angle, -203 * TSS3_B6_TARGET_ANGLE_SCALE_DEG)
     self.assertEqual(CI.CS.tss3_lateral_request_sequence, 60)
     self.assertTrue(CP.dashcamOnly)
     self.assertEqual(CP.safetyConfigs[0].safetyModel, structs.CarParams.SafetyModel.noOutput)
@@ -480,6 +482,97 @@ class TestToyotaTSS3PandaShadowSafety(unittest.TestCase):
     high_rate[5] = 101
     self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x025, 0, bytes(high_rate))))
     self.assertFalse(s.safety_tx_hook(b6(100, 0)))
+
+
+class TestToyotaTSS3BridgeSender(unittest.TestCase):
+  def _bridge_platform(self) -> CarInterface:
+    CP = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint_on(1), [], False, False, False)
+    CI = CarInterface(CP)
+    update_with_frame_set(CI, CAMRY_COMMON | {0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]})
+    CI.CC.ephemeral_secoc_bridge = True
+    return CI
+
+  @staticmethod
+  def _control(angle_deg: float, lat_active: bool = True):
+    CC = structs.CarControl()
+    CC.enabled = True
+    CC.latActive = lat_active
+    CC.actuators.steeringAngleDeg = angle_deg
+    return CC.as_reader()
+
+  def test_bridge_frame_shape_matches_f33_receiver_contract(self):
+    CI = self._bridge_platform()
+    _, sends = CI.apply(self._control(2 * TSS3_B6_TARGET_ANGLE_SCALE_DEG), 2_000_000_000)
+    self.assertEqual(len(sends), 1)
+    addr, dat, bus = sends[0]
+    self.assertEqual((addr, bus, len(dat)), (0x0B6, 0, 32))
+    # Panda hook field projection: B3[5:0], B4:B5 signed BE, B7[5:0].
+    self.assertEqual(dat[3] & 0x3F, 11)
+    self.assertEqual(int.from_bytes(dat[4:6], "big", signed=True), 2)
+    self.assertEqual(dat[7] & 0x3F, 0)
+    # Zero-MAC28 marker: all 28 MAC bits (B28[3:0], B29, B30, B31) zero,
+    # FV4 nibble preserved (fixture: msg low2=0, reset low2=5212&3=0).
+    self.assertEqual(dat[28], 0x00)
+    self.assertEqual(dat[29:32], b"\x00\x00\x00")
+
+  def test_bridge_sender_sequence_slew_and_real_panda_acceptance(self):
+    s = libsafety_py.libsafety
+    self.assertEqual(s.set_safety_hooks(structs.CarParams.SafetyModel.toyota, ToyotaSafetyFlags.TSS3_DEV_LATERAL), 0)
+    s.init_tests()
+    self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x025, 0, CAMRY_COMMON[0x025])))
+    self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x00F, 0, CAMRY_COMMON[0x00F])))
+
+    CI = self._bridge_platform()
+
+    def send(angle_deg: float, lat_active: bool = True) -> bytes:
+      _, sends = CI.apply(self._control(angle_deg, lat_active), 2_000_000_000)
+      self.assertEqual(len(sends), 1)
+      addr, dat, bus = sends[0]
+      self.assertEqual((addr, bus), (0x0B6, 0))
+      self.assertTrue(s.safety_tx_hook(libsafety_py.make_CANPacket(addr, bus, dat)))
+      return dat
+
+    first = send(10.0)
+    self.assertEqual(int.from_bytes(first[4:6], "big", signed=True), target_angle_deg_to_raw(10.0))
+    self.assertEqual(first[7] & 0x3F, 0)
+
+    s.set_timer(10_000)
+    second = send(20.0)  # large jump: sender pre-clamps to the +/-78 per-gap envelope
+    prev_raw = int.from_bytes(first[4:6], "big", signed=True)
+    self.assertEqual(int.from_bytes(second[4:6], "big", signed=True), prev_raw + TSS3_B6_TARGET_DELTA_MAX_PER_GAP_RAW)
+    self.assertEqual(second[7] & 0x3F, 1)
+
+    # Deactivation ramps to zero while still active, then releases with a
+    # clean inactive request that keeps the +1 cadence.
+    prev_raw = int.from_bytes(second[4:6], "big", signed=True)
+    for expected_seq in range(2, 2 + 8):
+      s.set_timer(10_000 * expected_seq)
+      dat = send(0.0, lat_active=False)
+      raw = int.from_bytes(dat[4:6], "big", signed=True)
+      self.assertEqual(dat[7] & 0x3F, expected_seq)
+      self.assertGreaterEqual(prev_raw - raw, 0)
+      self.assertLessEqual(prev_raw - raw, TSS3_B6_TARGET_DELTA_MAX_PER_GAP_RAW)
+      prev_raw = raw
+      if dat[3] & 0x3F == 0:
+        break
+    self.assertEqual(dat[3] & 0x3F, 0)
+    self.assertEqual(prev_raw, 0)
+
+  def test_bridge_sender_reanchors_on_new_sync_epoch(self):
+    CI = self._bridge_platform()
+    CI.apply(self._control(1.0), 2_000_000_000)
+    CI.apply(self._control(1.0), 2_000_010_000)
+    self.assertEqual(CI.CC.tss3_bridge_sequence, 2)
+    CI.CS.secoc_synchronization["RESET_CNT"] += 1
+    _, sends = CI.apply(self._control(1.0), 2_000_020_000)
+    self.assertEqual(sends[0][1][7] & 0x3F, 0)
+
+  def test_bridge_off_still_emits_no_can(self):
+    CP = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint_on(1), [], False, False, False)
+    CI = CarInterface(CP)
+    update_with_frame_set(CI, CAMRY_COMMON | {0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]})
+    _, sends = CI.apply(self._control(1.0), 2_000_000_000)
+    self.assertEqual(sends, [])
 
 
 if __name__ == "__main__":
