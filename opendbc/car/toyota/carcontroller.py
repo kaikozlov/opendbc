@@ -89,7 +89,15 @@ class CarController(CarControllerBase):
     # 0x08A producer/SecOC ownership is a separate network question, not proof
     # of an 0x08A-to-B6 stock-LTA transform.
     self.tss3_template = TSS3B6Template()
-    self.tss3_companions = TSS3B6CompanionFields()
+    # Exact F33 consumes B8/B9 as /100 controller contributions. The old
+    # conservative development candidate left both at zero, which explicitly
+    # removes both branches. GTS+ request records expose the adjacent steering
+    # assist and damping gains with the same 0.01 scaling, and F33 dataflow maps
+    # B8 to the angle/error-assist branch and B9 to a speed/return contribution.
+    # Use full-scale gains only while the development ID11 request is active;
+    # keep the generic/inactive candidate at the conservative zero defaults.
+    self.tss3_inactive_companions = TSS3B6CompanionFields()
+    self.tss3_active_companions = TSS3B6CompanionFields(contribution_pct_1=100, contribution_pct_2=100)
     self.tss3_safety_candidate = TSS3PandaSafetyCandidate()
     self.tss3_last_application = None
     self.tss3_last_safety_decision = None
@@ -118,7 +126,7 @@ class CarController(CarControllerBase):
         target_angle_raw=target_angle_raw,
         sequence=shadow_sequence,
         template=self.tss3_template,
-        companions=self.tss3_companions,
+        companions=self.tss3_active_companions if CC.latActive else self.tss3_inactive_companions,
       )
       self.tss3_last_safety_decision = self.tss3_safety_candidate.check(
         target_lateral_id=target_lateral_id,
@@ -188,7 +196,7 @@ class CarController(CarControllerBase):
           target_angle_raw=send_raw,
           sequence=self.tss3_bridge_sequence,
           template=self.tss3_template,
-          companions=self.tss3_companions,
+          companions=self.tss3_active_companions if send_active else self.tss3_inactive_companions,
         )
         freshness = TSS3Freshness(int(sync['TRIP_CNT']), int(sync['RESET_CNT']),
                                   self.tss3_bridge_message_counter)

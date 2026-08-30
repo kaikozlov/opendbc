@@ -68,6 +68,7 @@ static bool toyota_tss3_steering_rate_seen = false;
 static int toyota_tss3_steering_rate_raw = 0;
 static bool toyota_tss3_sync_seen = false;
 static uint64_t toyota_tss3_sync_epoch = 0U;
+static uint8_t toyota_tss3_stock_target_lateral_id = 0U;
 static bool toyota_tss3_has_previous = false;
 static int toyota_tss3_previous_angle_raw = 0;
 static uint8_t toyota_tss3_previous_sequence = 0U;
@@ -114,8 +115,12 @@ static void toyota_tss3_dev_rx(const CANPacket_t *msg) {
 
   if ((msg->bus == 0U) && (msg->addr == 0x8AU)) {
     // TSS3_LATERAL_REQUEST.CRUISE_OPERATING_LATCH is B3[3]: the same-car
-    // cruise engagement signal CarState decodes from 0x08A.
+    // cruise engagement signal CarState decodes from 0x08A. Keep the stock
+    // Target Lateral ID separately so development B6 is never allowed while
+    // Toyota is simultaneously requesting LTA/SDG/etc. The native bus stays
+    // electrically intact; exclusivity is enforced at the B6 transmitter.
     pcm_cruise_check(GET_BIT(msg, 27U));
+    toyota_tss3_stock_target_lateral_id = msg->data[21] & 0x3FU;
   }
 
   if ((msg->bus == 0U) && (msg->addr == 0x0FU)) {
@@ -308,11 +313,34 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
     int target_angle_raw = (msg->data[4] << 8U) | msg->data[5];
     target_angle_raw = to_signed(target_angle_raw, 16);
     const uint8_t sequence = msg->data[7] & 0x3FU;
+    const bool active = target_lateral_id != 0U;
 
-    // Active steering requests require cruise engagement (0x08A latch via
-    // pcm_cruise_check). Inactive release frames stay allowed so a
-    // deactivating sender can always ramp to zero and drop out cleanly.
-    if ((target_lateral_id != 0U) && !controls_allowed) {
+    // Development sender shape is deliberately narrower than the receiver.
+    // B6[2]=1 suppresses the recovered additive branch. Exact F33 consumes
+    // B8/B9 as /100 contributions; active ID11 uses full-scale 100/100, while
+    // inactive release uses 0/0. All other currently-unresolved application
+    // bytes remain zero, and Gate-2 development keeps a zero MAC28 marker.
+    bool shape_violation = (msg->data[0] != 0U) || (msg->data[1] != 0U) || (msg->data[2] != 0U) ||
+                           ((msg->data[3] & 0xC0U) != 0U) || (msg->data[6] != 0x04U) ||
+                           ((msg->data[7] & 0xC0U) != 0U) ||
+                           (msg->data[8] != (active ? 100U : 0U)) ||
+                           (msg->data[9] != (active ? 100U : 0U)) || (msg->data[10] != 0U) ||
+                           ((msg->data[28] & 0x0FU) != 0U) || (msg->data[29] != 0U) ||
+                           (msg->data[30] != 0U) || (msg->data[31] != 0U);
+    for (uint8_t i = 11U; i < 28U; i++) {
+      shape_violation |= msg->data[i] != 0U;
+    }
+    if (shape_violation) {
+      return false;
+    }
+
+    // Active steering requests require cruise engagement and exclusive lateral
+    // authority. With the physical harness relay closed, Toyota's native LTA
+    // traffic remains present; exact F33 ID11 does not automatically suppress
+    // its B6-independent internal assist path. Require stock Target Lateral ID
+    // 0 so comma never drives concurrently with Toyota LTA/SDG/etc. Inactive
+    // release frames remain allowed so the sender can always ramp to zero.
+    if (active && (!controls_allowed || (toyota_tss3_stock_target_lateral_id != 0U))) {
       return false;
     }
 
@@ -502,6 +530,7 @@ static safety_config toyota_init(uint16_t param) {
   toyota_tss3_dev_lateral = GET_FLAG(param, TOYOTA_PARAM_TSS3_DEV_LATERAL);
   toyota_tss3_steering_rate_seen = false;
   toyota_tss3_sync_seen = false;
+  toyota_tss3_stock_target_lateral_id = 0U;
   toyota_tss3_has_previous = false;
   toyota_tss3_previous_tx_ts = 0U;
 #endif

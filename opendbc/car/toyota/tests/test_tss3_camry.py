@@ -481,14 +481,20 @@ class TestToyotaTSS3PandaShadowSafety(unittest.TestCase):
       dat = bytearray(32)
       dat[3] = target_id
       dat[4:6] = angle.to_bytes(2, "big", signed=True)
+      dat[6] = 0x04
       dat[7] = sequence
+      if target_id != 0:
+        dat[8] = 100
+        dat[9] = 100
       return libsafety_py.make_CANPacket(0x0B6, 0, bytes(dat))
 
     # Prime steering-rate and stock sync inputs, then the Camry cruise
     # latch on 0x08A B3[3] — the dev mode's engagement source.
     self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x025, 0, CAMRY_COMMON[0x025])))
     self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x00F, 0, CAMRY_COMMON[0x00F])))
-    self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x08A, 0, CAMRY_COMMON[0x08A])))
+    stock_lateral_off = bytearray(CAMRY_COMMON[0x08A])
+    stock_lateral_off[21] = 0
+    self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x08A, 0, bytes(stock_lateral_off))))
     self.assertTrue(s.get_controls_allowed())
 
     s.set_controls_allowed(False)
@@ -519,7 +525,11 @@ class TestToyotaTSS3PandaShadowSafety(unittest.TestCase):
       dat = bytearray(32)
       dat[3] = target_id
       dat[4:6] = angle.to_bytes(2, "big", signed=True)
+      dat[6] = 0x04
       dat[7] = sequence
+      if target_id != 0:
+        dat[8] = 100
+        dat[9] = 100
       return libsafety_py.make_CANPacket(0x0B6, 0, bytes(dat))
 
     # No command before both target-native steering-rate and stock sync inputs.
@@ -527,7 +537,9 @@ class TestToyotaTSS3PandaShadowSafety(unittest.TestCase):
     self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x025, 0, CAMRY_COMMON[0x025])))
     self.assertFalse(s.safety_tx_hook(b6(100, 0)))
     self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x00F, 0, CAMRY_COMMON[0x00F])))
-    self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x08A, 0, CAMRY_COMMON[0x08A])))
+    stock_lateral_off = bytearray(CAMRY_COMMON[0x08A])
+    stock_lateral_off[21] = 0
+    self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x08A, 0, bytes(stock_lateral_off))))
     self.assertTrue(s.safety_tx_hook(b6(100, 0)))
     # An older epoch must not reset the Panda sequence baseline.
     stale_sync = bytearray(CAMRY_COMMON[0x00F])
@@ -539,6 +551,11 @@ class TestToyotaTSS3PandaShadowSafety(unittest.TestCase):
     s.set_timer(20_000)
     self.assertFalse(s.safety_tx_hook(b6(257, 2)))  # >78 raw step
     self.assertFalse(s.safety_tx_hook(b6(178, 3, target_id=4)))
+    stock_lta_on = bytearray(stock_lateral_off)
+    stock_lta_on[21] = 11
+    self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x08A, 0, bytes(stock_lta_on))))
+    s.set_timer(30_000)
+    self.assertFalse(s.safety_tx_hook(b6(178, 2)))
     self.assertFalse(s.safety_tx_hook(libsafety_py.make_CANPacket(0x191, 0, bytes(8))))
     self.assertFalse(s.safety_tx_hook(libsafety_py.make_CANPacket(0x0B6, 1, bytes(32))))
 
@@ -590,6 +607,8 @@ class TestToyotaTSS3BridgeSender(unittest.TestCase):
     self.assertEqual(dat[3] & 0x3F, 11)
     self.assertEqual(int.from_bytes(dat[4:6], "big", signed=True), 2)
     self.assertEqual(dat[7] & 0x3F, 0)
+    self.assertEqual(dat[6], 0x04)
+    self.assertEqual(dat[8:10], b"\x64\x64")
     # Zero-MAC28 marker: all 28 MAC bits (B28[3:0], B29, B30, B31) zero,
     # FV4 nibble preserved (fixture: msg low2=0, reset low2=5212&3=0).
     self.assertEqual(dat[28], 0x00)
@@ -601,7 +620,9 @@ class TestToyotaTSS3BridgeSender(unittest.TestCase):
     s.init_tests()
     self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x025, 0, CAMRY_COMMON[0x025])))
     self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x00F, 0, CAMRY_COMMON[0x00F])))
-    self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x08A, 0, CAMRY_COMMON[0x08A])))
+    stock_lateral_off = bytearray(CAMRY_COMMON[0x08A])
+    stock_lateral_off[21] = 0
+    self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x08A, 0, bytes(stock_lateral_off))))
 
     CI = self._bridge_platform()
 
@@ -637,6 +658,7 @@ class TestToyotaTSS3BridgeSender(unittest.TestCase):
       if dat[3] & 0x3F == 0:
         break
     self.assertEqual(dat[3] & 0x3F, 0)
+    self.assertEqual(dat[8:10], b"\x00\x00")
     self.assertEqual(prev_raw, 0)
 
   def test_bridge_sender_reanchors_on_new_sync_epoch(self):
