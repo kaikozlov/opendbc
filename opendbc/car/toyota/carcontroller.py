@@ -9,7 +9,8 @@ from opendbc.car.secoc import add_mac, add_mac28_zero_marker, build_sync_mac
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.toyota import toyotacan
 from opendbc.car.toyota.tss3 import (TSS3B6CompanionFields, TSS3B6Template, TSS3Freshness, TSS3PandaSafetyCandidate,
-                                     TSS3_B6_TARGET_ANGLE_MAX_RAW, TSS3_B6_TARGET_DELTA_MAX_PER_GAP_RAW,
+                                     TSS3_B6_TARGET_ANGLE_MAX_RAW, TSS3_B6_TARGET_ANGLE_SCALE_DEG,
+                                     TSS3_B6_TARGET_DELTA_MAX_PER_GAP_RAW,
                                      TSS3_B6_TARGET_LATERAL_ID_INACTIVE, TSS3_B6_TARGET_LATERAL_ID_LTA_LCA,
                                      build_b6_application, build_b6_zero_marker_frame, target_angle_deg_to_raw)
 from opendbc.car.toyota.values import CAR, CarControllerParams, ToyotaFlags
@@ -108,6 +109,7 @@ class CarController(CarControllerBase):
       # replay, but do not schedule it, authenticate it, or return it as CAN.
       # A real sender sequence is owned by TSS3ReplacementFreshnessState only
       # after a newer authenticated 0x00F epoch and validated stock cadence.
+      output = CC.actuators.as_builder()
       target_lateral_id = TSS3_B6_TARGET_LATERAL_ID_LTA_LCA if CC.latActive else TSS3_B6_TARGET_LATERAL_ID_INACTIVE
       target_angle_raw = target_angle_deg_to_raw(CC.actuators.steeringAngleDeg) if CC.latActive else 0
       shadow_sequence = self.frame & 0x3F
@@ -192,12 +194,18 @@ class CarController(CarControllerBase):
                                   self.tss3_bridge_message_counter)
         can_sends.append(build_b6_zero_marker_frame(application, freshness))
 
+        # Report the slew-limited angle we actually transmitted so the
+        # lateral planner tracks the receiver's envelope, not the request.
+        actuators_output = CC.actuators.as_builder()
+        actuators_output.steeringAngleDeg = send_raw * TSS3_B6_TARGET_ANGLE_SCALE_DEG
+        output = actuators_output
+
         self.tss3_bridge_sequence = (self.tss3_bridge_sequence + 1) & 0x3F
         self.tss3_bridge_message_counter = (self.tss3_bridge_message_counter + 1) & 0xFF
         self.tss3_bridge_prev_angle_raw = send_raw
 
       self.frame += 1
-      return CC.actuators.as_builder(), can_sends
+      return output, can_sends
 
     actuators = CC.actuators
     stopping = actuators.longControlState == LongCtrlState.stopping

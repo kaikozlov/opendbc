@@ -460,6 +460,44 @@ class TestToyotaTSS3PandaShadowSafety(unittest.TestCase):
     candidate = libsafety_py.make_CANPacket(0x0B6, 0, bytes(32))
     self.assertFalse(s.safety_tx_hook(candidate))
 
+  def test_debug_panda_requires_cruise_engagement_for_active_b6(self):
+    s = libsafety_py.libsafety
+    self.assertEqual(s.set_safety_hooks(structs.CarParams.SafetyModel.toyota, ToyotaSafetyFlags.TSS3_DEV_LATERAL), 0)
+    s.init_tests()
+
+    def b6(angle: int, sequence: int, target_id: int):
+      dat = bytearray(32)
+      dat[3] = target_id
+      dat[4:6] = angle.to_bytes(2, "big", signed=True)
+      dat[7] = sequence
+      return libsafety_py.make_CANPacket(0x0B6, 0, bytes(dat))
+
+    # Prime steering-rate and stock sync inputs, then the Camry cruise
+    # latch on 0x08A B3[3] — the dev mode's engagement source.
+    self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x025, 0, CAMRY_COMMON[0x025])))
+    self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x00F, 0, CAMRY_COMMON[0x00F])))
+    self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x08A, 0, CAMRY_COMMON[0x08A])))
+    self.assertTrue(s.get_controls_allowed())
+
+    s.set_controls_allowed(False)
+    self.assertFalse(s.safety_tx_hook(b6(100, 0, 11)))
+    self.assertTrue(s.safety_tx_hook(b6(0, 0, 0)))
+    s.set_controls_allowed(True)
+    self.assertTrue(s.safety_tx_hook(b6(50, 1, 11)))
+
+  def test_debug_panda_tracks_camry_cruise_latch(self):
+    s = libsafety_py.libsafety
+    self.assertEqual(s.set_safety_hooks(structs.CarParams.SafetyModel.toyota, ToyotaSafetyFlags.TSS3_DEV_LATERAL), 0)
+    s.init_tests()
+    cruise_on = bytearray(CAMRY_COMMON[0x08A])
+    cruise_off = bytearray(cruise_on)
+    cruise_off[3] &= ~(1 << 3)
+
+    self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x08A, 0, bytes(cruise_on))))
+    self.assertTrue(s.get_controls_allowed())
+    self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x08A, 0, bytes(cruise_off))))
+    self.assertFalse(s.get_controls_allowed())
+
   def test_debug_panda_path_is_b6_only_and_enforces_f33_limits(self):
     s = libsafety_py.libsafety
     self.assertEqual(s.set_safety_hooks(structs.CarParams.SafetyModel.toyota, ToyotaSafetyFlags.TSS3_DEV_LATERAL), 0)
@@ -477,6 +515,7 @@ class TestToyotaTSS3PandaShadowSafety(unittest.TestCase):
     self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x025, 0, CAMRY_COMMON[0x025])))
     self.assertFalse(s.safety_tx_hook(b6(100, 0)))
     self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x00F, 0, CAMRY_COMMON[0x00F])))
+    self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x08A, 0, CAMRY_COMMON[0x08A])))
     self.assertTrue(s.safety_tx_hook(b6(100, 0)))
     # An older epoch must not reset the Panda sequence baseline.
     stale_sync = bytearray(CAMRY_COMMON[0x00F])
@@ -519,6 +558,16 @@ class TestToyotaTSS3BridgeSender(unittest.TestCase):
     CC.actuators.steeringAngleDeg = angle_deg
     return CC.as_reader()
 
+  def test_bridge_reports_slew_limited_angle(self):
+    CI = self._bridge_platform()
+    _, first_sends = CI.apply(self._control(1.0), 2_000_000_000)
+    first_raw = int.from_bytes(first_sends[0][1][4:6], "big", signed=True)
+    # Same sync epoch: a large jump is clamped to the per-gap slew envelope.
+    actuators, sends = CI.apply(self._control(20.0), 2_000_010_000)
+    sent_raw = int.from_bytes(sends[0][1][4:6], "big", signed=True)
+    self.assertEqual(sent_raw, first_raw + TSS3_B6_TARGET_DELTA_MAX_PER_GAP_RAW)
+    self.assertAlmostEqual(actuators.steeringAngleDeg, sent_raw * TSS3_B6_TARGET_ANGLE_SCALE_DEG, places=4)
+
   def test_bridge_frame_shape_matches_f33_receiver_contract(self):
     CI = self._bridge_platform()
     _, sends = CI.apply(self._control(2 * TSS3_B6_TARGET_ANGLE_SCALE_DEG), 2_000_000_000)
@@ -540,6 +589,7 @@ class TestToyotaTSS3BridgeSender(unittest.TestCase):
     s.init_tests()
     self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x025, 0, CAMRY_COMMON[0x025])))
     self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x00F, 0, CAMRY_COMMON[0x00F])))
+    self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x08A, 0, CAMRY_COMMON[0x08A])))
 
     CI = self._bridge_platform()
 
