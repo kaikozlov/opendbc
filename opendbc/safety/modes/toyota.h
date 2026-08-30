@@ -515,7 +515,7 @@ static safety_config toyota_init(uint16_t param) {
 #ifdef ALLOW_DEBUG
   if (toyota_tss3_dev_lateral) {
     static const CanMsg TOYOTA_TSS3_DEV_TX_MSGS[] = {
-      {0x0B6, 0, 32, .check_relay = true},
+      {0x0B6, 0, 32, .check_relay = false},
     };
     static RxCheck toyota_tss3_dev_rx_checks[] = {
       {.msg = {{0x025, 0, 32, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
@@ -524,6 +524,9 @@ static safety_config toyota_init(uint16_t param) {
     };
     SET_TX_MSGS(TOYOTA_TSS3_DEV_TX_MSGS, ret);
     SET_RX_CHECKS(toyota_tss3_dev_rx_checks, ret);
+    // Exact-F33 development runs with the physical harness relay closed.
+    // Preserve Toyota's native bus timing/order instead of store-and-forwarding.
+    ret.disable_forwarding = true;
     return ret;
   }
 #endif
