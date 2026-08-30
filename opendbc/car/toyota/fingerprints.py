@@ -69,6 +69,13 @@ TSS3_CAN_CENSUS = {
 }
 
 
+# Exact Camry TSS3 CAN fingerprint. The retained Camry census has 32 IDs/DLCs
+# not present in the Corolla TSS3 fingerprint (including 0x0C9/32 and 0x1FD/32),
+# so the normal comma CAN fingerprint pipeline can identify the platform in READY
+# even when the EPS does not answer F181 during startup firmware discovery.
+FINGERPRINTS[CAR.TOYOTA_CAMRY_TSS3] = [TSS3_CAN_CENSUS[CAR.TOYOTA_CAMRY_TSS3]]
+
+
 FW_VERSIONS = {
   # Exact maintainer 2026 Camry TSS3 identity. EPS F181 is the required
   # discriminator; camera/ABS are corroborating and may be absent from a

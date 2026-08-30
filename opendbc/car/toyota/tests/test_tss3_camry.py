@@ -128,8 +128,7 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
     fp = TSS3_CAN_CENSUS[CAR.TOYOTA_CAMRY_TSS3]
     for address, size in {0x00F: 8, 0x025: 32, 0x030: 32, 0x0D7: 32, 0x127: 8, 0x51E: 8}.items():
       self.assertEqual(fp[address], size)
-    self.assertNotIn(CAR.TOYOTA_CAMRY_TSS3, FINGERPRINTS)
-    # Identification is firmware-based, not legacy CAN fingerprinting.
+    self.assertEqual(FINGERPRINTS[CAR.TOYOTA_CAMRY_TSS3][0], fp)
 
   def test_relay_correct_toyota_fw_query_already_requests_eps_f181_on_bus0(self):
     uds_f181 = [r for r in FW_QUERY_CONFIG.requests if r.bus == 0 and Ecu.eps in r.whitelist_ecus and
