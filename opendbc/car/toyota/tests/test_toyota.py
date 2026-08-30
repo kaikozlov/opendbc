@@ -52,13 +52,17 @@ class TestToyotaInterfaces(unittest.TestCase):
       with self.subTest(car_model=car_model.value):
         present_ecus = {ecu[0] for ecu in ecus}
         missing_ecus = common_ecus - present_ecus
+        if car_model == CAR.TOYOTA_CAMRY_TSS3:
+          # Exact maintainer TSS3 research platform: EPS F181 is the identity
+          # discriminator; full radar inventory is intentionally not claimed.
+          missing_ecus -= {Ecu.fwdRadar}
         assert len(missing_ecus) == 0
 
         # Some exceptions for other common ECUs
         if car_model not in (CAR.TOYOTA_ALPHARD_TSS2,):
           assert Ecu.abs in present_ecus
 
-        if car_model not in (CAR.TOYOTA_MIRAI,):
+        if car_model not in (CAR.TOYOTA_MIRAI, CAR.TOYOTA_CAMRY_TSS3):
           assert Ecu.engine in present_ecus
 
         if car_model not in (CAR.TOYOTA_PRIUS_V, CAR.LEXUS_CTH):
@@ -96,6 +100,8 @@ class TestToyotaFingerprint(unittest.TestCase):
           if platform_code_ecu == Ecu.eps and car_model in (CAR.TOYOTA_PRIUS_V, CAR.LEXUS_CTH,):
             continue
           if platform_code_ecu == Ecu.abs and car_model in (CAR.TOYOTA_ALPHARD_TSS2,):
+            continue
+          if platform_code_ecu == Ecu.fwdRadar and car_model == CAR.TOYOTA_CAMRY_TSS3:
             continue
           assert platform_code_ecu in [e[0] for e in ecus]
 

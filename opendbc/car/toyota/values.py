@@ -447,11 +447,11 @@ class CAR(Platforms):
   )
 
 
-# Identity-bound TSS3 research platforms whose exact diagnostic routes are known
-# but whose complete production firmware inventory/query routing is not yet closed.
-# Keep these out of FW_VERSIONS: the generic exact matcher requires a complete set
-# of essential ECUs. Toyota's custom matcher below uses the exact EPS F181 as the
-# required discriminator and treats the other known identities as corroboration.
+# Identity-bound TSS3 research platforms whose complete production firmware
+# inventory is not yet closed. The exact maintainer Camry entry is also present
+# in FW_VERSIONS with EPS as the required discriminator and the other known
+# identities treated as corroborating/non-essential. Keep this compact map for
+# Toyota's direct matcher and exact-identity consumers.
 TSS3_EXACT_FW_VERSIONS = {
   CAR.TOYOTA_CAMRY_TSS3: {
     (Ecu.eps, 0x7A1, None): [
@@ -512,9 +512,8 @@ def get_platform_codes(fw_versions: list[bytes]) -> dict[bytes, set[bytes]]:
 
 
 def match_fw_to_car_fuzzy(live_fw_versions, vin, offline_fw_versions) -> set[str]:
-  # TSS3 research platforms are intentionally excluded from FW_VERSIONS until a
-  # complete production query inventory exists. Match the exact target EPS F181
-  # first; any corroborating identity that is present must also match exactly.
+  # Exact-EPS TSS3 research platforms require their target EPS F181. Any
+  # corroborating identity that is present must also match exactly.
   for candidate, fws in TSS3_EXACT_FW_VERSIONS.items():
     eps_ecus = [ecu for ecu in fws if ecu[0] == Ecu.eps]
     if len(eps_ecus) != 1:
@@ -537,6 +536,10 @@ def match_fw_to_car_fuzzy(live_fw_versions, vin, offline_fw_versions) -> set[str
   candidates = set()
 
   for candidate, fws in offline_fw_versions.items():
+    # Exact-EPS research platforms must never be resurrected by Toyota's
+    # platform-code fuzzy matcher after their exact EPS discriminator failed.
+    if candidate in TSS3_EXACT_FW_VERSIONS:
+      continue
     # Keep track of ECUs which pass all checks (platform codes, within sub-version range)
     valid_found_ecus = set()
     valid_expected_ecus = {ecu[1:] for ecu in fws if ecu[0] in PLATFORM_CODE_ECUS}
@@ -610,6 +613,15 @@ FW_QUERY_CONFIG = FwQueryConfig(
   fw_version_regex=br"[\x00-\x03A-Z0-9 ]{16,49}",
   # TODO: look at data to whitelist new ECUs effectively
   requests=[
+    # TSS3 EPS responds to F181 directly in the default application session.
+    # Query it before the legacy/general Toyota session choreography; this is
+    # both less invasive and the exact identity needed for the F33 platform.
+    Request(
+      [StdQueries.UDS_VERSION_REQUEST],
+      [StdQueries.UDS_VERSION_RESPONSE],
+      whitelist_ecus=[Ecu.eps],
+      bus=0,
+    ),
     Request(
       [StdQueries.SHORT_TESTER_PRESENT_REQUEST, TOYOTA_VERSION_REQUEST_KWP],
       [StdQueries.SHORT_TESTER_PRESENT_RESPONSE, TOYOTA_VERSION_RESPONSE_KWP],
@@ -632,7 +644,11 @@ FW_QUERY_CONFIG = FwQueryConfig(
   ],
   non_essential_ecus={
     # FIXME: On some models, abs can sometimes be missing
-    Ecu.abs: [CAR.TOYOTA_RAV4, CAR.TOYOTA_COROLLA, CAR.TOYOTA_HIGHLANDER, CAR.TOYOTA_SIENNA, CAR.LEXUS_IS, CAR.TOYOTA_ALPHARD_TSS2],
+    Ecu.abs: [CAR.TOYOTA_RAV4, CAR.TOYOTA_COROLLA, CAR.TOYOTA_HIGHLANDER, CAR.TOYOTA_SIENNA, CAR.LEXUS_IS, CAR.TOYOTA_ALPHARD_TSS2,
+              CAR.TOYOTA_CAMRY_TSS3],
+    # Exact F33 EPS identity is sufficient for this maintainer platform; the
+    # camera identity is corroboration and can be absent from startup discovery.
+    Ecu.fwdCamera: [CAR.TOYOTA_CAMRY_TSS3],
     # On some models, the engine can show on two different addresses
     Ecu.engine: [CAR.TOYOTA_HIGHLANDER, CAR.TOYOTA_CAMRY, CAR.TOYOTA_COROLLA_TSS2, CAR.TOYOTA_CHR, CAR.TOYOTA_CHR_TSS2, CAR.LEXUS_IS,
                  CAR.LEXUS_IS_TSS2, CAR.LEXUS_RC, CAR.LEXUS_NX, CAR.LEXUS_NX_TSS2, CAR.LEXUS_RX, CAR.LEXUS_RX_TSS2],

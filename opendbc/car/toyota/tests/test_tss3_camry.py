@@ -121,18 +121,22 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
       bytes.fromhex("023839363546333330373030300000000038413331313333303331303000000000")])
     self.assertEqual(fw[(Ecu.fwdCamera, 0x792, None)], [bytes.fromhex("0138363436463333313530303000000000")])
     self.assertEqual(fw[(Ecu.abs, 0x7B0, None)], [bytes.fromhex("01463135323633334b3030303000000000")])
-    self.assertNotIn(CAR.TOYOTA_CAMRY_TSS3, __import__("opendbc.car.toyota.fingerprints", fromlist=["FW_VERSIONS"]).FW_VERSIONS)
+    fw_db = __import__("opendbc.car.toyota.fingerprints", fromlist=["FW_VERSIONS"]).FW_VERSIONS
+    self.assertEqual(fw_db[CAR.TOYOTA_CAMRY_TSS3], fw)
 
   def test_exact_stationary_can_census_contains_f33_network_but_is_not_legacy_fingerprint(self):
     fp = TSS3_CAN_CENSUS[CAR.TOYOTA_CAMRY_TSS3]
     for address, size in {0x00F: 8, 0x025: 32, 0x030: 32, 0x0D7: 32, 0x127: 8, 0x51E: 8}.items():
       self.assertEqual(fp[address], size)
     self.assertNotIn(CAR.TOYOTA_CAMRY_TSS3, FINGERPRINTS)
+    # Identification is firmware-based, not legacy CAN fingerprinting.
 
   def test_relay_correct_toyota_fw_query_already_requests_eps_f181_on_bus0(self):
     uds_f181 = [r for r in FW_QUERY_CONFIG.requests if r.bus == 0 and Ecu.eps in r.whitelist_ecus and
                 StdQueries.UDS_VERSION_REQUEST in r.request]
-    self.assertEqual(len(uds_f181), 1)
+    self.assertGreaterEqual(len(uds_f181), 2)
+    direct = [r for r in uds_f181 if r.request == [StdQueries.UDS_VERSION_REQUEST]]
+    self.assertEqual(len(direct), 1)
     self.assertEqual(StdQueries.UDS_VERSION_REQUEST, b"\x22\xf1\x81")
 
   def test_exact_eps_f181_binds_camry_without_ambiguous_can_fingerprint(self):
@@ -144,12 +148,21 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
     live = build_fw_dict(car_fw)
     self.assertEqual(FW_QUERY_CONFIG.match_fw_to_car_fuzzy(live, "", FW_VERSIONS), {str(CAR.TOYOTA_CAMRY_TSS3)})
     exact_match, matches = match_fw_to_car(car_fw, "", log=False)
-    # The generic framework labels brand-specific matchers "fuzzy"; this target
-    # branch nevertheless requires a byte-exact F181 match.
-    self.assertFalse(exact_match)
+    # Once registered in FW_VERSIONS, the standard exact matcher owns this
+    # platform and the exact EPS F181 is the required discriminator.
+    self.assertTrue(exact_match)
     self.assertEqual(matches, {str(CAR.TOYOTA_CAMRY_TSS3)})
 
-    eps_addr = next(ecu[1:] for ecu in exact if ecu[0] == Ecu.eps)
+    # Startup discovery only needs the exact EPS identity; camera/ABS are
+    # corroborating non-essential ECUs for this maintainer platform.
+    eps_ecu = next(ecu for ecu in exact if ecu[0] == Ecu.eps)
+    eps_only = [structs.CarParams.CarFw(ecu=eps_ecu[0], address=eps_ecu[1], subAddress=0,
+                                        fwVersion=exact[eps_ecu][0], brand="toyota")]
+    eps_exact, eps_matches = match_fw_to_car(eps_only, "", log=False)
+    self.assertTrue(eps_exact)
+    self.assertEqual(eps_matches, {str(CAR.TOYOTA_CAMRY_TSS3)})
+
+    eps_addr = eps_ecu[1:]
     wrong_eps = dict(live)
     wrong_eps[eps_addr] = {b"\x028965F3307001\x00\x00\x00\x008A3113303100\x00\x00\x00\x00"}
     self.assertNotIn(str(CAR.TOYOTA_CAMRY_TSS3), FW_QUERY_CONFIG.match_fw_to_car_fuzzy(wrong_eps, "", FW_VERSIONS))
