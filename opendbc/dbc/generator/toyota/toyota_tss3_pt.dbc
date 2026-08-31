@@ -106,7 +106,7 @@ BO_ 182 TSS3_LATERAL_CONTROL: 32 XXX
  SG_ CMAC_MSB28 : 227|28@0+ (1,0) [0|268435455] "" XXX
 
 BO_ 593 TSS3_CRUISE_DISPLAY: 8 XXX
- SG_ UI_SET_SPEED : 23|8@0+ (1,0) [0|255] "mph" XXX
+ SG_ UI_SET_SPEED : 23|8@0+ (1,0) [0|255] "" XXX
 
 BO_ 257 BRAKE_MODULE: 8 XXX
  SG_ SET_ME_1 : 7|1@0+ (1,0) [0|1] "" XXX
@@ -148,6 +148,13 @@ BO_ 1014 BSM: 8 XXX
  SG_ R_APPROACHING : 10|1@0+ (1,0) [0|1] "" XXX
  SG_ APPROACHING_ENABLED : 15|1@0+ (1,0) [0|1] "" XXX
 
+BO_ 1552 BODY_CONTROL_STATE_2: 8 XXX
+ SG_ UI_SPEED : 23|8@0+ (1,0) [0|255] "km/h" XXX
+ SG_ METER_SLIDER_BRIGHTNESS_PCT : 30|7@0+ (1,0) [12|100] "%" XXX
+ SG_ METER_SLIDER_LOW_BRIGHTNESS : 37|1@0+ (1,0) [0|1] "" XXX
+ SG_ METER_SLIDER_DIMMED : 38|1@0+ (1,0) [0|1] "" XXX
+ SG_ UNITS : 63|3@0+ (1,0) [0|4] "" XXX
+
 BO_ 1568 BODY_CONTROL_STATE: 8 XXX
  SG_ METER_DIMMED : 38|1@0+ (1,0) [0|1] "" XXX
  SG_ PARKING_BRAKE : 60|1@0+ (1,0) [0|1] "" XXX
@@ -188,6 +195,9 @@ CM_ SG_ 138 LATERAL_REQUEST_LEVEL "B24 steering assist gain, TSS3 recorder 5282 
 CM_ SG_ 138 FRESHNESS_MESSAGE_LSB2 "SecOC FV4 B28[7:6] message-counter low2; advances +1 on every same-reset B26+1 pair (CORR-135 structural match against preceding authenticated 0x00F).";
 CM_ SG_ 138 FRESHNESS_RESET_LSB2 "SecOC FV4 B28[5:4] reset-counter low2; agrees with the preceding authenticated 0x00F on 19,868/20,615 drive-A and 23,093/23,996 drive-B eligible frames.";
 CM_ SG_ 138 CMAC_MSB28 "B28[3:0]..B31[7:4]: effectively frame-unique in both retained drives, matching the Toyota ordinary-P5 transmitted MAC28. Exact sender key/profile remains unrecovered.";
+CM_ BO_ 593 "TSS3 Camry cluster cruise-set display carrier. B2 follows the vehicle UI set speed in the currently selected display units; retained maintainer captures prove imperial values. Interpret units through legacy BODY_CONTROL_STATE_2.UNITS, matching upstream Toyota CarState.";
+CM_ SG_ 593 UI_SET_SPEED "Set speed shown in the vehicle UI, in the vehicle-selected unit. Retained maintainer Camry: 21->22->23->24->25 across four RES+ presses while internal 0x08A B10 follows 32->34->35->37->39 km/h.";
+CM_ SG_ 1552 UNITS "Legacy Toyota vehicle-unit selector retained on TSS3. Upstream Toyota treats values 1/2 as metric and other values as imperial; maintainer Camry is observed at 0 in imperial configuration.";
 CM_ BO_ 849 "F33/H/F retained EPS status PDU. Only B2[7:5] status code and B2[4] companion flag are statically closed; do not map to temporary/permanent fault without live transitions.";
 CM_ BO_ 916 "F33/H/F retained EPS 17-state fault/status projection. The four transmitted table columns are lossy; state 0 is clear/normal candidate only, not a Ready or openpilot fault policy.";
 CM_ BO_ 1187 "Exact F33 packers 0x4C000/0x4C14E/0x4C7AA close this retained alternate steering telemetry PDU. Current Camry normal-harness captures do not observe its route, so availability/policy stays live-bound.";

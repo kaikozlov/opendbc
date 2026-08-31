@@ -138,9 +138,11 @@ class CarState(CarStateBase):
       ret.cruiseState.available = ret.cruiseState.enabled
       set_speed_kph = float(lateral.vl["TSS3_LATERAL_REQUEST"]["SET_SPEED"])
       ret.cruiseState.speed = set_speed_kph * CV.KPH_TO_MS if set_speed_kph > 0 else 0.0
-      ui_set_speed_mph = float(lateral.vl["TSS3_CRUISE_DISPLAY"]["UI_SET_SPEED"])
-      if ret.cruiseState.speed != 0 and ui_set_speed_mph > 0:
-        ret.cruiseState.speedCluster = ui_set_speed_mph * CV.MPH_TO_MS
+      cluster_set_speed = float(lateral.vl["TSS3_CRUISE_DISPLAY"]["UI_SET_SPEED"])
+      is_metric = cp.vl["BODY_CONTROL_STATE_2"]["UNITS"] in (1, 2)
+      if ret.cruiseState.speed != 0 and cluster_set_speed > 0:
+        conversion_factor = CV.KPH_TO_MS if is_metric else CV.MPH_TO_MS
+        ret.cruiseState.speedCluster = cluster_set_speed * conversion_factor
     else:
       ret.cruiseState.available = False
       ret.cruiseState.enabled = False
@@ -319,7 +321,10 @@ class CarState(CarStateBase):
       if CP.enableBsm:
         pt_messages.append(("BSM", float('nan')))
       if CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:
-        pt_messages.append(("TSS3_CRUISE_SWITCH", 33))
+        pt_messages += [
+          ("TSS3_CRUISE_SWITCH", 33),
+          ("BODY_CONTROL_STATE_2", float('nan')),
+        ]
       else:
         pt_messages.append(("TSS3_LATERAL_REQUEST", float('nan')))
 

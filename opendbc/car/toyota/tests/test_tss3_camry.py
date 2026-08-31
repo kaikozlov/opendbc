@@ -25,6 +25,7 @@ CAMRY_COMMON = {
   0x101: bytes.fromhex("800000010000008b"),
   0x116: bytes.fromhex("000000007b4b235a"),
   0x251: bytes.fromhex("c01015908030a080"),
+  0x610: bytes.fromhex("00001d4ed0fffc00"),
   0x51E: bytes.fromhex("80006e0000000000"),
   0x614: bytes.fromhex("00004a3000003303"),
   0x620: bytes.fromhex("000000008000001a"),
@@ -100,6 +101,13 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
     self.assertFalse(cs.carNotReady)
     self.assertAlmostEqual(cs.cruiseState.speed, CAMRY_COMMON[0x08A][10] * CV.KPH_TO_MS, places=5)
     self.assertAlmostEqual(cs.cruiseState.speedCluster, CAMRY_COMMON[0x251][2] * CV.MPH_TO_MS, places=5)
+
+    packer = CANPacker(DBC[CAR.TOYOTA_CAMRY_TSS3][Bus.pt])
+    _, metric_units, _ = packer.make_can_msg("BODY_CONTROL_STATE_2", 0, {"UNITS": 1})
+    _, metric_display, _ = packer.make_can_msg("TSS3_CRUISE_DISPLAY", 0, {"UI_SET_SPEED": 34})
+    cs = update_with_frame_set(ci, CAMRY_COMMON | {0x610: metric_units, 0x251: metric_display,
+                                                   0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]})
+    self.assertAlmostEqual(cs.cruiseState.speedCluster, 34 * CV.KPH_TO_MS, places=5)
 
     cruise_off = bytearray(CAMRY_COMMON[0x08A])
     cruise_off[3] &= ~0x08
