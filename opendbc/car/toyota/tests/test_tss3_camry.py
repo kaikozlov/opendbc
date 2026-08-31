@@ -68,7 +68,9 @@ def fingerprint_on(bus: int) -> dict[int, dict[int, int]]:
 
 
 def update_with_frame_set(ci: CarInterface, frames: dict[int, bytes], repeats: int = 20, bus: int = 1):
-  packet = [CanData(address, dat, bus) for address, dat in frames.items()]
+  # Exact Camry relay-open topology: 0x08A originates on camera-side bus 2;
+  # vehicle/EPS state remains on the PT side selected by the test fingerprint.
+  packet = [CanData(address, dat, 2 if address == 0x08A else bus) for address, dat in frames.items()]
   ret = None
   for i in range(repeats):
     ret = ci.update([(1_000_000_000 + i * 10_000_000, packet)])
@@ -494,7 +496,7 @@ class TestToyotaTSS3PandaShadowSafety(unittest.TestCase):
     self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x00F, 0, CAMRY_COMMON[0x00F])))
     stock_lateral_off = bytearray(CAMRY_COMMON[0x08A])
     stock_lateral_off[21] = 0
-    self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x08A, 0, bytes(stock_lateral_off))))
+    self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x08A, 2, bytes(stock_lateral_off))))
     self.assertTrue(s.get_controls_allowed())
 
     s.set_controls_allowed(False)
@@ -511,9 +513,9 @@ class TestToyotaTSS3PandaShadowSafety(unittest.TestCase):
     cruise_off = bytearray(cruise_on)
     cruise_off[3] &= ~(1 << 3)
 
-    self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x08A, 0, bytes(cruise_on))))
+    self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x08A, 2, bytes(cruise_on))))
     self.assertTrue(s.get_controls_allowed())
-    self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x08A, 0, bytes(cruise_off))))
+    self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x08A, 2, bytes(cruise_off))))
     self.assertFalse(s.get_controls_allowed())
 
   def test_debug_panda_path_is_b6_only_and_enforces_f33_limits(self):
@@ -539,7 +541,7 @@ class TestToyotaTSS3PandaShadowSafety(unittest.TestCase):
     self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x00F, 0, CAMRY_COMMON[0x00F])))
     stock_lateral_off = bytearray(CAMRY_COMMON[0x08A])
     stock_lateral_off[21] = 0
-    self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x08A, 0, bytes(stock_lateral_off))))
+    self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x08A, 2, bytes(stock_lateral_off))))
     self.assertTrue(s.safety_tx_hook(b6(100, 0)))
     # An older epoch must not reset the Panda sequence baseline.
     stale_sync = bytearray(CAMRY_COMMON[0x00F])
@@ -553,7 +555,7 @@ class TestToyotaTSS3PandaShadowSafety(unittest.TestCase):
     self.assertFalse(s.safety_tx_hook(b6(178, 3, target_id=4)))
     stock_lta_on = bytearray(stock_lateral_off)
     stock_lta_on[21] = 11
-    self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x08A, 0, bytes(stock_lta_on))))
+    self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x08A, 2, bytes(stock_lta_on))))
     s.set_timer(30_000)
     self.assertFalse(s.safety_tx_hook(b6(178, 2)))
     self.assertFalse(s.safety_tx_hook(libsafety_py.make_CANPacket(0x191, 0, bytes(8))))
@@ -622,7 +624,7 @@ class TestToyotaTSS3BridgeSender(unittest.TestCase):
     self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x00F, 0, CAMRY_COMMON[0x00F])))
     stock_lateral_off = bytearray(CAMRY_COMMON[0x08A])
     stock_lateral_off[21] = 0
-    self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x08A, 0, bytes(stock_lateral_off))))
+    self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x08A, 2, bytes(stock_lateral_off))))
 
     CI = self._bridge_platform()
 

@@ -76,7 +76,7 @@ class CarState(CarStateBase):
   def _tss3_message_seen(cp: CANParser, message: str) -> bool:
     return any(int(ts) != 0 for ts in cp.ts_nanos[message].values())
 
-  def _update_tss3(self, cp: CANParser) -> structs.CarState:
+  def _update_tss3(self, cp: CANParser, cp_cam: CANParser) -> structs.CarState:
     # TSS3 remains read-only / noOutput. Promote only fields with
     # target-native firmware + dynamic evidence. Camry cruise comes from
     # same-car 0x08A latch/set-speed; Corolla 0x176 cruise stays unpromoted.
@@ -117,8 +117,11 @@ class CarState(CarStateBase):
     if self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:
       # Same-car 0x08A: B3[3] is the cruise operating latch and B10 is set
       # speed in km/h. Passive observation only; dashcamOnly/noOutput stays.
-      cruise_latch = bool(cp.vl["TSS3_LATERAL_REQUEST"]["CRUISE_OPERATING_LATCH"])
-      set_speed_kph = float(cp.vl["TSS3_LATERAL_REQUEST"]["SET_SPEED"])
+      # 0x08A originates on the camera side of the Toyota-B intercept relay.
+      # With the relay open, its forwarded bus-0 copy is a Panda TX echo, not a
+      # bus-0 RX event, so consume the native camera-side parser.
+      cruise_latch = bool(cp_cam.vl["TSS3_LATERAL_REQUEST"]["CRUISE_OPERATING_LATCH"])
+      set_speed_kph = float(cp_cam.vl["TSS3_LATERAL_REQUEST"]["SET_SPEED"])
       ret.cruiseState.enabled = cruise_latch
       ret.cruiseState.available = cruise_latch
       ret.cruiseState.speed = set_speed_kph * CV.KPH_TO_MS if cruise_latch and set_speed_kph > 0 else 0.0
@@ -146,13 +149,14 @@ class CarState(CarStateBase):
     # exact-F33 normal ingress or generated-COM transmit. Expose its recovered
     # fields read-only. Its producer/SecOC ownership is unresolved, and stock
     # LTA does not establish or require an 0x08A-to-B6 transform.
-    self.tss3_lateral_request_seen = self._tss3_message_seen(cp, "TSS3_LATERAL_REQUEST")
-    self.tss3_target_lateral_id = int(cp.vl["TSS3_LATERAL_REQUEST"]["TARGET_LATERAL_ID"])
-    self.tss3_lateral_request_angle = cp.vl["TSS3_LATERAL_REQUEST"]["LATERAL_REQUEST_ANGLE"]
-    self.tss3_lateral_request_sequence = int(cp.vl["TSS3_LATERAL_REQUEST"]["SEQUENCE"])
+    lateral_cp = cp_cam if self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3 else cp
+    self.tss3_lateral_request_seen = self._tss3_message_seen(lateral_cp, "TSS3_LATERAL_REQUEST")
+    self.tss3_target_lateral_id = int(lateral_cp.vl["TSS3_LATERAL_REQUEST"]["TARGET_LATERAL_ID"])
+    self.tss3_lateral_request_angle = lateral_cp.vl["TSS3_LATERAL_REQUEST"]["LATERAL_REQUEST_ANGLE"]
+    self.tss3_lateral_request_sequence = int(lateral_cp.vl["TSS3_LATERAL_REQUEST"]["SEQUENCE"])
     # TSS3 recorder 5282 / LTA 5631: steering assist gain LSB 0.01. Live B24 is
     # 100 in every ID11 frame and 50 in every ID18 frame.
-    self.tss3_steering_assist_gain = float(cp.vl["TSS3_LATERAL_REQUEST"]["LATERAL_REQUEST_LEVEL"]) / 100.0
+    self.tss3_steering_assist_gain = float(lateral_cp.vl["TSS3_LATERAL_REQUEST"]["LATERAL_REQUEST_LEVEL"]) / 100.0
 
     # 0x4A3/0x351/0x394 are retained by the exact F33 Tx table. Their static
     # wire projections are useful policy inputs, but the current normal-harness
@@ -188,10 +192,10 @@ class CarState(CarStateBase):
 
   def update(self, can_parsers) -> structs.CarState:
     cp = can_parsers[Bus.pt]
-    if self.CP.flags & ToyotaFlags.TSS3:
-      return self._update_tss3(cp)
-
     cp_cam = can_parsers[Bus.cam]
+    if self.CP.flags & ToyotaFlags.TSS3:
+      return self._update_tss3(cp, cp_cam)
+
 
     ret = structs.CarState()
     cp_acc = cp_cam if (self.CP.flags & ToyotaFlags.TSS2) and not (self.CP.flags & ToyotaFlags.RADAR_ACC) else cp
@@ -367,7 +371,11 @@ class CarState(CarStateBase):
         ("BODY_CONTROL_STATE", float('nan')),
       ]
       pt_bus = 1 if CP.flags & ToyotaFlags.TSS3_PT_BUS1 else 0
-      return {Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, pt_bus)}
+      cam_messages = [("TSS3_LATERAL_REQUEST", float('nan'))]
+      return {
+        Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, pt_bus),
+        Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], cam_messages, 2),
+      }
 
     pt_messages = [
       ("BLINKERS_STATE", float('nan')),

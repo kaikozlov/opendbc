@@ -113,12 +113,12 @@ static void toyota_tss3_dev_rx(const CANPacket_t *msg) {
     toyota_tss3_steering_rate_seen = true;
   }
 
-  if ((msg->bus == 0U) && (msg->addr == 0x8AU)) {
+  if ((msg->bus == 2U) && (msg->addr == 0x8AU)) {
     // TSS3_LATERAL_REQUEST.CRUISE_OPERATING_LATCH is B3[3]: the same-car
     // cruise engagement signal CarState decodes from 0x08A. Keep the stock
     // Target Lateral ID separately so development B6 is never allowed while
-    // Toyota is simultaneously requesting LTA/SDG/etc. The native bus stays
-    // electrically intact; exclusivity is enforced at the B6 transmitter.
+    // Toyota is simultaneously requesting LTA/SDG/etc. Consume the native
+    // camera-side frame before relay forwarding; exclusivity is enforced at B6 TX.
     pcm_cruise_check(GET_BIT(msg, 27U));
     toyota_tss3_stock_target_lateral_id = msg->data[21] & 0x3FU;
   }
@@ -549,7 +549,7 @@ static safety_config toyota_init(uint16_t param) {
     static RxCheck toyota_tss3_dev_rx_checks[] = {
       {.msg = {{0x025, 0, 32, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
       {.msg = {{0x00F, 0, 8, 10U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
-      {.msg = {{0x08A, 0, 32, 83U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
+      {.msg = {{0x08A, 2, 32, 83U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
     };
     SET_TX_MSGS(TOYOTA_TSS3_DEV_TX_MSGS, ret);
     SET_RX_CHECKS(toyota_tss3_dev_rx_checks, ret);
