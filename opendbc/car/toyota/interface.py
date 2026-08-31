@@ -21,40 +21,39 @@ class CarInterface(CarInterfaceBase):
   def get_pid_accel_limits(CP, current_speed, cruise_speed):
     return CarControllerParams(CP).ACCEL_MIN, CarControllerParams(CP).ACCEL_MAX
 
-
   @staticmethod
   def _get_params(ret: structs.CarParams, candidate, fingerprint, car_fw, alpha_long, is_release, docs) -> structs.CarParams:
     ret.brand = "toyota"
 
     if ret.flags & ToyotaFlags.TSS3:
-      # TSS3 remains observation-only. Exact F33 accepts target angle only on
-      # protected 0x0B6; captured 0x08A is not EPS ingress, and no authenticated
-      # B6 sender or validated target-side bypass is configured.
-      ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.noOutput)]
-      ret.dashcamOnly = True
-      ret.secOcRequired = True
       ret.steerControlType = SteerControlType.angle
       ret.radarUnavailable = True
       ret.openpilotLongitudinalControl = False
       ret.autoResumeSng = False
       ret.minEnableSpeed = -1.
-      # Exact F33 ID11 has no recovered low-speed steering cutoff. Advertise
-      # standstill steering through the normal openpilot CarParams contract so
-      # controlsd, rather than Camry-specific controller policy, owns latActive.
-      if candidate == CAR.TOYOTA_CAMRY_TSS3:
-        ret.steerAtStandstill = True
       ret.centerToFront = ret.wheelbase * 0.44
 
-      # The tracked Span driving capture has the target state network on the
-      # unmodified Toyota-B CAN1 path. A relay-correct repin moves it to bus 0.
-      # Select bus 1 only when the startup fingerprint proves that topology;
-      # otherwise default to the production relay-correct bus-0 placement.
-      bus0 = fingerprint.get(0, {})
-      bus1 = fingerprint.get(1, {})
-      bus0_tss3 = bus0.get(0x025) == 32 and bus0.get(0x0AA) == 8
-      bus1_tss3 = bus1.get(0x025) == 32 and bus1.get(0x0AA) == 8
-      if bus1_tss3 and not bus0_tss3:
-        ret.flags |= ToyotaFlags.TSS3_PT_BUS1.value
+      if candidate == CAR.TOYOTA_CAMRY_TSS3:
+        # Exact F33 uses the normal Toyota angle-control architecture. The local
+        # EPS Gate-2 patch makes B6 authentication keyless for this platform, so
+        # no SecOC-key availability state is involved in openpilot engagement.
+        ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.toyota)]
+        ret.safetyConfigs[0].safetyParam = EPS_SCALE[candidate] | ToyotaSafetyFlags.STOCK_LONGITUDINAL.value | ToyotaSafetyFlags.TSS3.value
+        ret.dashcamOnly = False
+        ret.secOcRequired = False
+        # Exact F33 exposes no recovered ID11 low-speed cutoff. Advertise
+        # full-range lateral capability and let controlsd own latActive.
+        ret.minSteerSpeed = 0.
+        ret.steerAtStandstill = True
+        ret.enableBsm = 0x3F6 in fingerprint[0]
+        ret.steerActuatorDelay = 0.18
+        ret.steerLimitTimer = 0.8
+      else:
+        # Other research-only TSS3 platforms stay passive until their actuation
+        # interface is implemented through the normal platform/safety path.
+        ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.noOutput)]
+        ret.dashcamOnly = True
+        ret.secOcRequired = True
 
       return ret
 

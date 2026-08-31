@@ -8,7 +8,7 @@ legend = ["LAT_ACCEL_FACTOR", "MAX_LAT_ACCEL_MEASURED", "FRICTION"]
 "DODGE_DURANGO" = "CHRYSLER_PACIFICA_2020"
 
 "TOYOTA_ALPHARD_TSS2" = "TOYOTA_SIENNA"
-"TOYOTA_CAMRY_TSS3" = "TOYOTA_CAMRY_TSS2"  # metadata only; exact F33 platform remains passive angle-control
+"TOYOTA_CAMRY_TSS3" = "TOYOTA_CAMRY_TSS2"  # torque metadata is unused for F33 angle control
 "TOYOTA_COROLLA_TSS3" = "TOYOTA_COROLLA_TSS2"  # metadata only; TSS3 is passive angle-control
 "TOYOTA_PRIUS_V" = "TOYOTA_PRIUS"
 "TOYOTA_SIENNA_4TH_GEN" = "TOYOTA_RAV4_PRIME"

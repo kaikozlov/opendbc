@@ -62,89 +62,10 @@ static bool toyota_stock_longitudinal = false;
 static bool toyota_lta = false;
 static int toyota_dbc_eps_torque_factor = 100;   // conversion factor for STEER_TORQUE_EPS in %: see dbc file
 
-#ifdef ALLOW_DEBUG
-static bool toyota_tss3_dev_lateral = false;
-static bool toyota_tss3_steering_rate_seen = false;
-static int toyota_tss3_steering_rate_raw = 0;
-static bool toyota_tss3_sync_seen = false;
-static uint64_t toyota_tss3_sync_epoch = 0U;
-static uint8_t toyota_tss3_stock_target_lateral_id = 0U;
-static bool toyota_tss3_has_previous = false;
-static int toyota_tss3_previous_angle_raw = 0;
-static uint8_t toyota_tss3_previous_sequence = 0U;
-static uint32_t toyota_tss3_previous_tx_ts = 0U;
+static bool toyota_tss3 = false;
 
-// Exact 8965F3307000 lateral contract. Ordinary Toyota modes still cannot send
-// 0x0B6; only the ALLOW_DEBUG TSS3 development mode below installs a dedicated
-// B6-only whitelist and calls this helper after its live gates are attested.
 #define TOYOTA_TSS3_TARGET_LATERAL_ID_LTA_LCA 11U
-#define TOYOTA_TSS3_TARGET_ANGLE_MAX_RAW 1745
-#define TOYOTA_TSS3_TARGET_DELTA_PER_GAP_RAW 78
-#define TOYOTA_TSS3_STEER_RATE_MAX_RAW 100
-#define TOYOTA_TSS3_RX_TIMEOUT_US 35000U
 
-static bool toyota_tss3_candidate_limits_check(uint8_t target_lateral_id, int target_angle_raw, uint8_t sequence,
-                                                int previous_angle_raw, uint8_t previous_sequence, int steering_rate_raw,
-                                                uint32_t elapsed_us, bool has_previous) {
-  bool violation = false;
-  const bool active = target_lateral_id != 0U;
-
-  violation |= active && (target_lateral_id != TOYOTA_TSS3_TARGET_LATERAL_ID_LTA_LCA);
-  violation |= !active && (target_angle_raw != 0);
-  violation |= SAFETY_ABS(target_angle_raw) > TOYOTA_TSS3_TARGET_ANGLE_MAX_RAW;
-  violation |= active && (SAFETY_ABS(steering_rate_raw) > TOYOTA_TSS3_STEER_RATE_MAX_RAW);
-
-  if (has_previous) {
-    const uint8_t sequence_gap = (sequence - previous_sequence) & 0x3FU;
-    // Active replacement commands must advance exactly +1. Inactive ID0/angle0
-    // is always allowed to re-anchor sequence state after a blocked active frame;
-    // it cannot command steering and must never be prevented from releasing.
-    violation |= active && (sequence_gap != 1U);
-    // ID0/angle0 is an immediate authority release; only active mode-2 targets
-    // are subject to the previous-target slew envelope.
-    violation |= active && (SAFETY_ABS(target_angle_raw - previous_angle_raw) > TOYOTA_TSS3_TARGET_DELTA_PER_GAP_RAW);
-    violation |= active && (elapsed_us > TOYOTA_TSS3_RX_TIMEOUT_US);
-  }
-
-  return !violation;
-}
-
-static void toyota_tss3_dev_rx(const CANPacket_t *msg) {
-  if ((msg->bus == 0U) && (msg->addr == 0x25U)) {
-    int steering_rate = ((msg->data[4] & 0xFU) << 8U) | msg->data[5];
-    toyota_tss3_steering_rate_raw = to_signed(steering_rate, 12);
-    toyota_tss3_steering_rate_seen = true;
-  }
-
-  if ((msg->bus == 2U) && (msg->addr == 0x8AU)) {
-    // TSS3_LATERAL_REQUEST.CRUISE_OPERATING_LATCH is B3[3]: the same-car
-    // cruise engagement signal CarState decodes from 0x08A. Keep the stock
-    // Target Lateral ID separately so development B6 is never allowed while
-    // Toyota is simultaneously requesting LTA/SDG/etc. Consume the native
-    // camera-side frame before relay forwarding; exclusivity is enforced at B6 TX.
-    pcm_cruise_check(GET_BIT(msg, 27U));
-    toyota_tss3_stock_target_lateral_id = msg->data[21] & 0x3FU;
-  }
-
-  if ((msg->bus == 0U) && (msg->addr == 0x0FU)) {
-    const uint32_t trip_counter = (msg->data[0] << 8U) | msg->data[1];
-    const uint32_t reset_counter = (msg->data[2] << 12U) | (msg->data[3] << 4U) | (msg->data[4] >> 4U);
-    const uint64_t epoch = (((uint64_t)trip_counter) << 20U) | reset_counter;
-    if (!toyota_tss3_sync_seen) {
-      toyota_tss3_sync_epoch = epoch;
-      toyota_tss3_sync_seen = true;
-      toyota_tss3_has_previous = false;
-    } else {
-      const uint64_t delta = (epoch - toyota_tss3_sync_epoch) & 0xFFFFFFFFFULL;
-      if ((delta > 0U) && (delta < 0x800000000ULL)) {
-        toyota_tss3_sync_epoch = epoch;
-        toyota_tss3_has_previous = false;
-      }
-    }
-  }
-}
-
-#endif  // ALLOW_DEBUG
 
 static uint32_t toyota_compute_checksum(const CANPacket_t *msg) {
   int len = GET_LEN(msg);
@@ -179,12 +100,40 @@ static bool toyota_get_quality_flag_valid(const CANPacket_t *msg) {
 }
 
 static void toyota_rx_hook(const CANPacket_t *msg) {
-#ifdef ALLOW_DEBUG
-  if (toyota_tss3_dev_lateral) {
-    toyota_tss3_dev_rx(msg);
+  if (toyota_tss3) {
+    if (msg->bus == 0U) {
+      if (msg->addr == 0x25U) {
+        int angle_coarse = ((msg->data[0] & 0xFU) << 8U) | msg->data[1];
+        angle_coarse = to_signed(angle_coarse, 12);
+        int angle_fraction = to_signed((msg->data[4] >> 4U) & 0xFU, 4);
+        const int angle_tenths = (angle_coarse * 15) + angle_fraction;
+        const int angle_meas_new = ROUND(((float)angle_tenths * 1787.0F) / 1024.0F);
+        update_sample(&angle_meas, angle_meas_new);
+
+      }
+
+      if (msg->addr == 0x116U) {
+        gas_pressed = msg->data[1] != 0U;
+      }
+      if (msg->addr == 0x101U) {
+        brake_pressed = GET_BIT(msg, 3U);
+      }
+      if (msg->addr == 0xaaU) {
+        int speed = 0;
+        for (uint8_t i = 0U; i < 8U; i += 2U) {
+          const int wheel_speed = ((msg->data[i] & 0x7FU) << 8U) | msg->data[i + 1U];
+          speed += wheel_speed - 6767;
+        }
+        vehicle_moving = speed != 0;
+        UPDATE_VEHICLE_SPEED(speed / 4.0 * 0.01 * KPH_TO_MS);
+      }
+    }
+
+    if ((msg->bus == 2U) && (msg->addr == 0x8AU)) {
+      pcm_cruise_check(GET_BIT(msg, 27U));
+    }
     return;
   }
-#endif
 
   if (msg->bus == 0U) {
 
@@ -305,64 +254,39 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
 
   bool tx = true;
 
-#ifdef ALLOW_DEBUG
-  if (toyota_tss3_dev_lateral) {
-    if ((msg->bus != 0U) || (msg->addr != 0x0B6U) || (GET_LEN(msg) != 32U) ||
-        !toyota_tss3_steering_rate_seen || !toyota_tss3_sync_seen) {
-      return false;
-    }
+  if (toyota_tss3 && (msg->addr == 0x0B6U)) {
+    static const AngleSteeringLimits TOYOTA_TSS3_ANGLE_STEERING_LIMITS = {
+      .max_angle = 1745,
+      .angle_deg_to_can = 17.451171875F,
+      .angle_rate_up_lookup = {
+        {5., 25., 25.},
+        {0.3, 0.15, 0.15}
+      },
+      .angle_rate_down_lookup = {
+        {5., 25., 25.},
+        {0.36, 0.26, 0.26}
+      },
+    };
 
     const uint8_t target_lateral_id = msg->data[3] & 0x3FU;
-    int target_angle_raw = (msg->data[4] << 8U) | msg->data[5];
-    target_angle_raw = to_signed(target_angle_raw, 16);
-    const uint8_t sequence = msg->data[7] & 0x3FU;
-    const bool active = target_lateral_id != 0U;
+    int target_angle = (msg->data[4] << 8U) | msg->data[5];
+    target_angle = to_signed(target_angle, 16);
+    const bool steer_control_enabled = target_lateral_id == TOYOTA_TSS3_TARGET_LATERAL_ID_LTA_LCA;
 
-    // Development sender shape is deliberately narrower than the receiver.
-    // Exact F33 proves B6[2]=1 suppresses a target-derived controller
-    // contribution, so active ID11 must leave it clear. B8/B9 are /100
-    // contributions and use full-scale 100/100 while active. Inactive ID0 keeps
-    // the conservative suppression bit set with 0/0 gains. All other unresolved
-    // application bytes remain zero; Gate-2 development keeps zero MAC28.
-    bool shape_violation = (msg->data[0] != 0U) || (msg->data[1] != 0U) || (msg->data[2] != 0U) ||
-                           ((msg->data[3] & 0xC0U) != 0U) || (msg->data[6] != (active ? 0x00U : 0x04U)) ||
-                           ((msg->data[7] & 0xC0U) != 0U) ||
-                           (msg->data[8] != (active ? 100U : 0U)) ||
-                           (msg->data[9] != (active ? 100U : 0U)) || (msg->data[10] != 0U) ||
-                           ((msg->data[28] & 0x0FU) != 0U) || (msg->data[29] != 0U) ||
-                           (msg->data[30] != 0U) || (msg->data[31] != 0U);
-    for (uint8_t i = 11U; i < 28U; i++) {
-      shape_violation |= msg->data[i] != 0U;
+    if ((target_lateral_id != 0U) && !steer_control_enabled) {
+      tx = false;
     }
-    if (shape_violation) {
-      return false;
+    if ((msg->data[8] > 100U) || (msg->data[9] > 100U)) {
+      tx = false;
     }
-
-    // Active steering requests require cruise engagement and exclusive lateral
-    // authority. With the normal relay-open topology, native 0x08A is observed
-    // on camera-side bus 2 before selective forwarding. Exact F33 ID11 does not
-    // automatically suppress its B6-independent internal assist path. Require
-    // stock Target Lateral ID 0 so comma never drives concurrently with Toyota
-    // LTA/SDG/etc. Inactive release frames remain allowed unconditionally.
-    if (active && (!controls_allowed || (toyota_tss3_stock_target_lateral_id != 0U))) {
-      return false;
+    if (!steer_control_enabled && ((msg->data[8] != 0U) || (msg->data[9] != 0U) || !GET_BIT(msg, 50U))) {
+      tx = false;
     }
-
-    const uint32_t now = microsecond_timer_get();
-    const uint32_t elapsed = toyota_tss3_has_previous ? safety_get_ts_elapsed(now, toyota_tss3_previous_tx_ts) : 0U;
-
-    tx = toyota_tss3_candidate_limits_check(target_lateral_id, target_angle_raw, sequence,
-                                             toyota_tss3_previous_angle_raw, toyota_tss3_previous_sequence,
-                                             toyota_tss3_steering_rate_raw, elapsed, toyota_tss3_has_previous);
-    if (tx) {
-      toyota_tss3_previous_angle_raw = target_angle_raw;
-      toyota_tss3_previous_sequence = sequence;
-      toyota_tss3_previous_tx_ts = now;
-      toyota_tss3_has_previous = true;
+    if (steer_angle_cmd_checks(target_angle, steer_control_enabled, TOYOTA_TSS3_ANGLE_STEERING_LIMITS)) {
+      tx = false;
     }
     return tx;
   }
-#endif
 
   // Check if msg is sent on BUS 0
   if (msg->bus == 0U) {
@@ -529,15 +453,12 @@ static safety_config toyota_init(uint16_t param) {
 
 #ifdef ALLOW_DEBUG
   const uint32_t TOYOTA_PARAM_SECOC = 8UL << TOYOTA_PARAM_OFFSET;
-  const uint32_t TOYOTA_PARAM_TSS3_DEV_LATERAL = 16UL << TOYOTA_PARAM_OFFSET;
   toyota_secoc = GET_FLAG(param, TOYOTA_PARAM_SECOC);
-  toyota_tss3_dev_lateral = GET_FLAG(param, TOYOTA_PARAM_TSS3_DEV_LATERAL);
-  toyota_tss3_steering_rate_seen = false;
-  toyota_tss3_sync_seen = false;
-  toyota_tss3_stock_target_lateral_id = 0U;
-  toyota_tss3_has_previous = false;
-  toyota_tss3_previous_tx_ts = 0U;
+#else
+  toyota_secoc = false;
 #endif
+  const uint32_t TOYOTA_PARAM_TSS3 = 16UL << TOYOTA_PARAM_OFFSET;
+  toyota_tss3 = GET_FLAG(param, TOYOTA_PARAM_TSS3);
 
   toyota_alt_brake = GET_FLAG(param, TOYOTA_PARAM_ALT_BRAKE);
   toyota_stock_longitudinal = GET_FLAG(param, TOYOTA_PARAM_STOCK_LONGITUDINAL);
@@ -545,24 +466,21 @@ static safety_config toyota_init(uint16_t param) {
   toyota_dbc_eps_torque_factor = param & TOYOTA_EPS_FACTOR;
 
   safety_config ret;
-#ifdef ALLOW_DEBUG
-  if (toyota_tss3_dev_lateral) {
-    static const CanMsg TOYOTA_TSS3_DEV_TX_MSGS[] = {
-      {0x0B6, 0, 32, .check_relay = false},
+  if (toyota_tss3) {
+    static const CanMsg toyota_tss3_tx_msgs[] = {
+      {0x0B6, 0, 32, .check_relay = true},
     };
-    static RxCheck toyota_tss3_dev_rx_checks[] = {
+    static RxCheck toyota_tss3_rx_checks[] = {
       {.msg = {{0x025, 0, 32, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
-      {.msg = {{0x00F, 0, 8, 10U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
+      {.msg = {{0x0AA, 0, 8, 100U, .ignore_checksum = true, .ignore_counter = true}, {0}, {0}}},
+      {.msg = {{0x116, 0, 8, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
+      {.msg = {{0x101, 0, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
       {.msg = {{0x08A, 2, 32, 83U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
     };
-    SET_TX_MSGS(TOYOTA_TSS3_DEV_TX_MSGS, ret);
-    SET_RX_CHECKS(toyota_tss3_dev_rx_checks, ret);
-    // Use the normal comma harness topology: relay open and software forwarding.
-    // Panda preserves the exact received CAN/CAN-FD/BRS frame format when forwarding,
-    // which is required on this mixed classic-CAN/CAN-FD Toyota network.
+    SET_TX_MSGS(toyota_tss3_tx_msgs, ret);
+    SET_RX_CHECKS(toyota_tss3_rx_checks, ret);
     return ret;
   }
-#endif
 
   if (toyota_secoc) {
     if (toyota_stock_longitudinal) {

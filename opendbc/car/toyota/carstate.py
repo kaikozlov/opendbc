@@ -5,7 +5,6 @@ from opendbc.car import Bus, DT_CTRL, create_button_events, structs
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.common.filter_simple import FirstOrderFilter
 from opendbc.car.interfaces import CarStateBase
-from opendbc.car.toyota.tss3 import decode_eps_394_state_candidates
 from opendbc.car.toyota.values import ToyotaFlags, CAR, DBC, STEER_THRESHOLD, EPS_SCALE
 
 ButtonType = structs.CarState.ButtonEvent.Type
@@ -44,6 +43,7 @@ class CarState(CarStateBase):
 
     self.lkas_button = 0
     self.distance_button = 0
+    self.tss3_cruise_button = 0
 
     self.pcm_follow_distance = 0
 
@@ -51,35 +51,8 @@ class CarState(CarStateBase):
     self.lkas_hud = {}
     self.gvc = 0.0
     self.secoc_synchronization = None
-    # Read-only TSS3 policy inputs. These remain outside the public CarState
-    # fault/engagement contract until their live transitions are validated.
-    self.tss3_ready_status = False
-    self.tss3_steering_fault_inhibit_status = False
-    self.tss3_driver_torque_invalid = False
-    self.tss3_alt_telemetry_seen = False
-    self.tss3_motor_current_alt_raw = 0
-    self.tss3_alt_steering_torque = 0.0
-    self.tss3_status_351_seen = False
-    self.tss3_status_351_code = 0
-    self.tss3_status_351_flag = False
-    self.tss3_fault_394_seen = False
-    self.tss3_fault_394_projection = (0, 0, 0, 0)
-    self.tss3_fault_394_state_candidates: tuple[int, ...] = ()
-    self.tss3_fault_394_state: int | None = None
-    self.tss3_lateral_request_seen = False
-    self.tss3_target_lateral_id = 0
-    self.tss3_lateral_request_angle = 0.0
-    self.tss3_lateral_request_sequence = 0
-    self.tss3_steering_assist_gain = 0.0
-
-  @staticmethod
-  def _tss3_message_seen(cp: CANParser, message: str) -> bool:
-    return any(int(ts) != 0 for ts in cp.ts_nanos[message].values())
 
   def _update_tss3(self, cp: CANParser, cp_cam: CANParser) -> structs.CarState:
-    # TSS3 remains read-only / noOutput. Promote only fields with
-    # target-native firmware + dynamic evidence. Camry cruise comes from
-    # same-car 0x08A latch/set-speed; Corolla 0x176 cruise stays unpromoted.
     ret = structs.CarState()
 
     self.secoc_synchronization = copy.copy(cp.vl["SECOC_SYNCHRONIZATION"])
@@ -100,93 +73,72 @@ class CarState(CarStateBase):
 
     ret.steeringAngleDeg = cp.vl["STEER_ANGLE_SENSOR"]["STEER_ANGLE"] + cp.vl["STEER_ANGLE_SENSOR"]["STEER_FRACTION"]
     ret.steeringRateDeg = cp.vl["STEER_ANGLE_SENSOR"]["STEER_RATE"]
+    ret.carNotReady = cp.vl["TSS3_READY_STATUS"]["READY_STATUS"] == 0
 
     can_gear = int(cp.vl["GEAR_PACKET_HYBRID"]["GEAR"])
     if self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:
-      # Exact same-car captures close P=0/R=1/N=2/D=3/B=4 with valid Toyota checksums.
       ret.gearShifter = self.parse_gear_shifter(self.shifter_values.get(can_gear, None))
     else:
-      # The retained Corolla route only exercises raw 3=D; do not transfer the
-      # Camry selector enum across platforms merely because the DBC carrier is shared.
       ret.gearShifter = structs.CarState.GearShifter.drive if can_gear == 3 else structs.CarState.GearShifter.unknown
 
     ret.leftBlinker = cp.vl["BLINKERS_STATE"]["TURN_SIGNALS"] == 1
     ret.rightBlinker = cp.vl["BLINKERS_STATE"]["TURN_SIGNALS"] == 2
-    ret.parkingBrake = cp.vl["BODY_CONTROL_STATE"]["PARKING_BRAKE"] == 1
 
     if self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:
-      # Same-car 0x08A: B3[3] is the cruise operating latch and B10 is set
-      # speed in km/h. Passive observation only; dashcamOnly/noOutput stays.
-      # 0x08A originates on the camera side of the Toyota-B intercept relay.
-      # With the relay open, its forwarded bus-0 copy is a Panda TX echo, not a
-      # bus-0 RX event, so consume the native camera-side parser.
-      cruise_latch = bool(cp_cam.vl["TSS3_LATERAL_REQUEST"]["CRUISE_OPERATING_LATCH"])
-      set_speed_kph = float(cp_cam.vl["TSS3_LATERAL_REQUEST"]["SET_SPEED"])
-      ret.cruiseState.enabled = cruise_latch
-      ret.cruiseState.available = cruise_latch
-      ret.cruiseState.speed = set_speed_kph * CV.KPH_TO_MS if cruise_latch and set_speed_kph > 0 else 0.0
-    else:
-      # 0x176's wire shape/checksum are retained on both observed TSS3 Corolla
-      # captures, but neither exercises an active-cruise transition. Keep cruise
-      # neutral in CarState until that semantic transition is observed; the raw
-      # prior-art fields remain available in the DBC for inspection.
-      ret.cruiseState.enabled = False
-      ret.cruiseState.available = False
+      switch = cp.vl["TSS3_CRUISE_SWITCH"]
+      prev_cruise_button = self.tss3_cruise_button
+      if switch["CANCEL_BUTTON"] and not switch["CANCEL_BUTTON_MIRROR_N"]:
+        self.tss3_cruise_button = 1
+      elif switch["SET_BUTTON"] and not switch["SET_BUTTON_MIRROR_N"]:
+        self.tss3_cruise_button = 2
+      elif switch["RES_BUTTON"] and not switch["RES_BUTTON_MIRROR_N"]:
+        self.tss3_cruise_button = 3
+      elif switch["MAIN_BUTTON"]:
+        self.tss3_cruise_button = 4
+      else:
+        self.tss3_cruise_button = 0
+      ret.buttonEvents = create_button_events(self.tss3_cruise_button, prev_cruise_button, {
+        1: ButtonType.cancel,
+        2: ButtonType.decelCruise,
+        3: ButtonType.accelCruise,
+        4: ButtonType.mainCruise,
+      })
 
-    # Exact H/F firmware + Techstream close physical driver torque on 0x030:
-    # signed B8 * 0.1 Nm + signed B17[3:0] * 0.01 Nm. The DBC applies those
-    # component scales, so addition reconstructs the native torque intermediate.
-    # If the target-native validity gate asserts, suppress the value rather than
-    # exposing an invalid torque sample.
-    driver_torque_valid = cp.vl["TSS3_EPS_TELEMETRY"]["DRIVER_TORQUE_INVALID"] == 0
+    ret.doorOpen = any(cp.vl["BODY_CONTROL_STATE"][door] for door in
+                       ("DOOR_OPEN_FL", "DOOR_OPEN_FR", "DOOR_OPEN_RL", "DOOR_OPEN_RR"))
+    ret.seatbeltUnlatched = cp.vl["BODY_CONTROL_STATE"]["SEATBELT_DRIVER_UNLATCHED"] != 0
+    ret.parkingBrake = cp.vl["BODY_CONTROL_STATE"]["PARKING_BRAKE"] == 1
+    ret.brakeHoldActive = cp.vl["ESP_CONTROL"]["BRAKE_HOLD_ACTIVE"] == 1
+    ret.espDisabled = cp.vl["ESP_CONTROL"]["TC_DISABLED"] != 0
+    ret.genericToggle = bool(cp.vl["LIGHT_STALK"]["AUTO_HIGH_BEAM"])
+
+    if self.CP.enableBsm:
+      ret.leftBlindspot = bool(cp.vl["BSM"]["L_ADJACENT"] or cp.vl["BSM"]["L_APPROACHING"])
+      ret.rightBlindspot = bool(cp.vl["BSM"]["R_ADJACENT"] or cp.vl["BSM"]["R_APPROACHING"])
+
+    driver_torque_invalid = cp.vl["TSS3_EPS_TELEMETRY"]["DRIVER_TORQUE_INVALID"] != 0
     ret.steeringTorque = (cp.vl["TSS3_EPS_TELEMETRY"]["STEERING_WHEEL_TORQUE_COARSE"] +
-                          cp.vl["TSS3_EPS_TELEMETRY"]["STEERING_WHEEL_TORQUE_FINE"]) if driver_torque_valid else 0.0
+                          cp.vl["TSS3_EPS_TELEMETRY"]["STEERING_WHEEL_TORQUE_FINE"]) if not driver_torque_invalid else 0.0
     ret.steeringTorqueEps = 0.0
-    self.tss3_ready_status = bool(cp.vl["TSS3_READY_STATUS"]["READY_STATUS"])
-    self.tss3_driver_torque_invalid = not driver_torque_valid
-    self.tss3_steering_fault_inhibit_status = bool(cp.vl["TSS3_EPS_TELEMETRY"]["STEERING_FAULT_INHIBIT_STATUS"])
-    # Camry 0x08A is a secured-looking lateral request representation, not
-    # exact-F33 normal ingress or generated-COM transmit. Expose its recovered
-    # fields read-only. Its producer/SecOC ownership is unresolved, and stock
-    # LTA does not establish or require an 0x08A-to-B6 transform.
-    lateral_cp = cp_cam if self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3 else cp
-    self.tss3_lateral_request_seen = self._tss3_message_seen(lateral_cp, "TSS3_LATERAL_REQUEST")
-    self.tss3_target_lateral_id = int(lateral_cp.vl["TSS3_LATERAL_REQUEST"]["TARGET_LATERAL_ID"])
-    self.tss3_lateral_request_angle = lateral_cp.vl["TSS3_LATERAL_REQUEST"]["LATERAL_REQUEST_ANGLE"]
-    self.tss3_lateral_request_sequence = int(lateral_cp.vl["TSS3_LATERAL_REQUEST"]["SEQUENCE"])
-    # TSS3 recorder 5282 / LTA 5631: steering assist gain LSB 0.01. Live B24 is
-    # 100 in every ID11 frame and 50 in every ID18 frame.
-    self.tss3_steering_assist_gain = float(lateral_cp.vl["TSS3_LATERAL_REQUEST"]["LATERAL_REQUEST_LEVEL"]) / 100.0
-
-    # 0x4A3/0x351/0x394 are retained by the exact F33 Tx table. Their static
-    # wire projections are useful policy inputs, but the current normal-harness
-    # Camry captures do not observe their route. Track both value and presence so
-    # an absent message cannot be confused with a valid all-zero/normal value.
-    self.tss3_alt_telemetry_seen = self._tss3_message_seen(cp, "TSS3_ALT_STEERING_TELEMETRY")
-    self.tss3_motor_current_alt_raw = int(cp.vl["TSS3_ALT_STEERING_TELEMETRY"]["MOTOR_CURRENT_ALT_RAW"])
-    self.tss3_alt_steering_torque = cp.vl["TSS3_ALT_STEERING_TELEMETRY"]["STEERING_WHEEL_TORQUE"]
-    self.tss3_status_351_seen = self._tss3_message_seen(cp, "TSS3_EPS_STATUS_351")
-    self.tss3_status_351_code = int(cp.vl["TSS3_EPS_STATUS_351"]["STATUS_CODE"])
-    self.tss3_status_351_flag = bool(cp.vl["TSS3_EPS_STATUS_351"]["STATUS_FLAG"])
-    self.tss3_fault_394_seen = self._tss3_message_seen(cp, "TSS3_EPS_FAULT_STATUS_394")
-    self.tss3_fault_394_projection = (
-      int(cp.vl["TSS3_EPS_FAULT_STATUS_394"]["STATUS_TABLE_COLUMN_4"]),
-      int(cp.vl["TSS3_EPS_FAULT_STATUS_394"]["STATUS_TABLE_COLUMN_1"]),
-      int(cp.vl["TSS3_EPS_FAULT_STATUS_394"]["STATUS_TABLE_COLUMN_2"]),
-      int(cp.vl["TSS3_EPS_FAULT_STATUS_394"]["STATUS_TABLE_COLUMN_3"]),
-    )
-    self.tss3_fault_394_state_candidates = decode_eps_394_state_candidates(self.tss3_fault_394_projection) if self.tss3_fault_394_seen else ()
-    self.tss3_fault_394_state = self.tss3_fault_394_state_candidates[0] if len(self.tss3_fault_394_state_candidates) == 1 else None
-
-    # The legacy Toyota STEER_THRESHOLD is in the old 0x260 raw domain. No H/F
-    # physical driver-override threshold has been validated yet, so do not reuse
-    # it for the N.m quantity above. Likewise, STEERING_FAULT_INHIBIT_STATUS is a
-    # proved selected steering fault/inhibit aggregate, not an exhaustive EPS-fault
-    # state, and there is no safe mapping to openpilot's
-    # temporary/permanent fault split or to DID 0x1033 Ready Status yet.
+    # The target exposes physical driver torque plus independent torque-invalid
+    # and steering-fault/inhibit status bits, but no validated openpilot driver-
+    # override threshold or temporary/permanent fault mapping. Keep those policy
+    # fields neutral rather than inventing semantics from representation limits.
     ret.steeringPressed = False
     ret.steerFaultTemporary = False
     ret.steerFaultPermanent = False
+
+    if self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:
+      lateral = cp_cam
+      ret.cruiseState.enabled = bool(lateral.vl["TSS3_LATERAL_REQUEST"]["CRUISE_OPERATING_LATCH"])
+      # The retained Camry drives prove this latch follows actual MAIN activation
+      # and CANCEL. No distinct TSS3 standby/main-only carrier is recovered yet.
+      ret.cruiseState.available = ret.cruiseState.enabled
+      set_speed_kph = float(lateral.vl["TSS3_LATERAL_REQUEST"]["SET_SPEED"])
+      ret.cruiseState.speed = set_speed_kph * CV.KPH_TO_MS if set_speed_kph > 0 else 0.0
+    else:
+      ret.cruiseState.available = False
+      ret.cruiseState.enabled = False
 
     return ret
 
@@ -345,9 +297,6 @@ class CarState(CarStateBase):
   @staticmethod
   def get_can_parsers(CP):
     if CP.flags & ToyotaFlags.TSS3:
-      # Required signals are present in both tracked driving captures. Gear,
-      # cruise and low-rate body state are useful but specimen/trim dependent,
-      # so they are ignored for alive checking.
       pt_messages = [
         ("SECOC_SYNCHRONIZATION", 10),
         ("STEER_ANGLE_SENSOR", 100),
@@ -356,24 +305,25 @@ class CarState(CarStateBase):
         ("BRAKE_MODULE", 50),
         ("GAS_PEDAL", 40),
         ("GEAR_PACKET_HYBRID", float('nan')),
-        ("PCM_CRUISE", float('nan')),
-        # Exact H PDU29 signal154: 0x51E B0[7] -> DID 0x1033 Ready Status.
-        # Parse for read-only observation; policy use remains gated on a Ready transition.
         ("TSS3_READY_STATUS", float('nan')),
-        # Upstream lateral request; passive only and not alive-critical.
-        ("TSS3_LATERAL_REQUEST", float('nan')),
-        # Exact F33 static Tx carriers; no alive check until relay-correct live observation.
-        ("TSS3_ALT_STEERING_TELEMETRY", float('nan')),
-        ("TSS3_EPS_STATUS_351", float('nan')),
-        ("TSS3_EPS_FAULT_STATUS_394", float('nan')),
+        ("ESP_CONTROL", float('nan')),
         ("BLINKERS_STATE", float('nan')),
         ("BODY_CONTROL_STATE", float('nan')),
+        ("LIGHT_STALK", float('nan')),
       ]
-      pt_bus = 1 if CP.flags & ToyotaFlags.TSS3_PT_BUS1 else 0
+      if CP.enableBsm:
+        pt_messages.append(("BSM", float('nan')))
+      if CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:
+        pt_messages.append(("TSS3_CRUISE_SWITCH", 33))
+      else:
+        pt_messages.append(("TSS3_LATERAL_REQUEST", float('nan')))
+
+      pt_bus = 1 if CP.carFingerprint == CAR.TOYOTA_COROLLA_TSS3 else 0
       parsers = {Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, pt_bus)}
       if CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:
-        # Exact Camry relay-open topology: 0x08A originates on camera-side bus 2.
-        parsers[Bus.cam] = CANParser(DBC[CP.carFingerprint][Bus.pt], [("TSS3_LATERAL_REQUEST", float('nan'))], 2)
+        # The Toyota-B relay isolates the FRC side on Panda bus 2. Read the
+        # native request there; bus 0 carries vehicle/EPS state and B6 output.
+        parsers[Bus.cam] = CANParser(DBC[CP.carFingerprint][Bus.pt], [("TSS3_LATERAL_REQUEST", 83)], 2)
       return parsers
 
     pt_messages = [

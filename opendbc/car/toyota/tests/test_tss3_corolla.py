@@ -40,7 +40,6 @@ class TestToyotaCorollaTSS3(unittest.TestCase):
 
     self.assertTrue(CP.flags & ToyotaFlags.TSS3)
     self.assertTrue(CP.flags & ToyotaFlags.SECOC)
-    self.assertTrue(CP.flags & ToyotaFlags.TSS3_PT_BUS1)
     self.assertFalse(CP.flags & ToyotaFlags.TSS2)
     self.assertEqual(DBC[CAR.TOYOTA_COROLLA_TSS3][Bus.pt], "toyota_tss3_pt_generated")
     self.assertTrue(CP.dashcamOnly)
@@ -50,18 +49,12 @@ class TestToyotaCorollaTSS3(unittest.TestCase):
     self.assertFalse(CP.openpilotLongitudinalControl)
     self.assertTrue(CP.secOcRequired)
 
-  def test_relay_correct_topology_defaults_to_bus0(self):
-    CP = CarInterface.get_params(CAR.TOYOTA_COROLLA_TSS3, fingerprint_on(0), [], False, False, False)
-    self.assertFalse(CP.flags & ToyotaFlags.TSS3_PT_BUS1)
-    parsers = CarInterface.CarState.get_can_parsers(CP)
-    self.assertEqual(parsers[Bus.pt].bus, 0)
-    self.assertNotIn(Bus.cam, parsers)
-
-  def test_unswapped_observed_topology_selects_bus1(self):
-    CP = CarInterface.get_params(CAR.TOYOTA_COROLLA_TSS3, fingerprint_on(1), [], False, False, False)
-    parsers = CarInterface.CarState.get_can_parsers(CP)
-    self.assertEqual(parsers[Bus.pt].bus, 1)
-    self.assertNotIn(Bus.cam, parsers)
+  def test_observed_research_topology_is_fixed_bus1(self):
+    for fp_bus in (0, 1):
+      CP = CarInterface.get_params(CAR.TOYOTA_COROLLA_TSS3, fingerprint_on(fp_bus), [], False, False, False)
+      parsers = CarInterface.CarState.get_can_parsers(CP)
+      self.assertEqual(parsers[Bus.pt].bus, 1)
+      self.assertNotIn(Bus.cam, parsers)
 
   def test_real_span_frames_decode_evidence_backed_carstate(self):
     CP = CarInterface.get_params(CAR.TOYOTA_COROLLA_TSS3, fingerprint_on(1), [], False, False, False)
@@ -86,8 +79,8 @@ class TestToyotaCorollaTSS3(unittest.TestCase):
     self.assertFalse(CS.cruiseState.enabled)
     self.assertAlmostEqual(CS.steeringTorque, 1.06, places=6)
     self.assertEqual(CS.steeringTorqueEps, 0.0)
-    # The physical torque is promoted, but the old raw-domain override threshold
-    # and 0x262 fault classes are deliberately not transplanted.
+    # The read-only Corolla TSS3 port has no target-native driver-override
+    # threshold; do not transfer the exact-F33 2.0 N.m policy across EPS targets.
     self.assertFalse(CS.steeringPressed)
     self.assertFalse(CS.steerFaultTemporary)
     self.assertFalse(CS.steerFaultPermanent)
@@ -138,6 +131,8 @@ class TestToyotaCorollaTSS3(unittest.TestCase):
     self.assertTrue(CS.canValid)
     self.assertEqual(CS.steeringTorque, 0.0)
     self.assertFalse(CS.steeringPressed)
+    # Exact-F33's DEM/validity mapping is not transferred to this read-only
+    # Corolla target merely because the wire carrier is shared.
     self.assertFalse(CS.steerFaultTemporary)
     self.assertFalse(CS.steerFaultPermanent)
 

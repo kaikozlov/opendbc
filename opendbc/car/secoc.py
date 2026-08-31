@@ -34,22 +34,6 @@ def add_mac(key, trip_cnt, reset_cnt, msg_cnt, msg):
   return (addr, payload, bus)
 
 
-def add_mac28_zero_marker(reset_cnt, msg_cnt, msg):
-  """Build a classic Toyota SecOC envelope with an all-zero MAC28 marker.
-
-  The high nibble of byte 4 remains the stock message-counter/reset-flag nibble;
-  only the 28 authenticator bits are zero. This is consumed only by an explicitly
-  installed EPS-side ephemeral bridge.
-  """
-  addr, payload, bus = msg
-  if len(payload) < 4:
-    raise ValueError("Toyota SecOC marker requires at least the four-byte authentic payload")
-  reset_flag = reset_cnt & 0b11
-  msg_cnt_flag = msg_cnt & 0b11
-  flags = ((msg_cnt_flag << 2) | reset_flag) << 4
-  return (addr, payload[:4] + bytes((flags, 0, 0, 0)), bus)
-
-
 def build_sync_mac(key, trip_cnt, reset_cnt, id_=0xf):
   id_ = struct.pack('>H', id_) # 16
   trip_cnt = struct.pack('>H', trip_cnt) # 16

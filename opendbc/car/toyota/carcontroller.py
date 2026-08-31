@@ -5,12 +5,10 @@ from opendbc.car.lateral import apply_meas_steer_torque_limits, apply_std_steer_
 from opendbc.car.carlog import carlog
 from opendbc.car.common.filter_simple import FirstOrderFilter, HighPassFilter
 from opendbc.car.common.pid import PIDController
-from opendbc.car.secoc import add_mac, add_mac28_zero_marker, build_sync_mac
+from opendbc.car.secoc import add_mac, build_sync_mac
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.toyota import toyotacan
-from opendbc.car.toyota.tss3 import (TSS3B6CompanionFields, TSS3B6Template, TSS3Freshness, TSS3PandaSafetyCandidate,
-                                     TSS3_B6_TARGET_ANGLE_MAX_RAW, TSS3_B6_TARGET_ANGLE_SCALE_DEG,
-                                     TSS3_B6_TARGET_DELTA_MAX_PER_GAP_RAW,
+from opendbc.car.toyota.tss3 import (TSS3B6CompanionFields, TSS3B6Template, TSS3Freshness,
                                      TSS3_B6_TARGET_LATERAL_ID_INACTIVE, TSS3_B6_TARGET_LATERAL_ID_LTA_LCA,
                                      build_b6_application, build_b6_zero_marker_frame, target_angle_deg_to_raw)
 from opendbc.car.toyota.values import CAR, CarControllerParams, ToyotaFlags
@@ -79,144 +77,51 @@ class CarController(CarControllerBase):
     self.secoc_lta_message_counter = 0
     self.secoc_acc_message_counter = 0
     self.secoc_prev_reset_counter = 0
-    # Set by openpilot's car card only after an external, evidence-gated EPS runtime
-    # deployment. Default behavior remains ordinary key-backed SecOC.
-    self.ephemeral_secoc_bridge = False
 
-    # Exact-F33 shadow state remains analysis-only. The former bus-0 B6
-    # development sender was removed after retained factory LTA/LCA proved zero
-    # stock B6; exact F33 has a separate B6-independent internal assist path.
-    # 0x08A producer/SecOC ownership is a separate network question, not proof
-    # of an 0x08A-to-B6 stock-LTA transform.
+    # Exact-F33 B6 protocol state. This is message construction state only;
+    # Panda remains the sole steering-safety authority.
     self.tss3_template = TSS3B6Template()
-    # Exact F33 consumes B8/B9 as /100 controller contributions. The old
-    # conservative development candidate left both at zero, which explicitly
-    # removes both branches. GTS+ request records expose the adjacent steering
-    # assist and damping gains with the same 0.01 scaling, and F33 dataflow maps
-    # B8 to the angle/error-assist branch and B9 to a speed/return contribution.
-    # Use full-scale gains only while the development ID11 request is active;
-    # keep the generic/inactive candidate at the conservative zero defaults.
-    self.tss3_inactive_companions = TSS3B6CompanionFields()
     self.tss3_active_companions = TSS3B6CompanionFields(
       additive_term_suppress=0, contribution_pct_1=100, contribution_pct_2=100,
     )
-    self.tss3_safety_candidate = TSS3PandaSafetyCandidate()
-    self.tss3_last_application = None
-    self.tss3_last_safety_decision = None
-
-    # Zero-MAC28 bridge sender state (exact F33). Anchored to the observed
-    # 0x00F epoch; sequence advances exactly +1 per sent frame so the
-    # ALLOW_DEBUG panda TSS3 dev hook always sees a valid progression.
-    self.tss3_bridge_epoch: int | None = None
-    self.tss3_bridge_safety_candidate = TSS3PandaSafetyCandidate()
-    self.tss3_bridge_sequence = 0
-    self.tss3_bridge_message_counter = 0
-    self.tss3_bridge_prev_angle_raw: int | None = None
+    self.tss3_inactive_companions = TSS3B6CompanionFields()
+    self.tss3_sequence = 0
+    self.tss3_message_counter = 0
 
   def update(self, CC, CS, now_nanos):
     if self.CP.flags & ToyotaFlags.TSS3:
-      # Compute the exact-F33 *shadow* B6 application command for inspection and
-      # replay, but do not schedule it, authenticate it, or return it as CAN.
-      # A real sender sequence is owned by TSS3ReplacementFreshnessState only
-      # after a newer authenticated 0x00F epoch and validated stock cadence.
-      output = CC.actuators.as_builder()
-      target_lateral_id = TSS3_B6_TARGET_LATERAL_ID_LTA_LCA if CC.latActive else TSS3_B6_TARGET_LATERAL_ID_INACTIVE
-      target_angle_raw = target_angle_deg_to_raw(CC.actuators.steeringAngleDeg) if CC.latActive else 0
-      shadow_sequence = self.frame & 0x3F
-      self.tss3_last_application = build_b6_application(
-        target_lateral_id=target_lateral_id,
-        target_angle_raw=target_angle_raw,
-        sequence=shadow_sequence,
-        template=self.tss3_template,
-        companions=self.tss3_active_companions if CC.latActive else self.tss3_inactive_companions,
-      )
-      self.tss3_last_safety_decision = self.tss3_safety_candidate.check(
-        target_lateral_id=target_lateral_id,
-        target_angle_raw=target_angle_raw,
-        sequence=shadow_sequence,
-        steering_angle_velocity_raw=int(round(CS.out.steeringRateDeg)),
-        now_nanos=now_nanos,
-      )
+      if self.CP.carFingerprint != CAR.TOYOTA_CAMRY_TSS3:
+        self.frame += 1
+        return CC.actuators.as_builder(), []
 
       can_sends = []
+      output = CC.actuators.as_builder()
 
-      if self.ephemeral_secoc_bridge:
-        # Development-only zero-MAC28 sender for an installed exact-F33
-        # EPS bridge. One frame per cycle on bus 0; the ALLOW_DEBUG panda
-        # TSS3 hook independently enforces the same F33 envelope on every
-        # transmitted frame.
+      # Follow the normal openpilot lateral contract: controlsd owns CC.latActive.
+      # Toyota request-plane state does not independently arbitrate CarController.
+      lat_active = CC.latActive
+      if self.frame % 2 == 0:
+        desired_angle = CC.actuators.steeringAngleDeg + CS.out.steeringAngleOffsetDeg
+        self.last_angle = apply_std_steer_angle_limits(
+          desired_angle, self.last_angle, CS.out.vEgoRaw,
+          CS.out.steeringAngleDeg + CS.out.steeringAngleOffsetDeg,
+          lat_active, self.params.TSS3_ANGLE_LIMITS,
+        )
+
         sync = CS.secoc_synchronization
-        epoch = (int(sync['TRIP_CNT']) << 20) | int(sync['RESET_CNT'])
-        if self.tss3_bridge_epoch != epoch:
-          # New 0x00F epoch: re-anchor progression. The panda hook resets
-          # its previous-frame state on a strictly newer epoch as well.
-          self.tss3_bridge_epoch = epoch
-          self.tss3_bridge_sequence = 0
-          self.tss3_bridge_message_counter = 0
-          self.tss3_bridge_prev_angle_raw = None
-          self.tss3_bridge_safety_candidate = TSS3PandaSafetyCandidate()
-
-        # Follow openpilot's normal lateral-authority contract. controlsd owns
-        # CC.latActive; platform-specific coexistence/suppression belongs in
-        # Panda forwarding/safety, not in CarController policy.
-        want_active = CC.latActive
-        desired_raw = target_angle_raw if want_active else 0
-
-        # Stay inside the receiver's per-gap slew envelope while active. An
-        # inactive ID0/angle0 is an immediate authority release and is not slew
-        # limited against the previous active target.
-        if want_active and self.tss3_bridge_prev_angle_raw is not None:
-          desired_raw = max(self.tss3_bridge_prev_angle_raw - TSS3_B6_TARGET_DELTA_MAX_PER_GAP_RAW,
-                            min(self.tss3_bridge_prev_angle_raw + TSS3_B6_TARGET_DELTA_MAX_PER_GAP_RAW,
-                                desired_raw))
-        desired_raw = max(-TSS3_B6_TARGET_ANGLE_MAX_RAW, min(TSS3_B6_TARGET_ANGLE_MAX_RAW, desired_raw))
-
-        send_active = want_active
-        send_id = TSS3_B6_TARGET_LATERAL_ID_LTA_LCA if send_active else TSS3_B6_TARGET_LATERAL_ID_INACTIVE
-        send_raw = desired_raw if send_active else 0
-
-        decision = self.tss3_bridge_safety_candidate.check(
-          target_lateral_id=send_id,
-          target_angle_raw=send_raw,
-          sequence=self.tss3_bridge_sequence,
-          steering_angle_velocity_raw=int(round(CS.out.steeringRateDeg)),
-          now_nanos=now_nanos,
-        )
-        if not decision.static_limits_ok:
-          # Fail closed to an immediate inactive release. Re-check the final
-          # frame so the local sequence state re-anchors exactly as Panda's
-          # inactive-release rule does.
-          send_active = False
-          send_id = TSS3_B6_TARGET_LATERAL_ID_INACTIVE
-          send_raw = 0
-          decision = self.tss3_bridge_safety_candidate.check(
-            target_lateral_id=send_id,
-            target_angle_raw=send_raw,
-            sequence=self.tss3_bridge_sequence,
-            steering_angle_velocity_raw=int(round(CS.out.steeringRateDeg)),
-            now_nanos=now_nanos,
-          )
-
         application = build_b6_application(
-          target_lateral_id=send_id,
-          target_angle_raw=send_raw,
-          sequence=self.tss3_bridge_sequence,
+          target_lateral_id=TSS3_B6_TARGET_LATERAL_ID_LTA_LCA if lat_active else TSS3_B6_TARGET_LATERAL_ID_INACTIVE,
+          target_angle_raw=target_angle_deg_to_raw(self.last_angle),
+          sequence=self.tss3_sequence,
           template=self.tss3_template,
-          companions=self.tss3_active_companions if send_active else self.tss3_inactive_companions,
+          companions=self.tss3_active_companions if lat_active else self.tss3_inactive_companions,
         )
-        freshness = TSS3Freshness(int(sync['TRIP_CNT']), int(sync['RESET_CNT']),
-                                  self.tss3_bridge_message_counter)
+        freshness = TSS3Freshness(int(sync["TRIP_CNT"]), int(sync["RESET_CNT"]), self.tss3_message_counter)
         can_sends.append(build_b6_zero_marker_frame(application, freshness))
 
-        # Report the slew-limited angle we actually transmitted so the
-        # lateral planner tracks the receiver's envelope, not the request.
-        actuators_output = CC.actuators.as_builder()
-        actuators_output.steeringAngleDeg = send_raw * TSS3_B6_TARGET_ANGLE_SCALE_DEG
-        output = actuators_output
-
-        self.tss3_bridge_sequence = (self.tss3_bridge_sequence + 1) & 0x3F
-        self.tss3_bridge_message_counter = (self.tss3_bridge_message_counter + 1) & 0xFF
-        self.tss3_bridge_prev_angle_raw = send_raw
+        self.tss3_sequence = (self.tss3_sequence + 1) & 0x3F
+        self.tss3_message_counter = (self.tss3_message_counter + 1) & 0xFF
+        output.steeringAngleDeg = self.last_angle
 
       self.frame += 1
       return output, can_sends
@@ -242,10 +147,9 @@ class CarController(CarControllerBase):
         self.secoc_acc_message_counter = 0
         self.secoc_prev_reset_counter = CS.secoc_synchronization['RESET_CNT']
 
-        if not self.ephemeral_secoc_bridge:
-          expected_mac = build_sync_mac(self.secoc_key, int(CS.secoc_synchronization['TRIP_CNT']), int(CS.secoc_synchronization['RESET_CNT']))
-          if int(CS.secoc_synchronization['AUTHENTICATOR']) != expected_mac:
-            carlog.error("SecOC synchronization MAC mismatch, wrong key?")
+        expected_mac = build_sync_mac(self.secoc_key, int(CS.secoc_synchronization['TRIP_CNT']), int(CS.secoc_synchronization['RESET_CNT']))
+        if int(CS.secoc_synchronization['AUTHENTICATOR']) != expected_mac:
+          carlog.error("SecOC synchronization MAC mismatch, wrong key?")
 
     # *** steer torque ***
     new_torque = int(round(actuators.torque * self.params.STEER_MAX))
@@ -279,16 +183,12 @@ class CarController(CarControllerBase):
     # on consecutive messages
     steer_command = toyotacan.create_steer_command(self.packer, apply_torque, apply_steer_req)
     if self.CP.flags & ToyotaFlags.SECOC.value:
-      if self.ephemeral_secoc_bridge:
-        steer_command = add_mac28_zero_marker(int(CS.secoc_synchronization['RESET_CNT']),
-                                              self.secoc_lka_message_counter, steer_command)
-      else:
-        # TODO: check if this slow and needs to be done by the CANPacker
-        steer_command = add_mac(self.secoc_key,
-                                int(CS.secoc_synchronization['TRIP_CNT']),
-                                int(CS.secoc_synchronization['RESET_CNT']),
-                                self.secoc_lka_message_counter,
-                                steer_command)
+      # TODO: check if this slow and needs to be done by the CANPacker
+      steer_command = add_mac(self.secoc_key,
+                              int(CS.secoc_synchronization['TRIP_CNT']),
+                              int(CS.secoc_synchronization['RESET_CNT']),
+                              self.secoc_lka_message_counter,
+                              steer_command)
       self.secoc_lka_message_counter += 1
     can_sends.append(steer_command)
 
@@ -307,15 +207,11 @@ class CarController(CarControllerBase):
 
       if self.CP.flags & ToyotaFlags.SECOC.value:
         lta_steer_2 = toyotacan.create_lta_steer_command_2(self.packer, self.frame // 2)
-        if self.ephemeral_secoc_bridge:
-          lta_steer_2 = add_mac28_zero_marker(int(CS.secoc_synchronization['RESET_CNT']),
-                                               self.secoc_lta_message_counter, lta_steer_2)
-        else:
-          lta_steer_2 = add_mac(self.secoc_key,
-                                int(CS.secoc_synchronization['TRIP_CNT']),
-                                int(CS.secoc_synchronization['RESET_CNT']),
-                                self.secoc_lta_message_counter,
-                                lta_steer_2)
+        lta_steer_2 = add_mac(self.secoc_key,
+                              int(CS.secoc_synchronization['TRIP_CNT']),
+                              int(CS.secoc_synchronization['RESET_CNT']),
+                              self.secoc_lta_message_counter,
+                              lta_steer_2)
         self.secoc_lta_message_counter += 1
         can_sends.append(lta_steer_2)
 

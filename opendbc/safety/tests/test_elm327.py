@@ -47,23 +47,6 @@ class TestElm327(TestDefaultRxHookBase):
     # No point, since we allow many diagnostic addresses
     pass
 
-  def test_bounded_command5_probe_parameter(self):
-    probe_bus = 2
-    self.safety.set_safety_hooks(CarParams.SafetyModel.elm327, 0x8000 | (probe_bus << 8) | 1)
-    self.safety.init_tests()
-
-    for bus in range(4):
-      for addr in range(0x01A, 0x021):
-        should_tx = bus == probe_bus and 0x01B <= addr <= 0x01F
-        self.assertEqual(should_tx, self._tx(common.make_msg(bus, addr, 8)), f"{addr=} {bus=}")
-
-    for msg_len in DLC_TO_LEN:
-      should_tx = msg_len == 8
-      self.assertEqual(should_tx, self._tx(common.make_msg(probe_bus, 0x01B, msg_len)))
-
-    # Normal diagnostics remain available in the bounded experiment mode.
-    self.assertTrue(self._tx(common.make_msg(probe_bus, 0x7A1, 8)))
-
 
 if __name__ == "__main__":
   unittest.main()

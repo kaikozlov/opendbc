@@ -33,6 +33,14 @@ class CarControllerParams:
     ([5, 25], [0.36, 0.26]),
   )
 
+  # Exact F33 B6 ID11 uses the same normal Toyota angle-control shaping with
+  # its target-native +/-1745 raw (~100 deg) command envelope.
+  TSS3_ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(
+    1745 * (1024 / 17870),
+    ([5, 25], [0.3, 0.15]),
+    ([5, 25], [0.36, 0.26]),
+  )
+
   MAX_LTA_DRIVER_TORQUE_ALLOWANCE = 150  # slightly above steering pressed allows some resistance when changing lanes
 
   def __init__(self, CP):
@@ -56,9 +64,7 @@ class ToyotaSafetyFlags(IntFlag):
   STOCK_LONGITUDINAL = (2 << 8)
   LTA = (4 << 8)
   SECOC = (8 << 8)
-  # Development-only exact-F33 B6 mode. Panda compiles this path only with
-  # ALLOW_DEBUG and uses a dedicated 0x0B6-only whitelist/safety contract.
-  TSS3_DEV_LATERAL = (16 << 8)
+  TSS3 = (16 << 8)
 
 
 class ToyotaFlags(IntFlag):
@@ -80,13 +86,6 @@ class ToyotaFlags(IntFlag):
   # CAN-FD control/state architecture, while SECOC continues to describe the
   # authentication architecture.
   TSS3 = 4096
-
-  # Detected flags
-  # On an unmodified Toyota-B harness the target vehicle network can remain on
-  # the unsplit CAN1 path. A relay-correct CAN0/CAN1 repin moves that network
-  # onto the CAN0/CAN2 pair. This flag selects the observed bus-1 topology for
-  # the read-only TSS3 parser; it is not a safety/interception assertion.
-  TSS3_PT_BUS1 = 8192
 
   # deprecated flags
   # these cars are speculated to allow stop and go when the DSU is unplugged
@@ -140,7 +139,9 @@ class ToyotaSecOCPlatformConfig(PlatformConfig):
 
 
 @dataclass
-class ToyotaTSS3CarDocs(ToyotaSecOcCarDocs):
+class ToyotaTSS3CarDocs(ToyotaCarDocs):
+  support_type: SupportType = SupportType.CUSTOM
+  support_link: str | None = None
   car_parts: CarParts = field(default_factory=CarParts.common([CarHarness.toyota_b]))
 
 
@@ -151,7 +152,7 @@ class ToyotaTSS3PlatformConfig(PlatformConfig):
   def init(self):
     # TSS3 and SecOC are separate axes. The tracked Corolla H/F specimens use
     # both, but TSS3 must never imply TSS2 through config inheritance.
-    self.flags |= ToyotaFlags.TSS3 | ToyotaFlags.NO_DSU | ToyotaFlags.SECOC
+    self.flags |= ToyotaFlags.TSS3 | ToyotaFlags.SECOC
 
 
 class CAR(Platforms):
@@ -203,11 +204,10 @@ class CAR(Platforms):
     ],
     TOYOTA_CAMRY.specs,
   )
-  # Exact maintainer-operated F33 specimen. Read-only: protected 0x0B6 is the
-  # only recovered external angle command, and this integration cannot authenticate it.
   TOYOTA_CAMRY_TSS3 = ToyotaTSS3PlatformConfig(
     [ToyotaTSS3CarDocs("Toyota Camry Hybrid 2026")],
     TOYOTA_CAMRY.specs,
+    flags=ToyotaFlags.HYBRID,
   )
   TOYOTA_CHR = PlatformConfig(
     [
@@ -447,26 +447,6 @@ class CAR(Platforms):
   )
 
 
-# Identity-bound TSS3 research platforms whose complete production firmware
-# inventory is not yet closed. The exact maintainer Camry entry is also present
-# in FW_VERSIONS with EPS as the required discriminator and the other known
-# identities treated as corroborating/non-essential. Keep this compact map for
-# Toyota's direct matcher and exact-identity consumers.
-TSS3_EXACT_FW_VERSIONS = {
-  CAR.TOYOTA_CAMRY_TSS3: {
-    (Ecu.eps, 0x7A1, None): [
-      b'\x028965F3307000\x00\x00\x00\x008A3113303100\x00\x00\x00\x00',
-    ],
-    (Ecu.fwdCamera, 0x792, None): [
-      b'\x018646F3315000\x00\x00\x00\x00',
-    ],
-    (Ecu.abs, 0x7B0, None): [
-      b'\x01F152633K0000\x00\x00\x00\x00',
-    ],
-  },
-}
-
-
 def get_platform_codes(fw_versions: list[bytes]) -> dict[bytes, set[bytes]]:
   # Returns sub versions in a dict so comparisons can be made within part-platform-major_version combos
   codes = defaultdict(set)  # Optional[part]-platform-major_version: set of sub_version
@@ -512,34 +492,9 @@ def get_platform_codes(fw_versions: list[bytes]) -> dict[bytes, set[bytes]]:
 
 
 def match_fw_to_car_fuzzy(live_fw_versions, vin, offline_fw_versions) -> set[str]:
-  # Exact-EPS TSS3 research platforms require their target EPS F181. Any
-  # corroborating identity that is present must also match exactly.
-  for candidate, fws in TSS3_EXACT_FW_VERSIONS.items():
-    eps_ecus = [ecu for ecu in fws if ecu[0] == Ecu.eps]
-    if len(eps_ecus) != 1:
-      continue
-
-    eps_ecu = eps_ecus[0]
-    eps_found = live_fw_versions.get(eps_ecu[1:], set())
-    if not any(version in fws[eps_ecu] for version in eps_found):
-      continue
-
-    conflict = False
-    for ecu, expected_versions in fws.items():
-      found_versions = live_fw_versions.get(ecu[1:], set())
-      if found_versions and not any(version in expected_versions for version in found_versions):
-        conflict = True
-        break
-    if not conflict:
-      return {str(candidate)}
-
   candidates = set()
 
   for candidate, fws in offline_fw_versions.items():
-    # Exact-EPS research platforms must never be resurrected by Toyota's
-    # platform-code fuzzy matcher after their exact EPS discriminator failed.
-    if candidate in TSS3_EXACT_FW_VERSIONS:
-      continue
     # Keep track of ECUs which pass all checks (platform codes, within sub-version range)
     valid_found_ecus = set()
     valid_expected_ecus = {ecu[1:] for ecu in fws if ecu[0] in PLATFORM_CODE_ECUS}
@@ -613,15 +568,6 @@ FW_QUERY_CONFIG = FwQueryConfig(
   fw_version_regex=br"[\x00-\x03A-Z0-9 ]{16,49}",
   # TODO: look at data to whitelist new ECUs effectively
   requests=[
-    # TSS3 EPS responds to F181 directly in the default application session.
-    # Query it before the legacy/general Toyota session choreography; this is
-    # both less invasive and the exact identity needed for the F33 platform.
-    Request(
-      [StdQueries.UDS_VERSION_REQUEST],
-      [StdQueries.UDS_VERSION_RESPONSE],
-      whitelist_ecus=[Ecu.eps],
-      bus=0,
-    ),
     Request(
       [StdQueries.SHORT_TESTER_PRESENT_REQUEST, TOYOTA_VERSION_REQUEST_KWP],
       [StdQueries.SHORT_TESTER_PRESENT_RESPONSE, TOYOTA_VERSION_RESPONSE_KWP],
@@ -646,8 +592,8 @@ FW_QUERY_CONFIG = FwQueryConfig(
     # FIXME: On some models, abs can sometimes be missing
     Ecu.abs: [CAR.TOYOTA_RAV4, CAR.TOYOTA_COROLLA, CAR.TOYOTA_HIGHLANDER, CAR.TOYOTA_SIENNA, CAR.LEXUS_IS, CAR.TOYOTA_ALPHARD_TSS2,
               CAR.TOYOTA_CAMRY_TSS3],
-    # Exact F33 EPS identity is sufficient for this maintainer platform; the
-    # camera identity is corroboration and can be absent from startup discovery.
+    # F33 EPS F181 is the required exact discriminator. Camera identity is
+    # corroborating and can be absent from the startup firmware query.
     Ecu.fwdCamera: [CAR.TOYOTA_CAMRY_TSS3],
     # On some models, the engine can show on two different addresses
     Ecu.engine: [CAR.TOYOTA_HIGHLANDER, CAR.TOYOTA_CAMRY, CAR.TOYOTA_COROLLA_TSS2, CAR.TOYOTA_CHR, CAR.TOYOTA_CHR_TSS2, CAR.LEXUS_IS,

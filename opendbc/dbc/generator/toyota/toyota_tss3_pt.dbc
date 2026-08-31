@@ -30,6 +30,15 @@ BO_ 48 TSS3_EPS_TELEMETRY: 32 EPS
  SG_ STEERING_WHEEL_TORQUE_COARSE : 71|8@0- (0.1,0) [-12.8|12.7] "Nm" XXX
  SG_ STEERING_WHEEL_TORQUE_FINE : 139|4@0- (0.01,0) [-0.08|0.07] "Nm" XXX
 
+BO_ 254 TSS3_CRUISE_SWITCH: 32 XXX
+ SG_ MAIN_BUTTON : 58|1@0+ (1,0) [0|1] "" XXX
+ SG_ RES_BUTTON : 31|1@0+ (1,0) [0|1] "" XXX
+ SG_ RES_BUTTON_MIRROR_N : 55|1@0+ (1,0) [0|1] "" XXX
+ SG_ SET_BUTTON : 39|1@0+ (1,0) [0|1] "" XXX
+ SG_ SET_BUTTON_MIRROR_N : 62|1@0+ (1,0) [0|1] "" XXX
+ SG_ CANCEL_BUTTON : 38|1@0+ (1,0) [0|1] "" XXX
+ SG_ CANCEL_BUTTON_MIRROR_N : 61|1@0+ (1,0) [0|1] "" XXX
+
 BO_ 138 TSS3_LATERAL_REQUEST: 32 XXX
  SG_ CRUISE_OPERATING_LATCH : 27|1@0+ (1,0) [0|1] "" XXX
  SG_ CRUISE_SUBSTATE_1 : 55|8@0+ (1,0) [0|255] "" XXX
@@ -118,8 +127,40 @@ BO_ 1310 TSS3_READY_STATUS: 8 XXX
 BO_ 1556 BLINKERS_STATE: 8 XXX
  SG_ TURN_SIGNALS : 29|2@0+ (1,0) [0|3] "" XXX
 
+BO_ 951 ESP_CONTROL: 8 ESP
+ SG_ TC_DISABLED : 13|1@0+ (1,0) [0|1] "" XXX
+ SG_ VSC_DISABLED : 12|2@0+ (1,0) [0|1] "" XXX
+ SG_ BRAKE_LIGHTS_ACC : 18|1@0+ (1,0) [0|1] "" XXX
+ SG_ BRAKE_HOLD_ENABLED : 33|1@1+ (1,0) [0|1] "" XXX
+ SG_ BRAKE_HOLD_ACTIVE : 36|1@0+ (1,0) [0|1] "" XXX
+
+BO_ 1014 BSM: 8 XXX
+ SG_ L_ADJACENT : 0|1@0+ (1,0) [0|1] "" XXX
+ SG_ R_ADJACENT : 1|1@0+ (1,0) [0|1] "" XXX
+ SG_ ADJACENT_ENABLED : 7|1@0+ (1,0) [0|1] "" XXX
+ SG_ L_APPROACHING : 8|1@0+ (1,0) [0|1] "" XXX
+ SG_ R_APPROACHING : 10|1@0+ (1,0) [0|1] "" XXX
+ SG_ APPROACHING_ENABLED : 15|1@0+ (1,0) [0|1] "" XXX
+
 BO_ 1568 BODY_CONTROL_STATE: 8 XXX
+ SG_ METER_DIMMED : 38|1@0+ (1,0) [0|1] "" XXX
  SG_ PARKING_BRAKE : 60|1@0+ (1,0) [0|1] "" XXX
+ SG_ SEATBELT_DRIVER_UNLATCHED : 62|1@0+ (1,0) [0|1] "" XXX
+ SG_ DOOR_OPEN_FL : 45|1@0+ (1,0) [0|1] "" XXX
+ SG_ DOOR_OPEN_RL : 42|1@0+ (1,0) [0|1] "" XXX
+ SG_ DOOR_OPEN_RR : 43|1@0+ (1,0) [0|1] "" XXX
+ SG_ DOOR_OPEN_FR : 44|1@0+ (1,0) [0|1] "" XXX
+
+BO_ 1570 LIGHT_STALK: 8 SCM
+ SG_ LIGHT_STALK_MOVED : 15|1@0+ (1,0) [0|1] "" XXX
+ SG_ TAIL_LIGHT : 19|1@0+ (1,0) [0|1] "" XXX
+ SG_ HEADLIGHT_MODE : 21|3@1+ (1,0) [0|7] "" XXX
+ SG_ FRONT_FOG : 27|1@0+ (1,0) [0|1] "" XXX
+ SG_ PARKING_LIGHT : 28|1@0+ (1,0) [0|1] "" XXX
+ SG_ LOW_BEAM : 29|1@0+ (1,0) [0|1] "" XXX
+ SG_ HIGH_BEAM : 30|1@0+ (1,0) [0|1] "" XXX
+ SG_ DAYTIME_RUNNING_LIGHT : 31|1@0+ (1,0) [0|1] "" XXX
+ SG_ AUTO_HIGH_BEAM : 37|1@0+ (1,0) [0|1] "" XXX
 
 CM_ BO_ 138 "Exact 2026 Camry lateral-request carrier recovered from two relay-correct drives (44,613 deduped bus-0 frames; every field boundary in this message is backed by a full both-drive byte census partitioned by B21 state). This is not exact-F33 normal ingress or generated-COM transmit and is defined for passive analysis only. B28:B31 strongly match Toyota ordinary-P5 FV4+MAC28 structure; exact producer/profile/key/CMAC remain unresolved. Stock LTA does not establish or require an 0x08A-to-B6 transform.";
 CM_ SG_ 138 LATERAL_REQUEST_ANGLE "Signed B18:B19 structural request-angle quantity. Under ID0 it tracks measured 0x025 angle at 1024/17870 deg/count; under ID11 its correlation shifts toward future measured angle. Current EMPS_P5 DID 0x1CEE monitor 2071 has a different 1.5 deg/count diagnostic representation, and exact 8965F3307000 does not implement DID 0x1CEE, so that OEM name is not transferred to this wire field. The matching scale does not establish an 0x08A-to-B6 path.";
@@ -158,6 +199,9 @@ CM_ BO_ 48 "Exact H/F EPS transmits this 32-byte PDU. Driver torque and B6 safet
 CM_ SG_ 48 STEERING_WHEEL_TORQUE_TRUNC "DID 0x1035 Steering Wheel Torque source, saturating truncation-toward-zero 0.1 Nm view. It can differ from COARSE by one count due to firmware rounding.";
 CM_ SG_ 48 STEERING_WHEEL_TORQUE_COARSE "Coarse component of exact physical Steering Wheel Torque reconstruction.";
 CM_ SG_ 48 STEERING_WHEEL_TORQUE_FINE "Signed hundredths remainder. Exact torque = COARSE + FINE; Span exercises -0.05..+0.05 Nm remainder.";
+CM_ SG_ 254 RES_BUTTON_MIRROR_N "Redundant active-low complement of RES_BUTTON; both are observed on the physical switch carrier.";
+CM_ SG_ 254 SET_BUTTON_MIRROR_N "Redundant active-low complement of SET_BUTTON; both are observed on the physical switch carrier.";
+CM_ SG_ 254 CANCEL_BUTTON_MIRROR_N "Redundant active-low complement of CANCEL_BUTTON; both are observed on the physical switch carrier.";
 CM_ SG_ 48 STEERING_FAULT_INHIBIT_STATUS "Target-native selected steering fault/inhibit status aggregate from FEBE7DAE; nominal-clear in all 6000 tracked Span frames. This is not an exhaustive EPS-fault bitmap. Do not infer temporary/permanent openpilot fault class.";
 CM_ SG_ 48 DRIVER_TORQUE_INVALID "Target-native driver-torque invalid/inhibit gate from FEBE7DB2; nominal-clear in all 6000 tracked Span frames.";
 CM_ SG_ 48 EPS_STATUS_B6_BIT1 "Runtime status bit from FEBE7DB3; exact OEM meaning unresolved.";
