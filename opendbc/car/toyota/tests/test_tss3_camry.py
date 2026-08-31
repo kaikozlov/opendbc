@@ -24,6 +24,7 @@ CAMRY_COMMON = {
   0x0FE: bytes.fromhex("567d393f0000c36200000000000000002640000000ff000000000000d54aaf10"),
   0x101: bytes.fromhex("800000010000008b"),
   0x116: bytes.fromhex("000000007b4b235a"),
+  0x251: bytes.fromhex("c01015908030a080"),
   0x51E: bytes.fromhex("80006e0000000000"),
   0x614: bytes.fromhex("00004a3000003303"),
   0x620: bytes.fromhex("000000008000001a"),
@@ -44,7 +45,7 @@ def fingerprint() -> dict[int, dict[int, int]]:
 
 
 def update_with_frame_set(ci: CarInterface, frames: dict[int, bytes], repeats: int = 20):
-  packet = [CanData(address, dat, 2 if address == 0x08A else 0) for address, dat in frames.items()]
+  packet = [CanData(address, dat, 2 if address in (0x08A, 0x251) else 0) for address, dat in frames.items()]
   ret = None
   for i in range(repeats):
     ret = ci.update([(1_000_000_000 + i * 10_000_000, packet)])
@@ -98,6 +99,7 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
     self.assertTrue(cs.cruiseState.enabled)
     self.assertFalse(cs.carNotReady)
     self.assertAlmostEqual(cs.cruiseState.speed, CAMRY_COMMON[0x08A][10] * CV.KPH_TO_MS, places=5)
+    self.assertAlmostEqual(cs.cruiseState.speedCluster, CAMRY_COMMON[0x251][2] * CV.MPH_TO_MS, places=5)
 
     cruise_off = bytearray(CAMRY_COMMON[0x08A])
     cruise_off[3] &= ~0x08

@@ -138,6 +138,9 @@ class CarState(CarStateBase):
       ret.cruiseState.available = ret.cruiseState.enabled
       set_speed_kph = float(lateral.vl["TSS3_LATERAL_REQUEST"]["SET_SPEED"])
       ret.cruiseState.speed = set_speed_kph * CV.KPH_TO_MS if set_speed_kph > 0 else 0.0
+      ui_set_speed_mph = float(lateral.vl["TSS3_CRUISE_DISPLAY"]["UI_SET_SPEED"])
+      if ret.cruiseState.speed != 0 and ui_set_speed_mph > 0:
+        ret.cruiseState.speedCluster = ui_set_speed_mph * CV.MPH_TO_MS
     else:
       ret.cruiseState.available = False
       ret.cruiseState.enabled = False
@@ -325,7 +328,10 @@ class CarState(CarStateBase):
       if CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:
         # The Toyota-B relay isolates the FRC side on Panda bus 2. Read the
         # native request there; bus 0 carries vehicle/EPS state and B6 output.
-        parsers[Bus.cam] = CANParser(DBC[CP.carFingerprint][Bus.pt], [("TSS3_LATERAL_REQUEST", 83)], 2)
+        parsers[Bus.cam] = CANParser(DBC[CP.carFingerprint][Bus.pt], [
+          ("TSS3_LATERAL_REQUEST", 83),
+          ("TSS3_CRUISE_DISPLAY", 1),
+        ], 2)
       return parsers
 
     pt_messages = [
