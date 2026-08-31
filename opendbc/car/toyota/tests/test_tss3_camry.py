@@ -114,6 +114,8 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
     self.assertTrue(CP.secOcRequired)
     self.assertEqual(CP.steerControlType, structs.CarParams.SteerControlType.angle)
     self.assertFalse(CP.openpilotLongitudinalControl)
+    self.assertEqual(CP.minEnableSpeed, -1.0)
+    self.assertTrue(CP.steerAtStandstill)
 
   def test_exact_identity_binding_is_partial_and_route_explicit(self):
     fw = TSS3_EXACT_FW_VERSIONS[CAR.TOYOTA_CAMRY_TSS3]

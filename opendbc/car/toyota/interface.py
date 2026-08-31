@@ -38,6 +38,11 @@ class CarInterface(CarInterfaceBase):
       ret.openpilotLongitudinalControl = False
       ret.autoResumeSng = False
       ret.minEnableSpeed = -1.
+      # Exact F33 ID11 has no recovered low-speed steering cutoff. Advertise
+      # standstill steering through the normal openpilot CarParams contract so
+      # controlsd, rather than Camry-specific controller policy, owns latActive.
+      if candidate == CAR.TOYOTA_CAMRY_TSS3:
+        ret.steerAtStandstill = True
       ret.centerToFront = ret.wheelbase * 0.44
 
       # The tracked Span driving capture has the target state network on the

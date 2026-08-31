@@ -156,11 +156,10 @@ class CarController(CarControllerBase):
           self.tss3_bridge_prev_angle_raw = None
           self.tss3_bridge_safety_candidate = TSS3PandaSafetyCandidate()
 
-        # Only request external lateral authority when Toyota's native request is
-        # explicitly inactive. If cruise disengages or stock LTA/SDG takes over,
-        # release B6 immediately with ID0/angle0 instead of emitting an active
-        # ramp that Panda must reject.
-        want_active = CC.latActive and CS.tss3_target_lateral_id == TSS3_B6_TARGET_LATERAL_ID_INACTIVE
+        # Follow openpilot's normal lateral-authority contract. controlsd owns
+        # CC.latActive; platform-specific coexistence/suppression belongs in
+        # Panda forwarding/safety, not in CarController policy.
+        want_active = CC.latActive
         desired_raw = target_angle_raw if want_active else 0
 
         # Stay inside the receiver's per-gap slew envelope while active. An
