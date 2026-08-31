@@ -553,9 +553,9 @@ static safety_config toyota_init(uint16_t param) {
     };
     SET_TX_MSGS(TOYOTA_TSS3_DEV_TX_MSGS, ret);
     SET_RX_CHECKS(toyota_tss3_dev_rx_checks, ret);
-    // Exact-F33 development runs with the physical harness relay closed.
-    // Preserve Toyota's native bus timing/order instead of store-and-forwarding.
-    ret.disable_forwarding = true;
+    // Use the normal comma harness topology: relay open and software forwarding.
+    // Panda preserves the exact received CAN/CAN-FD/BRS frame format when forwarding,
+    // which is required on this mixed classic-CAN/CAN-FD Toyota network.
     return ret;
   }
 #endif
