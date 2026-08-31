@@ -97,7 +97,9 @@ class CarController(CarControllerBase):
     # Use full-scale gains only while the development ID11 request is active;
     # keep the generic/inactive candidate at the conservative zero defaults.
     self.tss3_inactive_companions = TSS3B6CompanionFields()
-    self.tss3_active_companions = TSS3B6CompanionFields(contribution_pct_1=100, contribution_pct_2=100)
+    self.tss3_active_companions = TSS3B6CompanionFields(
+      additive_term_suppress=0, contribution_pct_1=100, contribution_pct_2=100,
+    )
     self.tss3_safety_candidate = TSS3PandaSafetyCandidate()
     self.tss3_last_application = None
     self.tss3_last_safety_decision = None
@@ -154,21 +156,23 @@ class CarController(CarControllerBase):
           self.tss3_bridge_prev_angle_raw = None
           self.tss3_bridge_safety_candidate = TSS3PandaSafetyCandidate()
 
-        want_active = CC.latActive
+        # Only request external lateral authority when Toyota's native request is
+        # explicitly inactive. If cruise disengages or stock LTA/SDG takes over,
+        # release B6 immediately with ID0/angle0 instead of emitting an active
+        # ramp that Panda must reject.
+        want_active = CC.latActive and CS.tss3_target_lateral_id == TSS3_B6_TARGET_LATERAL_ID_INACTIVE
         desired_raw = target_angle_raw if want_active else 0
 
-        # Stay inside the receiver's per-gap slew envelope so the panda
-        # hook never has to drop a frame.
-        if self.tss3_bridge_prev_angle_raw is not None:
+        # Stay inside the receiver's per-gap slew envelope while active. An
+        # inactive ID0/angle0 is an immediate authority release and is not slew
+        # limited against the previous active target.
+        if want_active and self.tss3_bridge_prev_angle_raw is not None:
           desired_raw = max(self.tss3_bridge_prev_angle_raw - TSS3_B6_TARGET_DELTA_MAX_PER_GAP_RAW,
                             min(self.tss3_bridge_prev_angle_raw + TSS3_B6_TARGET_DELTA_MAX_PER_GAP_RAW,
                                 desired_raw))
         desired_raw = max(-TSS3_B6_TARGET_ANGLE_MAX_RAW, min(TSS3_B6_TARGET_ANGLE_MAX_RAW, desired_raw))
 
-        # Ramp to zero while still active, then release with a clean
-        # inactive frame: the per-gap slew applies to every transmitted
-        # frame, including the inactive one.
-        send_active = want_active or desired_raw != 0
+        send_active = want_active
         send_id = TSS3_B6_TARGET_LATERAL_ID_LTA_LCA if send_active else TSS3_B6_TARGET_LATERAL_ID_INACTIVE
         send_raw = desired_raw if send_active else 0
 
@@ -180,16 +184,19 @@ class CarController(CarControllerBase):
           now_nanos=now_nanos,
         )
         if not decision.static_limits_ok:
-          # Never emit a frame the EPS-side envelope would reject; hold
-          # position with an inactive request once the ramp reaches zero.
+          # Fail closed to an immediate inactive release. Re-check the final
+          # frame so the local sequence state re-anchors exactly as Panda's
+          # inactive-release rule does.
           send_active = False
           send_id = TSS3_B6_TARGET_LATERAL_ID_INACTIVE
-          send_raw = 0 if (self.tss3_bridge_prev_angle_raw is None or
-                           abs(self.tss3_bridge_prev_angle_raw) <= TSS3_B6_TARGET_DELTA_MAX_PER_GAP_RAW) else \
-              self.tss3_bridge_prev_angle_raw - TSS3_B6_TARGET_DELTA_MAX_PER_GAP_RAW * (1 if self.tss3_bridge_prev_angle_raw > 0 else -1)
-          send_active = send_raw != 0
-          if send_active:
-            send_id = TSS3_B6_TARGET_LATERAL_ID_LTA_LCA
+          send_raw = 0
+          decision = self.tss3_bridge_safety_candidate.check(
+            target_lateral_id=send_id,
+            target_angle_raw=send_raw,
+            sequence=self.tss3_bridge_sequence,
+            steering_angle_velocity_raw=int(round(CS.out.steeringRateDeg)),
+            now_nanos=now_nanos,
+          )
 
         application = build_b6_application(
           target_lateral_id=send_id,

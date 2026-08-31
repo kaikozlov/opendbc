@@ -92,14 +92,17 @@ static bool toyota_tss3_candidate_limits_check(uint8_t target_lateral_id, int ta
   violation |= active && (target_lateral_id != TOYOTA_TSS3_TARGET_LATERAL_ID_LTA_LCA);
   violation |= !active && (target_angle_raw != 0);
   violation |= SAFETY_ABS(target_angle_raw) > TOYOTA_TSS3_TARGET_ANGLE_MAX_RAW;
-  violation |= SAFETY_ABS(steering_rate_raw) > TOYOTA_TSS3_STEER_RATE_MAX_RAW;
+  violation |= active && (SAFETY_ABS(steering_rate_raw) > TOYOTA_TSS3_STEER_RATE_MAX_RAW);
 
   if (has_previous) {
     const uint8_t sequence_gap = (sequence - previous_sequence) & 0x3FU;
-    // Replacement policy is deliberately stricter than the EPS's capped-8
-    // tolerated gap: production candidates must advance exactly +1.
-    violation |= sequence_gap != 1U;
-    violation |= SAFETY_ABS(target_angle_raw - previous_angle_raw) > TOYOTA_TSS3_TARGET_DELTA_PER_GAP_RAW;
+    // Active replacement commands must advance exactly +1. Inactive ID0/angle0
+    // is always allowed to re-anchor sequence state after a blocked active frame;
+    // it cannot command steering and must never be prevented from releasing.
+    violation |= active && (sequence_gap != 1U);
+    // ID0/angle0 is an immediate authority release; only active mode-2 targets
+    // are subject to the previous-target slew envelope.
+    violation |= active && (SAFETY_ABS(target_angle_raw - previous_angle_raw) > TOYOTA_TSS3_TARGET_DELTA_PER_GAP_RAW);
     violation |= active && (elapsed_us > TOYOTA_TSS3_RX_TIMEOUT_US);
   }
 
@@ -316,12 +319,13 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
     const bool active = target_lateral_id != 0U;
 
     // Development sender shape is deliberately narrower than the receiver.
-    // B6[2]=1 suppresses the recovered additive branch. Exact F33 consumes
-    // B8/B9 as /100 contributions; active ID11 uses full-scale 100/100, while
-    // inactive release uses 0/0. All other currently-unresolved application
-    // bytes remain zero, and Gate-2 development keeps a zero MAC28 marker.
+    // Exact F33 proves B6[2]=1 suppresses a target-derived controller
+    // contribution, so active ID11 must leave it clear. B8/B9 are /100
+    // contributions and use full-scale 100/100 while active. Inactive ID0 keeps
+    // the conservative suppression bit set with 0/0 gains. All other unresolved
+    // application bytes remain zero; Gate-2 development keeps zero MAC28.
     bool shape_violation = (msg->data[0] != 0U) || (msg->data[1] != 0U) || (msg->data[2] != 0U) ||
-                           ((msg->data[3] & 0xC0U) != 0U) || (msg->data[6] != 0x04U) ||
+                           ((msg->data[3] & 0xC0U) != 0U) || (msg->data[6] != (active ? 0x00U : 0x04U)) ||
                            ((msg->data[7] & 0xC0U) != 0U) ||
                            (msg->data[8] != (active ? 100U : 0U)) ||
                            (msg->data[9] != (active ? 100U : 0U)) || (msg->data[10] != 0U) ||
@@ -335,11 +339,11 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
     }
 
     // Active steering requests require cruise engagement and exclusive lateral
-    // authority. With the physical harness relay closed, Toyota's native LTA
-    // traffic remains present; exact F33 ID11 does not automatically suppress
-    // its B6-independent internal assist path. Require stock Target Lateral ID
-    // 0 so comma never drives concurrently with Toyota LTA/SDG/etc. Inactive
-    // release frames remain allowed so the sender can always ramp to zero.
+    // authority. With the normal relay-open topology, native 0x08A is observed
+    // on camera-side bus 2 before selective forwarding. Exact F33 ID11 does not
+    // automatically suppress its B6-independent internal assist path. Require
+    // stock Target Lateral ID 0 so comma never drives concurrently with Toyota
+    // LTA/SDG/etc. Inactive release frames remain allowed unconditionally.
     if (active && (!controls_allowed || (toyota_tss3_stock_target_lateral_id != 0U))) {
       return false;
     }

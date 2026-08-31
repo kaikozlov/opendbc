@@ -192,10 +192,9 @@ class CarState(CarStateBase):
 
   def update(self, can_parsers) -> structs.CarState:
     cp = can_parsers[Bus.pt]
-    cp_cam = can_parsers[Bus.cam]
+    cp_cam = can_parsers.get(Bus.cam, cp)
     if self.CP.flags & ToyotaFlags.TSS3:
       return self._update_tss3(cp, cp_cam)
-
 
     ret = structs.CarState()
     cp_acc = cp_cam if (self.CP.flags & ToyotaFlags.TSS2) and not (self.CP.flags & ToyotaFlags.RADAR_ACC) else cp
@@ -371,11 +370,11 @@ class CarState(CarStateBase):
         ("BODY_CONTROL_STATE", float('nan')),
       ]
       pt_bus = 1 if CP.flags & ToyotaFlags.TSS3_PT_BUS1 else 0
-      cam_messages = [("TSS3_LATERAL_REQUEST", float('nan'))]
-      return {
-        Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, pt_bus),
-        Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], cam_messages, 2),
-      }
+      parsers = {Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, pt_bus)}
+      if CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:
+        # Exact Camry relay-open topology: 0x08A originates on camera-side bus 2.
+        parsers[Bus.cam] = CANParser(DBC[CP.carFingerprint][Bus.pt], [("TSS3_LATERAL_REQUEST", float('nan'))], 2)
+      return parsers
 
     pt_messages = [
       ("BLINKERS_STATE", float('nan')),

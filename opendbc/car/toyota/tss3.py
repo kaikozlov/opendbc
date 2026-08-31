@@ -519,17 +519,23 @@ class TSS3PandaSafetyCandidate:
       reasons.append("inactive request must carry zero target angle")
     if abs(target_angle_raw) > TSS3_B6_TARGET_ANGLE_MAX_RAW:
       reasons.append("target angle exceeds F33 absolute envelope")
-    if abs(steering_angle_velocity_raw) > TSS3_STEERING_ANGLE_VELOCITY_MAX_RAW:
+    if active and abs(steering_angle_velocity_raw) > TSS3_STEERING_ANGLE_VELOCITY_MAX_RAW:
       reasons.append("steering angle velocity exceeds F33 monitor threshold")
 
     if self.previous_sequence is not None:
       gap = (sequence - self.previous_sequence) & 0x3F
-      # A replacement sender deliberately chooses strict +1 progression even
-      # though the EPS receiver can tolerate a larger capped gap.
-      if gap != 1:
+      # A replacement sender deliberately chooses strict +1 progression for
+      # active commands. Inactive ID0/angle0 is always allowed to re-anchor the
+      # local sequence after a blocked active request because it grants no
+      # steering authority.
+      if active and gap != 1:
         reasons.append("replacement application sequence must advance exactly +1 modulo64")
       effective_gap = min(max(gap, 1), TSS3_B6_EFFECTIVE_GAP_MAX)
-      if self.previous_angle_raw is not None and abs(target_angle_raw - self.previous_angle_raw) > TSS3_B6_TARGET_DELTA_MAX_PER_GAP_RAW * effective_gap:
+      # The target-delta envelope applies to an active mode-2 command. ID0 with
+      # angle0 is an authority release, so do not force a potentially unsafe
+      # active ramp merely to satisfy the previous target delta.
+      if (active and self.previous_angle_raw is not None and
+          abs(target_angle_raw - self.previous_angle_raw) > TSS3_B6_TARGET_DELTA_MAX_PER_GAP_RAW * effective_gap):
         reasons.append("target delta exceeds F33 per-gap envelope")
 
     if active and self.previous_candidate_ns is not None and now_nanos - self.previous_candidate_ns > TSS3_B6_RX_TIMEOUT_NS:

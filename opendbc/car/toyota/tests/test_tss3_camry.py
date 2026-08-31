@@ -77,8 +77,6 @@ def update_with_frame_set(ci: CarInterface, frames: dict[int, bytes], repeats: i
   return ret
 
 
-
-
 class _AesCmacSigner:
   def __init__(self, key: bytes):
     self.key = key
@@ -301,7 +299,6 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
     self.assertFalse(CI.CC.tss3_last_safety_decision.production_allowed)
 
 
-
 class TestToyotaTSS3B6Contract(unittest.TestCase):
   def test_application_packer_preserves_unknown_template_bits(self):
     template_bytes = bytearray(range(28))
@@ -483,7 +480,7 @@ class TestToyotaTSS3PandaShadowSafety(unittest.TestCase):
       dat = bytearray(32)
       dat[3] = target_id
       dat[4:6] = angle.to_bytes(2, "big", signed=True)
-      dat[6] = 0x04
+      dat[6] = 0x00 if target_id != 0 else 0x04
       dat[7] = sequence
       if target_id != 0:
         dat[8] = 100
@@ -518,6 +515,40 @@ class TestToyotaTSS3PandaShadowSafety(unittest.TestCase):
     self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x08A, 2, bytes(cruise_off))))
     self.assertFalse(s.get_controls_allowed())
 
+  def test_debug_panda_inactive_release_reanchors_after_blocked_active(self):
+    s = libsafety_py.libsafety
+    self.assertEqual(s.set_safety_hooks(structs.CarParams.SafetyModel.toyota, ToyotaSafetyFlags.TSS3_DEV_LATERAL), 0)
+    s.init_tests()
+
+    def b6(angle: int, sequence: int, target_id: int):
+      dat = bytearray(32)
+      dat[3] = target_id
+      dat[4:6] = angle.to_bytes(2, "big", signed=True)
+      dat[6] = 0x00 if target_id else 0x04
+      dat[7] = sequence
+      if target_id:
+        dat[8:10] = b"\x64\x64"
+      return libsafety_py.make_CANPacket(0x0B6, 0, bytes(dat))
+
+    self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x025, 0, CAMRY_COMMON[0x025])))
+    self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x00F, 0, CAMRY_COMMON[0x00F])))
+    stock_off = bytearray(CAMRY_COMMON[0x08A])
+    stock_off[21] = 0
+    self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x08A, 2, bytes(stock_off))))
+    self.assertTrue(s.safety_tx_hook(b6(100, 0, 11)))
+
+    # Stock lateral wins before the next active frame: Panda blocks it.
+    stock_on = bytearray(stock_off)
+    stock_on[21] = 11
+    self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x08A, 2, bytes(stock_on))))
+    self.assertFalse(s.safety_tx_hook(b6(150, 1, 11)))
+
+    # The sender has already advanced to sequence 2. A non-actuating release is
+    # allowed to re-anchor there, then the next active command must be +1.
+    self.assertTrue(s.safety_tx_hook(b6(0, 2, 0)))
+    self.assertTrue(s.safety_rx_hook(libsafety_py.make_CANPacket(0x08A, 2, bytes(stock_off))))
+    self.assertTrue(s.safety_tx_hook(b6(50, 3, 11)))
+
   def test_debug_panda_path_is_b6_only_and_enforces_f33_limits(self):
     s = libsafety_py.libsafety
     self.assertEqual(s.set_safety_hooks(structs.CarParams.SafetyModel.toyota, ToyotaSafetyFlags.TSS3_DEV_LATERAL), 0)
@@ -527,7 +558,7 @@ class TestToyotaTSS3PandaShadowSafety(unittest.TestCase):
       dat = bytearray(32)
       dat[3] = target_id
       dat[4:6] = angle.to_bytes(2, "big", signed=True)
-      dat[6] = 0x04
+      dat[6] = 0x00 if target_id != 0 else 0x04
       dat[7] = sequence
       if target_id != 0:
         dat[8] = 100
@@ -577,7 +608,12 @@ class TestToyotaTSS3BridgeSender(unittest.TestCase):
   def _bridge_platform(self) -> CarInterface:
     CP = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint_on(1), [], False, False, False)
     CI = CarInterface(CP)
-    update_with_frame_set(CI, CAMRY_COMMON | {0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]})
+    stock_lateral_off = bytearray(CAMRY_COMMON[0x08A])
+    stock_lateral_off[21] = 0
+    update_with_frame_set(CI, CAMRY_COMMON | {
+      0x08A: bytes(stock_lateral_off),
+      0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive],
+    })
     CI.CC.ephemeral_secoc_bridge = True
     return CI
 
@@ -609,7 +645,7 @@ class TestToyotaTSS3BridgeSender(unittest.TestCase):
     self.assertEqual(dat[3] & 0x3F, 11)
     self.assertEqual(int.from_bytes(dat[4:6], "big", signed=True), 2)
     self.assertEqual(dat[7] & 0x3F, 0)
-    self.assertEqual(dat[6], 0x04)
+    self.assertEqual(dat[6], 0x00)  # signal265 clear: do not suppress target-derived contribution
     self.assertEqual(dat[8:10], b"\x64\x64")
     # Zero-MAC28 marker: all 28 MAC bits (B28[3:0], B29, B30, B31) zero,
     # FV4 nibble preserved (fixture: msg low2=0, reset low2=5212&3=0).
@@ -646,22 +682,16 @@ class TestToyotaTSS3BridgeSender(unittest.TestCase):
     self.assertEqual(int.from_bytes(second[4:6], "big", signed=True), prev_raw + TSS3_B6_TARGET_DELTA_MAX_PER_GAP_RAW)
     self.assertEqual(second[7] & 0x3F, 1)
 
-    # Deactivation ramps to zero while still active, then releases with a
-    # clean inactive request that keeps the +1 cadence.
-    prev_raw = int.from_bytes(second[4:6], "big", signed=True)
-    for expected_seq in range(2, 2 + 8):
-      s.set_timer(10_000 * expected_seq)
-      dat = send(0.0, lat_active=False)
-      raw = int.from_bytes(dat[4:6], "big", signed=True)
-      self.assertEqual(dat[7] & 0x3F, expected_seq)
-      self.assertGreaterEqual(prev_raw - raw, 0)
-      self.assertLessEqual(prev_raw - raw, TSS3_B6_TARGET_DELTA_MAX_PER_GAP_RAW)
-      prev_raw = raw
-      if dat[3] & 0x3F == 0:
-        break
+    # Deactivation is an immediate non-actuating ID0/angle0 release. It is
+    # deliberately exempt from the active target slew rule and re-anchors Panda
+    # sequence state if the immediately preceding active frame was blocked.
+    s.set_timer(20_000)
+    dat = send(0.0, lat_active=False)
     self.assertEqual(dat[3] & 0x3F, 0)
+    self.assertEqual(int.from_bytes(dat[4:6], "big", signed=True), 0)
+    self.assertEqual(dat[6], 0x04)
+    self.assertEqual(dat[7] & 0x3F, 2)
     self.assertEqual(dat[8:10], b"\x00\x00")
-    self.assertEqual(prev_raw, 0)
 
   def test_bridge_sender_reanchors_on_new_sync_epoch(self):
     CI = self._bridge_platform()
