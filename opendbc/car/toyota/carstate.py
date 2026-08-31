@@ -51,13 +51,15 @@ class CarState(CarStateBase):
     self.lkas_hud = {}
     self.gvc = 0.0
     self.secoc_synchronization = None
+    self.tss3_brake_module = None
 
   def _update_tss3(self, cp: CANParser, cp_cam: CANParser) -> structs.CarState:
     ret = structs.CarState()
 
     self.secoc_synchronization = copy.copy(cp.vl["SECOC_SYNCHRONIZATION"])
+    self.tss3_brake_module = copy.copy(cp.vl["BRAKE_MODULE"])
 
-    ret.brakePressed = cp.vl["BRAKE_MODULE"]["BRAKE_PRESSED"] != 0
+    ret.brakePressed = self.tss3_brake_module["BRAKE_PRESSED"] != 0
     ret.gasPressed = cp.vl["GAS_PEDAL"]["GAS_PEDAL_USER"] > 0
 
     self.parse_wheel_speeds(ret,

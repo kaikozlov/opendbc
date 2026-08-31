@@ -86,6 +86,17 @@ def create_pcs_commands(packer, accel, active, mass):
   return [msg1, msg2]
 
 
+def create_tss3_brake_cancel_command(packer, stock_brake):
+  """Clone the live brake-status frame and assert only the brake-cancel switch."""
+  values = {
+    "SET_ME_1": stock_brake["SET_ME_1"],
+    "BRAKE_PRESSED": 1,
+    "BRAKE_BYTE_1": stock_brake["BRAKE_BYTE_1"],
+    "BRAKE_BYTE_3": stock_brake["BRAKE_BYTE_3"],
+  }
+  return packer.make_can_msg("BRAKE_MODULE", 2, values)
+
+
 def create_acc_cancel_command(packer):
   values = {
     "GAS_RELEASED": 0,

@@ -106,6 +106,9 @@ class CarController(CarControllerBase):
         self.secoc_prev_reset_counter = int(sync["RESET_CNT"])
 
       if self.frame % 2 == 0:
+        if CC.cruiseControl.cancel:
+          can_sends.append(toyotacan.create_tss3_brake_cancel_command(self.packer, CS.tss3_brake_module))
+
         desired_angle = CC.actuators.steeringAngleDeg + CS.out.steeringAngleOffsetDeg
         self.last_angle = apply_std_steer_angle_limits(
           desired_angle, self.last_angle, CS.out.vEgoRaw,

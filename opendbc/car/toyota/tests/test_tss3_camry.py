@@ -51,10 +51,11 @@ def update_with_frame_set(ci: CarInterface, frames: dict[int, bytes], repeats: i
   return ret
 
 
-def control(angle_deg: float, lat_active: bool = True):
+def control(angle_deg: float, lat_active: bool = True, cancel: bool = False):
   cc = structs.CarControl()
   cc.enabled = True
   cc.latActive = lat_active
+  cc.cruiseControl.cancel = cancel
   cc.actuators.steeringAngleDeg = angle_deg
   return cc.as_reader()
 
@@ -213,6 +214,17 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
     self.assertEqual((third[7] - second[7]) & 0x3F, 1)
     self.assertEqual(third[28] >> 6, 1)
 
+  def test_controller_brake_cancel_clones_stock_101(self):
+    ci = CarInterface(self.CP)
+    stock_brake = bytes.fromhex("8000000600000090")
+    update_with_frame_set(ci, CAMRY_COMMON | {
+      0x101: stock_brake,
+      0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive],
+    })
+    _, sends = ci.apply(control(1.0, cancel=True), 2_000_000_000)
+    brake_cancel = [m for m in sends if m[0] == 0x101]
+    self.assertEqual(brake_cancel, [(0x101, bytes.fromhex("8800000600000098"), 2)])
+
   def test_controller_inactive_b6_tracks_measured_angle(self):
     ci = CarInterface(self.CP)
     cs = update_with_frame_set(ci, CAMRY_COMMON | {0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]})
@@ -292,6 +304,26 @@ class TestToyotaCamryTSS3PandaSafety(unittest.TestCase):
     self.assertFalse(self.s.get_controls_allowed())
     dat = self.next_b6()
     self.assertFalse(self.s.safety_tx_hook(libsafety_py.make_CANPacket(0x0B6, 0, bytes(dat))))
+
+  def test_brake_cancel_safety_allows_only_stock_shaped_checked_frame(self):
+    good = bytes.fromhex("8800000600000098")
+    self.assertTrue(self.s.safety_tx_hook(libsafety_py.make_CANPacket(0x101, 2, good)))
+
+    brake_off = bytearray(good)
+    brake_off[0] &= ~0x08
+    brake_off[7] = (8 + 1 + 1 + sum(brake_off[:7])) & 0xFF
+    self.assertFalse(self.s.safety_tx_hook(libsafety_py.make_CANPacket(0x101, 2, bytes(brake_off))))
+
+    bad_shape = bytearray(good)
+    bad_shape[4] = 1
+    bad_shape[7] = (8 + 1 + 1 + sum(bad_shape[:7])) & 0xFF
+    self.assertFalse(self.s.safety_tx_hook(libsafety_py.make_CANPacket(0x101, 2, bytes(bad_shape))))
+
+    bad_checksum = bytearray(good)
+    bad_checksum[7] ^= 1
+    self.assertFalse(self.s.safety_tx_hook(libsafety_py.make_CANPacket(0x101, 2, bytes(bad_checksum))))
+
+    self.assertFalse(self.s.safety_tx_hook(libsafety_py.make_CANPacket(0x101, 0, good)))
 
   def test_relay_blocks_stock_b6(self):
     self.assertEqual(self.s.safety_fwd_hook(2, 0x0B6), -1)
