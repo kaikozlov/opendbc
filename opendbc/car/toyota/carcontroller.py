@@ -10,7 +10,7 @@ from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.toyota import toyotacan
 from opendbc.car.toyota.tss3 import (TSS3B6CompanionFields, TSS3B6Template, TSS3Freshness,
                                      TSS3_B6_TARGET_LATERAL_ID_INACTIVE, TSS3_B6_TARGET_LATERAL_ID_LTA_LCA,
-                                     build_b6_application, build_b6_zero_marker_frame, target_angle_deg_to_raw)
+                                     build_b6_application, build_b6_secoc_frame, target_angle_deg_to_raw)
 from opendbc.car.toyota.values import CAR, CarControllerParams, ToyotaFlags
 from opendbc.can import CANPacker
 
@@ -100,6 +100,11 @@ class CarController(CarControllerBase):
       # Follow the normal openpilot lateral contract: controlsd owns CC.latActive.
       # Toyota request-plane state does not independently arbitrate CarController.
       lat_active = CC.latActive
+      sync = CS.secoc_synchronization
+      if int(sync["RESET_CNT"]) != self.secoc_prev_reset_counter:
+        self.tss3_message_counter = 0
+        self.secoc_prev_reset_counter = int(sync["RESET_CNT"])
+
       if self.frame % 2 == 0:
         desired_angle = CC.actuators.steeringAngleDeg + CS.out.steeringAngleOffsetDeg
         self.last_angle = apply_std_steer_angle_limits(
@@ -108,7 +113,6 @@ class CarController(CarControllerBase):
           lat_active, self.params.TSS3_ANGLE_LIMITS,
         )
 
-        sync = CS.secoc_synchronization
         application = build_b6_application(
           target_lateral_id=TSS3_B6_TARGET_LATERAL_ID_LTA_LCA if lat_active else TSS3_B6_TARGET_LATERAL_ID_INACTIVE,
           target_angle_raw=target_angle_deg_to_raw(self.last_angle),
@@ -117,7 +121,7 @@ class CarController(CarControllerBase):
           companions=self.tss3_active_companions if lat_active else self.tss3_inactive_companions,
         )
         freshness = TSS3Freshness(int(sync["TRIP_CNT"]), int(sync["RESET_CNT"]), self.tss3_message_counter)
-        can_sends.append(build_b6_zero_marker_frame(application, freshness))
+        can_sends.append(build_b6_secoc_frame(self.secoc_key, application, freshness))
 
         self.tss3_sequence = (self.tss3_sequence + 1) & 0x3F
         self.tss3_message_counter = (self.tss3_message_counter + 1) & 0xFF

@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import struct
 
+from opendbc.car.secoc import add_mac_to_payload
+
 
 TSS3_B6_ADDR = 0x0B6
 TSS3_B6_LEN = 32
@@ -125,14 +127,19 @@ def build_b6_application(*, target_lateral_id: int, target_angle_raw: int, seque
   return TSS3B6Application(bytes(data), target_lateral_id, target_angle_raw, sequence)
 
 
-def build_b6_zero_marker_frame(application: TSS3B6Application, freshness: TSS3Freshness) -> tuple[int, bytes, int]:
-  """Build B6 for the exact-F33 EPS with the installed Gate-2 verification patch.
+def build_b6_secoc_frame(key: bytes, application: TSS3B6Application, freshness: TSS3Freshness) -> tuple[int, bytes, int]:
+  """Build a normal secured B6 frame for the Gate-2-patched exact-F33 EPS.
 
-  The transmitted freshness nibble remains live; only the 28 MAC bits are zero.
+  The installed receiver patch bypasses the CMAC comparison, not SecOC framing.
+  Keep the stock DataID/application/freshness/MSB28 construction and sign with
+  the configured (dummy on the patched platform) SecOC key.
   """
   if len(application.data) != TSS3_B6_APPLICATION_LEN:
     raise ValueError(f"B6 application must be {TSS3_B6_APPLICATION_LEN} bytes")
-  data = application.data + bytes.fromhex(f"{freshness.transmitted_nibble:x}0000000")
+  data = add_mac_to_payload(
+    key, freshness.trip_counter, freshness.reset_counter, freshness.message_counter,
+    TSS3_B6_ADDR, application.data,
+  )
   if len(data) != TSS3_B6_LEN:
     raise AssertionError("internal B6 payload length drift")
   return TSS3_B6_ADDR, data, 0

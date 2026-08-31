@@ -1,4 +1,8 @@
+import struct
 import unittest
+
+from Crypto.Cipher import AES
+from Crypto.Hash import CMAC
 
 from opendbc.can import CANPacker
 from opendbc.car import Bus, CanData, structs
@@ -172,11 +176,17 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
     self.assertEqual(dat[3] & 0x3F, 11)
     self.assertEqual(dat[6] & 0x04, 0)
     self.assertEqual(dat[8:10], b"\x64\x64")
-    self.assertEqual(dat[28] & 0x0F, 0)
-    self.assertEqual(dat[29:32], b"\x00\x00\x00")
+    reset_cnt = 0x145C
+    freshness = struct.pack(">HI", 0x01B2, (reset_cnt << 12) | ((reset_cnt & 0x3) << 2))
+    cmac = CMAC.new(b"00" * 16, ciphermod=AES)
+    cmac.update(b"\x00\xb6" + dat[:28] + freshness)
+    expected_mac28 = int.from_bytes(cmac.digest()[:4], "big") >> 4
+    actual_mac28 = ((dat[28] & 0x0F) << 24) | int.from_bytes(dat[29:32], "big")
+    self.assertEqual(actual_mac28, expected_mac28)
+    self.assertNotEqual(actual_mac28, 0)
     self.assertAlmostEqual(output.steeringAngleDeg, int.from_bytes(dat[4:6], "big", signed=True) * (1024 / 17870), delta=0.03)
 
-  def test_b6_sequence_and_message_counter_do_not_reset_with_00f_epoch(self):
+  def test_b6_sequence_continues_and_message_counter_resets_with_00f_epoch(self):
     ci = CarInterface(self.CP)
     update_with_frame_set(ci, CAMRY_COMMON | {0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]})
     _, sends = ci.apply(control(1.0), 2_000_000_000)
@@ -186,7 +196,7 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
     packer = CANPacker(DBC[CAR.TOYOTA_CAMRY_TSS3][Bus.pt])
     _, sync, _ = packer.make_can_msg("SECOC_SYNCHRONIZATION", 0, {
       "TRIP_CNT": 0x01B2,
-      "RESET_CNT": 0x145CE,
+      "RESET_CNT": 0x145D,
       "AUTHENTICATOR": 0x4B47D,
     })
     update_with_frame_set(ci, CAMRY_COMMON | {0x00F: sync, 0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]}, repeats=1)
@@ -194,7 +204,14 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
     second = sends[0][1]
 
     self.assertEqual((second[7] - first[7]) & 0x3F, 1)
-    self.assertEqual(((second[28] >> 6) - (first[28] >> 6)) & 0x3, 1)
+    self.assertEqual(first[28] >> 6, 0)
+    self.assertEqual(second[28] >> 6, 0)
+
+    ci.apply(control(1.0), 2_030_000_000)  # odd frame: no B6
+    _, sends = ci.apply(control(1.0), 2_040_000_000)
+    third = sends[0][1]
+    self.assertEqual((third[7] - second[7]) & 0x3F, 1)
+    self.assertEqual(third[28] >> 6, 1)
 
   def test_controller_inactive_b6_tracks_measured_angle(self):
     ci = CarInterface(self.CP)

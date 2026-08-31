@@ -4,33 +4,30 @@ from Crypto.Hash import CMAC
 from Crypto.Cipher import AES
 
 
-def add_mac(key, trip_cnt, reset_cnt, msg_cnt, msg):
-  # TODO: clean up conversion to and from hex
-
-  addr, payload, bus = msg
+def add_mac_to_payload(key, trip_cnt, reset_cnt, msg_cnt, addr, payload):
   reset_flag = reset_cnt & 0b11
   msg_cnt_flag = msg_cnt & 0b11
-  payload = payload[:4]
 
   # Step 1: Build Freshness Value (48 bits)
-  # [Trip Counter (16 bit)][[Reset Counter (20 bit)][Message Counter (8 bit)][Reset Flag (2 bit)][Padding (2 bit)]
+  # [Trip Counter (16 bit)][Reset Counter (20 bit)][Message Counter (8 bit)][Reset Flag (2 bit)][Padding (2 bit)]
   freshness_value = struct.pack('>HI', trip_cnt, (reset_cnt << 12) | ((msg_cnt & 0xff) << 4) | (reset_flag << 2))
 
-  # Step 2: Build data to authenticate (96 bits)
-  # [Message ID (16 bits)][Payload (32 bits)][Freshness Value (48 bits)]
+  # Step 2: Build DataID || application payload || full freshness.
   to_auth = struct.pack('>H', addr) + payload + freshness_value
 
-  # Step 3: Calculate CMAC (28 bit)
+  # Step 3: Calculate AES-CMAC and transmit the MSB28.
   cmac = CMAC.new(key, ciphermod=AES)
   cmac.update(to_auth)
-  mac = cmac.digest().hex()[:7] # truncated MAC
+  mac = cmac.digest().hex()[:7]
 
-  # Step 4: Build message
-  # [Payload (32 bit)][Message Counter Flag (2 bit)][Reset Flag (2 bit)][Authenticator (28 bit)]
+  # Step 4: Build FV4 || MAC28 trailer.
   msg_cnt_rst_flag = struct.pack('>B', (msg_cnt_flag << 2) | reset_flag).hex()[1]
-  msg = payload.hex() + msg_cnt_rst_flag + mac
-  payload = bytes.fromhex(msg)
+  return payload + bytes.fromhex(msg_cnt_rst_flag + mac)
 
+
+def add_mac(key, trip_cnt, reset_cnt, msg_cnt, msg):
+  addr, payload, bus = msg
+  payload = add_mac_to_payload(key, trip_cnt, reset_cnt, msg_cnt, addr, payload[:4])
   return (addr, payload, bus)
 
 
