@@ -64,6 +64,8 @@ static int toyota_dbc_eps_torque_factor = 100;   // conversion factor for STEER_
 
 static bool toyota_tss3 = false;
 
+#define TOYOTA_TSS3_TARGET_LATERAL_ID_LTA_LCA 11U
+
 
 static uint32_t toyota_compute_checksum(const CANPacket_t *msg) {
   int len = GET_LEN(msg);
@@ -262,7 +264,33 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
     return brake_cancel && stock_shape && checksum_valid;
   }
 
+  if (toyota_tss3 && (msg->addr == 0x0B6U)) {
+    static const AngleSteeringLimits TOYOTA_TSS3_ANGLE_STEERING_LIMITS = {
+      .max_angle = 1745,
+      .angle_deg_to_can = 17.451171875F,
+      .angle_rate_up_lookup = {
+        {5., 25., 25.},
+        {0.3, 0.15, 0.15}
+      },
+      .angle_rate_down_lookup = {
+        {5., 25., 25.},
+        {0.36, 0.26, 0.26}
+      },
+    };
 
+    const uint8_t target_lateral_id = msg->data[3] & 0x3FU;
+    int target_angle = (msg->data[4] << 8U) | msg->data[5];
+    target_angle = to_signed(target_angle, 16);
+    const bool steer_control_enabled = target_lateral_id == TOYOTA_TSS3_TARGET_LATERAL_ID_LTA_LCA;
+
+    if ((target_lateral_id != 0U) && !steer_control_enabled) {
+      tx = false;
+    }
+    if (steer_angle_cmd_checks(target_angle, steer_control_enabled, TOYOTA_TSS3_ANGLE_STEERING_LIMITS)) {
+      tx = false;
+    }
+    return tx;
+  }
 
   // Check if msg is sent on BUS 0
   if (msg->bus == 0U) {
@@ -450,6 +478,7 @@ static safety_config toyota_init(uint16_t param) {
   safety_config ret;
   if (toyota_tss3) {
     static const CanMsg toyota_tss3_tx_msgs[] = {
+      {0x0B6, 0, 32, .check_relay = true},
       {0x101, 2, 8, .check_relay = false},
     };
     static RxCheck toyota_tss3_rx_checks[] = {

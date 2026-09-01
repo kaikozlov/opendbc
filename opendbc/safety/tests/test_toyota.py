@@ -356,7 +356,8 @@ class TestToyotaTss3ForwardingSafety(unittest.TestCase):
   def test_08a_is_not_a_tss3_tx_object(self):
     self.safety.set_controls_allowed(True)
     self.assertFalse(self._tx(common.make_msg(0, 0x08A, 32)))
-    self.assertFalse(self._tx(common.make_msg(0, 0x0B6, 32)))
+    self.assertTrue(self._tx(common.make_msg(0, 0x0B6, 32)))
+    self.assertEqual(-1, self.safety.safety_fwd_hook(2, 0x0B6))
 
   def test_stock_08a_does_not_trigger_relay_malfunction(self):
     self.assertFalse(self.safety.get_relay_malfunction())

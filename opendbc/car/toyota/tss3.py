@@ -127,6 +127,18 @@ def build_b6_application(*, target_lateral_id: int, target_angle_raw: int, seque
   return TSS3B6Application(bytes(data), target_lateral_id, target_angle_raw, sequence)
 
 
+def build_b6_zero_marker_frame(application: TSS3B6Application, freshness: TSS3Freshness) -> tuple[int, bytes, int]:
+  """Build B6 for exact-F33 with the installed Gate-2 development patch.
+
+  Preserve the live transmitted FV4 nibble while forcing only the 28 MAC bits to zero.
+  """
+  if len(application.data) != TSS3_B6_APPLICATION_LEN:
+    raise ValueError(f"B6 application must be {TSS3_B6_APPLICATION_LEN} bytes")
+  data = application.data + bytes.fromhex(f"{freshness.transmitted_nibble:x}0000000")
+  if len(data) != TSS3_B6_LEN:
+    raise AssertionError("internal B6 payload length drift")
+  return TSS3_B6_ADDR, data, 0
+
 def build_b6_secoc_frame(key: bytes, application: TSS3B6Application, freshness: TSS3Freshness) -> tuple[int, bytes, int]:
   """Build a normal secured B6 frame for the Gate-2-patched exact-F33 EPS.
 

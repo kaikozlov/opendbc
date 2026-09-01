@@ -173,12 +173,45 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
     self.assertFalse(cs.steerFaultTemporary)
     self.assertFalse(cs.steerFaultPermanent)
 
-  def test_controller_does_not_emit_lateral_request(self):
+  def test_controller_sends_clean_b6_like_a_normal_angle_port(self):
     ci = CarInterface(self.CP)
     update_with_frame_set(ci, CAMRY_COMMON | {0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]})
     output, sends = ci.apply(control(5.0), 2_000_000_000)
-    self.assertEqual(sends, [])
-    self.assertAlmostEqual(output.steeringAngleDeg, 5.0)
+    self.assertEqual(len(sends), 1)
+    addr, dat, bus = sends[0]
+    self.assertEqual((addr, bus, len(dat)), (0x0B6, 0, 32))
+    self.assertEqual(dat[3] & 0x3F, 11)
+    self.assertEqual(dat[6] & 0x04, 0)
+    self.assertEqual(dat[8:10], b"\x64\x64")
+    self.assertEqual(int.from_bytes(dat[28:32], "big") & 0x0FFFFFFF, 0)
+    self.assertAlmostEqual(output.steeringAngleDeg,
+                           int.from_bytes(dat[4:6], "big", signed=True) * (1024 / 17870), delta=0.03)
+    self.assertFalse(any(addr == 0x08A for addr, _, _ in sends))
+
+  def test_controller_inactive_b6_tracks_measured_angle(self):
+    ci = CarInterface(self.CP)
+    cs = update_with_frame_set(ci, CAMRY_COMMON | {0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]})
+    _, sends = ci.apply(control(20.0, lat_active=False), 2_000_000_000)
+    dat = next(dat for addr, dat, bus in sends if addr == 0x0B6 and bus == 0)
+    self.assertEqual(dat[3] & 0x3F, 0)
+    self.assertEqual(dat[6] & 0x04, 0x04)
+    self.assertEqual(dat[8:10], b"\x00\x00")
+    commanded_deg = int.from_bytes(dat[4:6], "big", signed=True) * (1024 / 17870)
+    self.assertAlmostEqual(commanded_deg, cs.steeringAngleDeg, delta=0.12)
+
+  def test_b6_sequence_and_zero_marker_freshness_progress(self):
+    ci = CarInterface(self.CP)
+    update_with_frame_set(ci, CAMRY_COMMON | {0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]})
+    _, sends = ci.apply(control(1.0), 2_000_000_000)
+    first = next(dat for addr, dat, bus in sends if addr == 0x0B6 and bus == 0)
+    ci.apply(control(1.0), 2_010_000_000)
+    _, sends = ci.apply(control(1.0), 2_020_000_000)
+    second = next(dat for addr, dat, bus in sends if addr == 0x0B6 and bus == 0)
+
+    self.assertEqual((second[7] - first[7]) & 0x3F, 1)
+    self.assertEqual(((second[28] >> 6) - (first[28] >> 6)) & 0x3, 1)
+    self.assertEqual(int.from_bytes(first[28:32], "big") & 0x0FFFFFFF, 0)
+    self.assertEqual(int.from_bytes(second[28:32], "big") & 0x0FFFFFFF, 0)
 
   def test_controller_brake_cancel_clones_stock_101(self):
     ci = CarInterface(self.CP)
@@ -211,8 +244,49 @@ class TestToyotaCamryTSS3PandaSafety(unittest.TestCase):
   def test_08a_is_not_a_camry_tx_object(self):
     self.assertFalse(self.s.safety_tx_hook(libsafety_py.make_CANPacket(0x08A, 0, CAMRY_COMMON[0x08A])))
 
-  def test_b6_is_not_a_camry_tx_object(self):
-    self.assertFalse(self.s.safety_tx_hook(libsafety_py.make_CANPacket(0x0B6, 0, bytes(32))))
+  def next_b6(self, angle=1.0, active=True):
+    _, sends = self.ci.apply(control(angle, active), 2_000_000_000)
+    if not any(addr == 0x0B6 for addr, _, _ in sends):
+      _, sends = self.ci.apply(control(angle, active), 2_010_000_000)
+    return bytearray(next(dat for addr, dat, bus in sends if addr == 0x0B6 and bus == 0))
+
+  def reset_safety(self, controls=True):
+    self.s.init_tests()
+    for addr in (0x025, 0x030, 0x0AA, 0x116, 0x101, 0x00F):
+      self.s.safety_rx_hook(libsafety_py.make_CANPacket(addr, 0, CAMRY_COMMON[addr]))
+    a8 = CAMRY_COMMON[0x08A]
+    if not controls:
+      off = bytearray(a8)
+      off[3] &= ~0x08
+      a8 = bytes(off)
+    self.s.safety_rx_hook(libsafety_py.make_CANPacket(0x08A, 2, a8))
+
+  def test_normal_angle_safety_accepts_controller_b6(self):
+    dat = self.next_b6()
+    self.assertTrue(self.s.safety_tx_hook(libsafety_py.make_CANPacket(0x0B6, 0, bytes(dat))))
+
+  def test_b6_safety_rejects_wrong_mode_overangle_and_controls_off(self):
+    dat = self.next_b6()
+    bad_mode = bytearray(dat)
+    bad_mode[3] = (bad_mode[3] & 0xC0) | 4
+    self.assertFalse(self.s.safety_tx_hook(libsafety_py.make_CANPacket(0x0B6, 0, bytes(bad_mode))))
+
+    self.reset_safety()
+    overangle = bytearray(self.next_b6())
+    overangle[4:6] = (1746).to_bytes(2, "big", signed=True)
+    self.assertFalse(self.s.safety_tx_hook(libsafety_py.make_CANPacket(0x0B6, 0, bytes(overangle))))
+
+    self.reset_safety(controls=False)
+    self.assertFalse(self.s.get_controls_allowed())
+    dat = self.next_b6()
+    self.assertFalse(self.s.safety_tx_hook(libsafety_py.make_CANPacket(0x0B6, 0, bytes(dat))))
+
+  def test_b6_safety_does_not_promote_companion_fields_to_policy(self):
+    dat = self.next_b6()
+    dat[8] = 0
+    dat[9] = 0
+    dat[6] ^= 0x04
+    self.assertTrue(self.s.safety_tx_hook(libsafety_py.make_CANPacket(0x0B6, 0, bytes(dat))))
 
   def test_stock_acc_owns_controls_allowed(self):
     off = bytearray(CAMRY_COMMON[0x08A])
@@ -241,9 +315,9 @@ class TestToyotaCamryTSS3PandaSafety(unittest.TestCase):
 
     self.assertFalse(self.s.safety_tx_hook(libsafety_py.make_CANPacket(0x101, 0, good)))
 
-  def test_relay_forwards_stock_08a_and_b6(self):
+  def test_relay_forwards_stock_08a_and_blocks_stock_b6_replacement(self):
     self.assertEqual(self.s.safety_fwd_hook(2, 0x08A), 0)
-    self.assertEqual(self.s.safety_fwd_hook(2, 0x0B6), 0)
+    self.assertEqual(self.s.safety_fwd_hook(2, 0x0B6), -1)
 
 
 if __name__ == "__main__":

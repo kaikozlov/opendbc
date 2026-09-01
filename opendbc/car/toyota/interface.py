@@ -34,8 +34,8 @@ class CarInterface(CarInterfaceBase):
       ret.centerToFront = ret.wheelbase * 0.44
 
       if candidate == CAR.TOYOTA_CAMRY_TSS3:
-        # Keep the Camry platform definition active for passive state decoding and
-        # stock-ACC cancel; lateral request transmission is intentionally disabled.
+        # Exact-F33 Camry uses the normal angle-control path over protected B6 while
+        # Toyota retains longitudinal control; 0x08A remains read-only request state.
         ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.toyota)]
         ret.safetyConfigs[0].safetyParam = EPS_SCALE[candidate] | ToyotaSafetyFlags.STOCK_LONGITUDINAL.value | ToyotaSafetyFlags.TSS3.value
         ret.dashcamOnly = False

@@ -8,6 +8,9 @@ from opendbc.car.common.pid import PIDController
 from opendbc.car.secoc import add_mac, build_sync_mac
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.toyota import toyotacan
+from opendbc.car.toyota.tss3 import (TSS3B6CompanionFields, TSS3B6Template, TSS3Freshness,
+                                     TSS3_B6_TARGET_LATERAL_ID_INACTIVE, TSS3_B6_TARGET_LATERAL_ID_LTA_LCA,
+                                     build_b6_application, build_b6_zero_marker_frame, target_angle_deg_to_raw)
 from opendbc.car.toyota.values import CAR, CarControllerParams, ToyotaFlags
 from opendbc.can import CANPacker
 
@@ -75,6 +78,15 @@ class CarController(CarControllerBase):
     self.secoc_acc_message_counter = 0
     self.secoc_prev_reset_counter = 0
 
+    # Exact-F33 B6 message construction state. Panda owns steering safety.
+    self.tss3_template = TSS3B6Template()
+    self.tss3_active_companions = TSS3B6CompanionFields(
+      additive_term_suppress=0, contribution_pct_1=100, contribution_pct_2=100,
+    )
+    self.tss3_inactive_companions = TSS3B6CompanionFields()
+    self.tss3_sequence = 0
+    self.tss3_message_counter = 0
+
   def update(self, CC, CS, now_nanos):
     if self.CP.flags & ToyotaFlags.TSS3:
       if self.CP.carFingerprint != CAR.TOYOTA_CAMRY_TSS3:
@@ -84,11 +96,34 @@ class CarController(CarControllerBase):
       can_sends = []
       output = CC.actuators.as_builder()
 
-      # Keep TSS3 lateral passive until the stock authority path is identified.
-      # The OEM 0x08A request remains visible to CarState and is forwarded unchanged
-      # by Panda; CarController must not synthesize a replacement.
-      if self.frame % 2 == 0 and CC.cruiseControl.cancel:
-        can_sends.append(toyotacan.create_tss3_brake_cancel_command(self.packer, CS.tss3_brake_module))
+      # Follow the normal openpilot lateral contract: controlsd owns CC.latActive.
+      # 0x08A remains a stock request-plane observation and is never synthesized here.
+      lat_active = CC.latActive
+      if self.frame % 2 == 0:
+        if CC.cruiseControl.cancel:
+          can_sends.append(toyotacan.create_tss3_brake_cancel_command(self.packer, CS.tss3_brake_module))
+
+        desired_angle = CC.actuators.steeringAngleDeg + CS.out.steeringAngleOffsetDeg
+        self.last_angle = apply_std_steer_angle_limits(
+          desired_angle, self.last_angle, CS.out.vEgoRaw,
+          CS.out.steeringAngleDeg + CS.out.steeringAngleOffsetDeg,
+          lat_active, self.params.TSS3_ANGLE_LIMITS,
+        )
+
+        sync = CS.secoc_synchronization
+        application = build_b6_application(
+          target_lateral_id=TSS3_B6_TARGET_LATERAL_ID_LTA_LCA if lat_active else TSS3_B6_TARGET_LATERAL_ID_INACTIVE,
+          target_angle_raw=target_angle_deg_to_raw(self.last_angle),
+          sequence=self.tss3_sequence,
+          template=self.tss3_template,
+          companions=self.tss3_active_companions if lat_active else self.tss3_inactive_companions,
+        )
+        freshness = TSS3Freshness(int(sync["TRIP_CNT"]), int(sync["RESET_CNT"]), self.tss3_message_counter)
+        can_sends.append(build_b6_zero_marker_frame(application, freshness))
+
+        self.tss3_sequence = (self.tss3_sequence + 1) & 0x3F
+        self.tss3_message_counter = (self.tss3_message_counter + 1) & 0xFF
+        output.steeringAngleDeg = self.last_angle
 
       self.frame += 1
       return output, can_sends
