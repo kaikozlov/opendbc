@@ -34,9 +34,9 @@ class CarInterface(CarInterfaceBase):
       ret.centerToFront = ret.wheelbase * 0.44
 
       if candidate == CAR.TOYOTA_CAMRY_TSS3:
-        # Exact F33 uses the normal Toyota angle-control architecture. The local
-        # EPS Gate-2 patch makes B6 authentication keyless for this platform, so
-        # no SecOC-key availability state is involved in openpilot engagement.
+        # Exact Camry uses the normal Toyota angle-control architecture. The
+        # deployed development SecOC patch makes the replacement 0x08A path
+        # independent of SecOC-key availability for openpilot engagement.
         ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.toyota)]
         ret.safetyConfigs[0].safetyParam = EPS_SCALE[candidate] | ToyotaSafetyFlags.STOCK_LONGITUDINAL.value | ToyotaSafetyFlags.TSS3.value
         ret.dashcamOnly = False

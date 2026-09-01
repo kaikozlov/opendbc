@@ -52,6 +52,7 @@ class CarState(CarStateBase):
     self.gvc = 0.0
     self.secoc_synchronization = None
     self.tss3_brake_module = None
+    self.tss3_lateral_request = None
 
   def _update_tss3(self, cp: CANParser, cp_cam: CANParser) -> structs.CarState:
     ret = structs.CarState()
@@ -132,11 +133,12 @@ class CarState(CarStateBase):
 
     if self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:
       lateral = cp_cam
-      ret.cruiseState.enabled = bool(lateral.vl["TSS3_LATERAL_REQUEST"]["CRUISE_OPERATING_LATCH"])
+      self.tss3_lateral_request = copy.copy(lateral.vl["TSS3_LATERAL_REQUEST"])
+      ret.cruiseState.enabled = bool(self.tss3_lateral_request["CRUISE_OPERATING_LATCH"])
       # The retained Camry drives prove this latch follows actual MAIN activation
       # and CANCEL. No distinct TSS3 standby/main-only carrier is recovered yet.
       ret.cruiseState.available = ret.cruiseState.enabled
-      set_speed_kph = float(lateral.vl["TSS3_LATERAL_REQUEST"]["SET_SPEED"])
+      set_speed_kph = float(self.tss3_lateral_request["SET_SPEED"])
       ret.cruiseState.speed = set_speed_kph * CV.KPH_TO_MS if set_speed_kph > 0 else 0.0
       cluster_set_speed = float(lateral.vl["TSS3_CRUISE_DISPLAY"]["UI_SET_SPEED"])
       is_metric = cp.vl["BODY_CONTROL_STATE_2"]["UNITS"] in (1, 2)
@@ -332,7 +334,7 @@ class CarState(CarStateBase):
       parsers = {Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, pt_bus)}
       if CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:
         # The Toyota-B relay isolates the FRC side on Panda bus 2. Read the
-        # native request there; bus 0 carries vehicle/EPS state and B6 output.
+        # native request there; bus 0 carries vehicle/EPS state and the replacement 0x08A output.
         parsers[Bus.cam] = CANParser(DBC[CP.carFingerprint][Bus.pt], [
           ("TSS3_LATERAL_REQUEST", 83),
           ("TSS3_CRUISE_DISPLAY", 1),

@@ -5,12 +5,9 @@ from opendbc.car.lateral import apply_meas_steer_torque_limits, apply_std_steer_
 from opendbc.car.carlog import carlog
 from opendbc.car.common.filter_simple import FirstOrderFilter, HighPassFilter
 from opendbc.car.common.pid import PIDController
-from opendbc.car.secoc import add_mac, build_sync_mac
+from opendbc.car.secoc import add_mac, add_mac_to_payload, build_sync_mac
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.toyota import toyotacan
-from opendbc.car.toyota.tss3 import (TSS3B6CompanionFields, TSS3B6Template, TSS3Freshness,
-                                     TSS3_B6_TARGET_LATERAL_ID_INACTIVE, TSS3_B6_TARGET_LATERAL_ID_LTA_LCA,
-                                     build_b6_application, build_b6_secoc_frame, target_angle_deg_to_raw)
 from opendbc.car.toyota.values import CAR, CarControllerParams, ToyotaFlags
 from opendbc.can import CANPacker
 
@@ -78,15 +75,9 @@ class CarController(CarControllerBase):
     self.secoc_acc_message_counter = 0
     self.secoc_prev_reset_counter = 0
 
-    # Exact-F33 B6 protocol state. This is message construction state only;
-    # Panda remains the sole steering-safety authority.
-    self.tss3_template = TSS3B6Template()
-    self.tss3_active_companions = TSS3B6CompanionFields(
-      additive_term_suppress=0, contribution_pct_1=100, contribution_pct_2=100,
-    )
-    self.tss3_inactive_companions = TSS3B6CompanionFields()
-    self.tss3_sequence = 0
-    self.tss3_message_counter = 0
+    # Camry TSS3 replaces the stock 0x08A request at the relay boundary. Track
+    # the upstream sequence so each OEM publication produces exactly one replacement.
+    self.tss3_last_stock_sequence = None
 
   def update(self, CC, CS, now_nanos):
     if self.CP.flags & ToyotaFlags.TSS3:
@@ -98,37 +89,53 @@ class CarController(CarControllerBase):
       output = CC.actuators.as_builder()
 
       # Follow the normal openpilot lateral contract: controlsd owns CC.latActive.
-      # Toyota request-plane state does not independently arbitrate CarController.
       lat_active = CC.latActive
       sync = CS.secoc_synchronization
-      if int(sync["RESET_CNT"]) != self.secoc_prev_reset_counter:
-        self.tss3_message_counter = 0
-        self.secoc_prev_reset_counter = int(sync["RESET_CNT"])
 
-      if self.frame % 2 == 0:
-        if CC.cruiseControl.cancel:
-          can_sends.append(toyotacan.create_tss3_brake_cancel_command(self.packer, CS.tss3_brake_module))
+      if self.frame % 2 == 0 and CC.cruiseControl.cancel:
+        can_sends.append(toyotacan.create_tss3_brake_cancel_command(self.packer, CS.tss3_brake_module))
 
-        desired_angle = CC.actuators.steeringAngleDeg + CS.out.steeringAngleOffsetDeg
-        self.last_angle = apply_std_steer_angle_limits(
-          desired_angle, self.last_angle, CS.out.vEgoRaw,
-          CS.out.steeringAngleDeg + CS.out.steeringAngleOffsetDeg,
-          lat_active, self.params.TSS3_ANGLE_LIMITS,
-        )
+      stock_request = CS.tss3_lateral_request
+      if stock_request is not None:
+        stock_sequence = int(stock_request["SEQUENCE"])
+        if stock_sequence != self.tss3_last_stock_sequence:
+          desired_angle = CC.actuators.steeringAngleDeg + CS.out.steeringAngleOffsetDeg
+          measured_angle = CS.out.steeringAngleDeg + CS.out.steeringAngleOffsetDeg
+          self.last_angle = apply_std_steer_angle_limits(
+            desired_angle, self.last_angle, CS.out.vEgoRaw, measured_angle,
+            lat_active, self.params.TSS3_ANGLE_LIMITS,
+          )
 
-        application = build_b6_application(
-          target_lateral_id=TSS3_B6_TARGET_LATERAL_ID_LTA_LCA if lat_active else TSS3_B6_TARGET_LATERAL_ID_INACTIVE,
-          target_angle_raw=target_angle_deg_to_raw(self.last_angle),
-          sequence=self.tss3_sequence,
-          template=self.tss3_template,
-          companions=self.tss3_active_companions if lat_active else self.tss3_inactive_companions,
-        )
-        freshness = TSS3Freshness(int(sync["TRIP_CNT"]), int(sync["RESET_CNT"]), self.tss3_message_counter)
-        can_sends.append(build_b6_secoc_frame(self.secoc_key, application, freshness))
+          values = dict(stock_request)
+          values.update({
+            "TARGET_LATERAL_ID": 11 if lat_active else 0,
+            "LATERAL_REQUEST_ANGLE": self.last_angle if lat_active else measured_angle,
+          })
+          if lat_active:
+            # Every retained ID11 request has these stock companion values. ID0
+            # legitimately retains them in some stock states, so leave them cloned
+            # from the live frame when lateral control is inactive.
+            values.update({
+              "LATERAL_REQUEST_ACTIVE_FLAG": 1,
+              "CRUISE_STATE_B22": 1,
+              "LATERAL_REQUEST_LEVEL": 100,
+            })
+          _, packed, _ = self.packer.make_can_msg("TSS3_LATERAL_REQUEST", 0, values)
 
-        self.tss3_sequence = (self.tss3_sequence + 1) & 0x3F
-        self.tss3_message_counter = (self.tss3_message_counter + 1) & 0xFF
-        output.steeringAngleDeg = self.last_angle
+          # Anchor freshness to the stock publication we are replacing. The deployed
+          # development SecOC patch handles authentication; preserving the live FV4
+          # progression keeps the replacement in the OEM request cadence/state machine.
+          reset_count = (int(sync["RESET_CNT"]) & ~0x3) | (int(stock_request["FRESHNESS_RESET_LSB2"]) & 0x3)
+          message_count = int(stock_request["FRESHNESS_MESSAGE_LSB2"]) & 0x3
+          data = add_mac_to_payload(
+            self.secoc_key, int(sync["TRIP_CNT"]), reset_count, message_count, 0x08A, packed[:28],
+          )
+          can_sends.append((0x08A, data, 0))
+          self.tss3_last_stock_sequence = stock_sequence
+          output.steeringAngleDeg = self.last_angle
+
+          # If the first steering attempt causes a system fault, 0x081 may be a
+          # chassis->upstream result/echo consistency path that also needs replacement.
 
       self.frame += 1
       return output, can_sends

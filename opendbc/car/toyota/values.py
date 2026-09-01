@@ -33,8 +33,8 @@ class CarControllerParams:
     ([5, 25], [0.36, 0.26]),
   )
 
-  # Exact F33 B6 ID11 uses the same normal Toyota angle-control shaping with
-  # its target-native +/-1745 raw (~100 deg) command envelope.
+  # Exact Camry 0x08A ID11 uses the normal Toyota angle-control shaping with
+  # the recovered +/-1745 raw (~100 deg) request envelope.
   TSS3_ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(
     1745 * (1024 / 17870),
     ([5, 25], [0.3, 0.15]),
