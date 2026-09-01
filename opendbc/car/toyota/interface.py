@@ -34,9 +34,8 @@ class CarInterface(CarInterfaceBase):
       ret.centerToFront = ret.wheelbase * 0.44
 
       if candidate == CAR.TOYOTA_CAMRY_TSS3:
-        # Exact Camry uses the normal Toyota angle-control architecture. The
-        # deployed development SecOC patch makes the replacement 0x08A path
-        # independent of SecOC-key availability for openpilot engagement.
+        # Keep the Camry platform definition active for passive state decoding and
+        # stock-ACC cancel; lateral request transmission is intentionally disabled.
         ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.toyota)]
         ret.safetyConfigs[0].safetyParam = EPS_SCALE[candidate] | ToyotaSafetyFlags.STOCK_LONGITUDINAL.value | ToyotaSafetyFlags.TSS3.value
         ret.dashcamOnly = False

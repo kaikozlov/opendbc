@@ -344,50 +344,25 @@ class TestToyotaTss3ForwardingSafety(unittest.TestCase):
   def _tx(self, msg):
     return self.safety.safety_tx_hook(msg)
 
-  def _08a_msg(self, active=False):
-    dat = bytearray(32)
-    if active:
-      dat[4] = 0x80
-      dat[21] = 11
-      dat[22] = 0x10
-      dat[24] = 100
-    return common.make_msg(0, 0x08A, 32, bytes(dat))
-
-  def test_stock_lateral_request_is_blocked(self):
-    self.assertEqual(-1, self.safety.safety_fwd_hook(2, 0x08A))
+  def test_stock_lateral_request_is_forwarded(self):
+    self.assertEqual(0, self.safety.safety_fwd_hook(2, 0x08A))
+    self.assertEqual(2, self.safety.safety_fwd_hook(0, 0x08A))
 
   def test_other_tss3_traffic_is_forwarded(self):
     self.assertEqual(2, self.safety.safety_fwd_hook(0, 0x081))
     self.assertEqual(0, self.safety.safety_fwd_hook(2, 0x081))
     self.assertEqual(0, self.safety.safety_fwd_hook(2, 0x251))
-    self.assertEqual(2, self.safety.safety_fwd_hook(0, 0x08A))
 
-  def test_non_tss3_stock_lateral_request_is_forwarded(self):
-    self.safety.set_safety_hooks(CarParams.SafetyModel.toyota, 0)
-    self.safety.init_tests()
+  def test_08a_is_not_a_tss3_tx_object(self):
+    self.safety.set_controls_allowed(True)
+    self.assertFalse(self._tx(common.make_msg(0, 0x08A, 32)))
+    self.assertFalse(self._tx(common.make_msg(0, 0x0B6, 32)))
 
-    self.assertEqual(0, self.safety.safety_fwd_hook(2, 0x08A))
-
-  def test_stock_lateral_request_on_chassis_bus_triggers_relay_malfunction(self):
+  def test_stock_08a_does_not_trigger_relay_malfunction(self):
     self.assertFalse(self.safety.get_relay_malfunction())
     self._rx(common.make_msg(0, 0x08A, 32))
-    self.assertTrue(self.safety.get_relay_malfunction())
-
-  def test_upstream_stock_lateral_request_does_not_trigger_relay_malfunction(self):
     self._rx(common.make_msg(2, 0x08A, 32))
     self.assertFalse(self.safety.get_relay_malfunction())
-
-  def test_relay_malfunction_blocks_08a_transmission(self):
-    self.assertTrue(self._tx(self._08a_msg()))
-
-    self.safety.set_relay_malfunction(True)
-    self.assertFalse(self._tx(self._08a_msg()))
-    self.assertEqual(-1, self.safety.safety_fwd_hook(2, 0x08A))
-
-  def test_08a_is_the_tss3_lateral_tx_object(self):
-    self.safety.set_controls_allowed(True)
-    self.assertTrue(self._tx(self._08a_msg(active=True)))
-    self.assertFalse(self._tx(common.make_msg(0, 0x0B6, 32)))
 
 
 class TestToyotaSecOcSafetyBase(TestToyotaSafetyBase):
