@@ -111,6 +111,10 @@ class CarController(CarControllerBase):
         )
 
         sync = CS.secoc_synchronization
+        reset_counter = int(sync["RESET_CNT"])
+        if reset_counter != self.secoc_prev_reset_counter:
+          self.tss3_message_counter = 0
+          self.secoc_prev_reset_counter = reset_counter
         application = build_b6_application(
           target_lateral_id=TSS3_B6_TARGET_LATERAL_ID_LTA_LCA if lat_active else TSS3_B6_TARGET_LATERAL_ID_INACTIVE,
           target_angle_raw=target_angle_deg_to_raw(self.last_angle),
@@ -118,7 +122,7 @@ class CarController(CarControllerBase):
           template=self.tss3_template,
           companions=self.tss3_active_companions if lat_active else self.tss3_inactive_companions,
         )
-        freshness = TSS3Freshness(int(sync["TRIP_CNT"]), int(sync["RESET_CNT"]), self.tss3_message_counter)
+        freshness = TSS3Freshness(int(sync["TRIP_CNT"]), reset_counter, self.tss3_message_counter)
         can_sends.append(build_b6_zero_marker_frame(application, freshness))
 
         self.tss3_sequence = (self.tss3_sequence + 1) & 0x3F

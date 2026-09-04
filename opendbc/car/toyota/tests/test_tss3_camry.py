@@ -213,6 +213,31 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
     self.assertEqual(int.from_bytes(first[28:32], "big") & 0x0FFFFFFF, 0)
     self.assertEqual(int.from_bytes(second[28:32], "big") & 0x0FFFFFFF, 0)
 
+  def test_b6_freshness_counter_reanchors_on_sync_reset(self):
+    ci = CarInterface(self.CP)
+    base = CAMRY_COMMON | {0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]}
+    update_with_frame_set(ci, base)
+    _, sends = ci.apply(control(1.0), 2_000_000_000)
+    first = next(dat for addr, dat, bus in sends if addr == 0x0B6 and bus == 0)
+    ci.apply(control(1.0), 2_010_000_000)
+    _, sends = ci.apply(control(1.0), 2_020_000_000)
+    second = next(dat for addr, dat, bus in sends if addr == 0x0B6 and bus == 0)
+
+    sync = bytearray(CAMRY_COMMON[0x00F])
+    reset = (sync[2] << 12) | (sync[3] << 4) | (sync[4] >> 4)
+    reset = (reset + 1) & 0xFFFFF
+    sync[2] = (reset >> 12) & 0xFF
+    sync[3] = (reset >> 4) & 0xFF
+    sync[4] = (sync[4] & 0x0F) | ((reset & 0x0F) << 4)
+    update_with_frame_set(ci, base | {0x00F: bytes(sync)}, repeats=1)
+    ci.apply(control(1.0), 2_030_000_000)
+    _, sends = ci.apply(control(1.0), 2_040_000_000)
+    reanchored = next(dat for addr, dat, bus in sends if addr == 0x0B6 and bus == 0)
+
+    self.assertEqual((first[28] >> 6, second[28] >> 6), (0, 1))
+    self.assertEqual(reanchored[28] >> 6, 0)
+    self.assertEqual((reanchored[28] >> 4) & 0x3, reset & 0x3)
+
   def test_controller_brake_cancel_clones_stock_101(self):
     ci = CarInterface(self.CP)
     stock_brake = bytes.fromhex("8000000600000090")
