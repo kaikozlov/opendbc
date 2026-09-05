@@ -193,6 +193,34 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
     cs = update_with_frame_set(ci, base | {0x030: eps_msg(2.0), 0x0AA: wheel_fault})
     self.assertTrue(cs.vehicleSensorsInvalid)
 
+  def test_carstate_replays_real_september_2026_0904_eps_frames(self):
+    """Real 0x030 wire bytes from the 2026-09-04 highway corpus (VAR-125).
+
+    Frames are native bus-0 captures from routes 0000003d--0e812cecba
+    segments 1/2/0; expected N.m values are the exact-F33 packer geometry
+    decode (B8 coarse 0.1 + B17[3:0] fine 0.01), independently derived in the
+    analysis repo reducer, not from this parser. The revision that produced
+    those routes hardcoded steeringPressed=False on every sample, which made
+    DesireHelper lane-change entry impossible; this pins the fixed behavior
+    against the original wire bytes.
+    """
+    ci = CarInterface(self.CP)
+    base = CAMRY_COMMON | {0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]}
+    real_frames = (
+      # positive ~driver torque: coarse 42, fine +3 -> 4.23 N.m, valid
+      ("2a000013610142192a13601fb6400206020300001fb61b6c00000000edee2c5a", 4.23, True, False),
+      # negative driver torque: coarse -29, fine +4 -> -2.86 N.m, valid
+      ("e4000001d4e4d2a7e301d002ff40d4f90204000002ffeec200000000a8645038", -2.86, True, False),
+      # DRIVER_TORQUE_INVALID (B6[0]) asserted with EPS_STATUS_B6_BIT3
+      ("00000000000009410000080000120000000000010000fff50000000054b9bac6", 0.0, False, True),
+    )
+    for hexdat, torque, pressed, invalid in real_frames:
+      with self.subTest(torque=torque):
+        cs = update_with_frame_set(ci, base | {0x030: bytes.fromhex(hexdat)})
+        self.assertAlmostEqual(cs.steeringTorque, torque, places=2)
+        self.assertEqual(cs.steeringPressed, pressed)
+        self.assertEqual(cs.vehicleSensorsInvalid, invalid)
+
   def test_controller_sends_clean_b6_like_a_normal_angle_port(self):
     ci = CarInterface(self.CP)
     update_with_frame_set(ci, CAMRY_COMMON | {0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]})
