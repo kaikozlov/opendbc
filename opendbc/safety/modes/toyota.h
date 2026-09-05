@@ -132,10 +132,7 @@ static void toyota_rx_hook(const CANPacket_t *msg) {
     if ((msg->bus == 2U) && (msg->addr == 0x8AU)) {
       pcm_cruise_check(GET_BIT(msg, 27U));
     }
-    return;
-  }
-
-  if (msg->bus == 0U) {
+  } else if (msg->bus == 0U) {
 
     // get eps motor torque (0.66 factor in dbc)
     if (msg->addr == 0x260U) {
@@ -208,6 +205,8 @@ static void toyota_rx_hook(const CANPacket_t *msg) {
 
       UPDATE_VEHICLE_SPEED(speed / 4.0 * 0.01 * KPH_TO_MS);
     }
+  } else {
+    // Non-TSS3 Toyota state is consumed only from bus 0.
   }
 }
 
@@ -261,10 +260,8 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
     const bool stock_shape = (msg->data[0] == 0x88U) && (msg->data[2] == 0U) &&
                              (msg->data[4] == 0U) && (msg->data[5] == 0U) && (msg->data[6] == 0U);
     const bool checksum_valid = msg->data[7] == toyota_compute_checksum(msg);
-    return brake_cancel && stock_shape && checksum_valid;
-  }
-
-  if (toyota_tss3 && (msg->addr == 0x0B6U)) {
+    tx = brake_cancel && stock_shape && checksum_valid;
+  } else if (toyota_tss3 && (msg->addr == 0x0B6U)) {
     static const AngleSteeringLimits TOYOTA_TSS3_ANGLE_STEERING_LIMITS = {
       .max_angle = 1745,
       .angle_deg_to_can = 17.451171875F,
@@ -289,11 +286,9 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
     if (steer_angle_cmd_checks(target_angle, steer_control_enabled, TOYOTA_TSS3_ANGLE_STEERING_LIMITS)) {
       tx = false;
     }
-    return tx;
-  }
-
-  // Check if msg is sent on BUS 0
-  if (msg->bus == 0U) {
+  } else {
+    // Check if msg is sent on BUS 0
+    if (msg->bus == 0U) {
     // ACCEL: safety check on byte 1-2
     if (msg->addr == 0x343U) {
       int desired_accel = (msg->data[0] << 8) | msg->data[1];
@@ -401,29 +396,30 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
     }
 
     // STEER: safety check on bytes 2-3
-    if (msg->addr == 0x2E4U) {
-      int desired_torque = (msg->data[1] << 8) | msg->data[2];
-      desired_torque = to_signed(desired_torque, 16);
-      bool steer_req = GET_BIT(msg, 0U);
-      // When using LTA (angle control), assert no actuation on LKA message
-      if (!toyota_lta) {
-        if (steer_torque_cmd_checks(desired_torque, steer_req, TOYOTA_TORQUE_STEERING_LIMITS)) {
-          tx = false;
-        }
-      } else {
-        if ((desired_torque != 0) || steer_req) {
-          tx = false;
+      if (msg->addr == 0x2E4U) {
+        int desired_torque = (msg->data[1] << 8) | msg->data[2];
+        desired_torque = to_signed(desired_torque, 16);
+        bool steer_req = GET_BIT(msg, 0U);
+        // When using LTA (angle control), assert no actuation on LKA message
+        if (!toyota_lta) {
+          if (steer_torque_cmd_checks(desired_torque, steer_req, TOYOTA_TORQUE_STEERING_LIMITS)) {
+            tx = false;
+          }
+        } else {
+          if ((desired_torque != 0) || steer_req) {
+            tx = false;
+          }
         }
       }
     }
-  }
 
-  // UDS: Only tester present ("\x0F\x02\x3E\x00\x00\x00\x00\x00") allowed on diagnostics address
-  if (msg->addr == 0x750U) {
-    // this address is sub-addressed. only allow tester present to radar (0xF)
-    bool invalid_uds_msg = (GET_BYTES(msg, 0, 4) != 0x003E020FU) || (GET_BYTES(msg, 4, 4) != 0x0U);
-    if (invalid_uds_msg) {
-      tx = false;
+    // UDS: Only tester present ("\x0F\x02\x3E\x00\x00\x00\x00\x00") allowed on diagnostics address
+    if (msg->addr == 0x750U) {
+      // this address is sub-addressed. only allow tester present to radar (0xF)
+      bool invalid_uds_msg = (GET_BYTES(msg, 0, 4) != 0x003E020FU) || (GET_BYTES(msg, 4, 4) != 0x0U);
+      if (invalid_uds_msg) {
+        tx = false;
+      }
     }
   }
 
@@ -464,8 +460,6 @@ static safety_config toyota_init(uint16_t param) {
 #ifdef ALLOW_DEBUG
   const uint32_t TOYOTA_PARAM_SECOC = 8UL << TOYOTA_PARAM_OFFSET;
   toyota_secoc = GET_FLAG(param, TOYOTA_PARAM_SECOC);
-#else
-  toyota_secoc = false;
 #endif
   const uint32_t TOYOTA_PARAM_TSS3 = 16UL << TOYOTA_PARAM_OFFSET;
   toyota_tss3 = GET_FLAG(param, TOYOTA_PARAM_TSS3);
@@ -490,48 +484,47 @@ static safety_config toyota_init(uint16_t param) {
     };
     SET_TX_MSGS(toyota_tss3_tx_msgs, ret);
     SET_RX_CHECKS(toyota_tss3_rx_checks, ret);
-    return ret;
-  }
-
-  if (toyota_secoc) {
-    if (toyota_stock_longitudinal) {
-      SET_TX_MSGS(TOYOTA_SECOC_TX_MSGS, ret);
-    } else {
-      SET_TX_MSGS(TOYOTA_SECOC_LONG_TX_MSGS, ret);
-    }
   } else {
-    if (toyota_stock_longitudinal) {
-      SET_TX_MSGS(TOYOTA_TX_MSGS, ret);
+    if (toyota_secoc) {
+      if (toyota_stock_longitudinal) {
+        SET_TX_MSGS(TOYOTA_SECOC_TX_MSGS, ret);
+      } else {
+        SET_TX_MSGS(TOYOTA_SECOC_LONG_TX_MSGS, ret);
+      }
     } else {
-      SET_TX_MSGS(TOYOTA_LONG_TX_MSGS, ret);
+      if (toyota_stock_longitudinal) {
+        SET_TX_MSGS(TOYOTA_TX_MSGS, ret);
+      } else {
+        SET_TX_MSGS(TOYOTA_LONG_TX_MSGS, ret);
+      }
     }
-  }
 
-  if (toyota_secoc) {
-    static RxCheck toyota_secoc_rx_checks[] = {
-      TOYOTA_SECOC_RX_CHECKS
-    };
+    if (toyota_secoc) {
+      static RxCheck toyota_secoc_rx_checks[] = {
+        TOYOTA_SECOC_RX_CHECKS
+      };
 
-    SET_RX_CHECKS(toyota_secoc_rx_checks, ret);
-  } else if (toyota_lta) {
-    // Check the quality flag for angle measurement when using LTA, since it's not set on TSS-P cars
-    static RxCheck toyota_lta_rx_checks[] = {
-      TOYOTA_RX_CHECKS(true)
-    };
+      SET_RX_CHECKS(toyota_secoc_rx_checks, ret);
+    } else if (toyota_lta) {
+      // Check the quality flag for angle measurement when using LTA, since it's not set on TSS-P cars
+      static RxCheck toyota_lta_rx_checks[] = {
+        TOYOTA_RX_CHECKS(true)
+      };
 
-    SET_RX_CHECKS(toyota_lta_rx_checks, ret);
-  } else {
-    static RxCheck toyota_lka_rx_checks[] = {
-      TOYOTA_RX_CHECKS(false)
-    };
-    static RxCheck toyota_lka_alt_brake_rx_checks[] = {
-      TOYOTA_ALT_BRAKE_RX_CHECKS(false)
-    };
-
-    if (!toyota_alt_brake) {
-      SET_RX_CHECKS(toyota_lka_rx_checks, ret);
+      SET_RX_CHECKS(toyota_lta_rx_checks, ret);
     } else {
-      SET_RX_CHECKS(toyota_lka_alt_brake_rx_checks, ret);
+      static RxCheck toyota_lka_rx_checks[] = {
+        TOYOTA_RX_CHECKS(false)
+      };
+      static RxCheck toyota_lka_alt_brake_rx_checks[] = {
+        TOYOTA_ALT_BRAKE_RX_CHECKS(false)
+      };
+
+      if (!toyota_alt_brake) {
+        SET_RX_CHECKS(toyota_lka_rx_checks, ret);
+      } else {
+        SET_RX_CHECKS(toyota_lka_alt_brake_rx_checks, ret);
+      }
     }
   }
 

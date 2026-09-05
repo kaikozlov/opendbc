@@ -3,6 +3,7 @@ import unittest
 
 from opendbc.can import CANPacker, CANParser
 from opendbc.car import Bus, CanData, structs
+from opendbc.car.toyota.fingerprints import FINGERPRINTS, TSS3_CAN_CENSUS
 from opendbc.car.toyota.interface import CarInterface
 from opendbc.car.toyota.values import CAR, DBC, ToyotaFlags
 
@@ -35,6 +36,14 @@ def fingerprint_on(bus: int) -> dict[int, dict[int, int]]:
 
 
 class TestToyotaCorollaTSS3(unittest.TestCase):
+  def test_provisional_census_is_not_an_ambiguous_can_identity(self):
+    assert CAR.TOYOTA_COROLLA_TSS3 in TSS3_CAN_CENSUS
+    self.assertNotIn(CAR.TOYOTA_COROLLA_TSS3, FINGERPRINTS)
+    camry = TSS3_CAN_CENSUS[CAR.TOYOTA_CAMRY_TSS3]
+    corolla = TSS3_CAN_CENSUS[CAR.TOYOTA_COROLLA_TSS3]
+    self.assertTrue(corolla.items() <= camry.items())
+    self.assertNotEqual(corolla, camry)
+
   def test_platform_axes_and_passive_boundary(self):
     CP = CarInterface.get_params(CAR.TOYOTA_COROLLA_TSS3, fingerprint_on(1), [], False, False, False)
 

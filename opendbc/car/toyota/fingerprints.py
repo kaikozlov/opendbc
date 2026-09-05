@@ -5,11 +5,13 @@ from opendbc.car.toyota.values import CAR
 Ecu = CarParams.Ecu
 
 
-FINGERPRINTS = {
-  # Provisional whole-vehicle fingerprint from Span's 2025 Corolla driving rlog
-  # (2026-07-29). The rlog has MOCK carParams/no F181 identity join, so this is
-  # a CAN-topology fingerprint only; exact firmware matching remains open.
-  CAR.TOYOTA_COROLLA_TSS3: [{
+# Observed TSS3 CAN topology is retained separately from FPv1 identity.
+# Span's 2025 Corolla driving rlog (2026-07-29) has MOCK carParams and no
+# F181 identity join. Its topology is a strict subset of the exact Camry
+# census, so registering it in FINGERPRINTS makes the two platforms ambiguous.
+# Keep the corpus evidence, but do not promote Corolla to a CAN identity.
+TSS3_CAN_CENSUS = {
+  CAR.TOYOTA_COROLLA_TSS3: {
     0x00F: 8, 0x025: 32, 0x030: 32, 0x081: 32, 0x08A: 32, 0x090: 32, 0x0AA: 8,
     0x0C6: 8, 0x0CA: 32, 0x0D5: 8, 0x0D7: 32, 0x0D8: 8, 0x0FC: 8, 0x0FE: 32,
     0x101: 8, 0x113: 8, 0x115: 8, 0x116: 8, 0x127: 8, 0x129: 8, 0x13B: 8,
@@ -31,16 +33,15 @@ FINGERPRINTS = {
     0x5F9: 8, 0x605: 8, 0x608: 8, 0x60B: 8, 0x610: 8, 0x611: 8, 0x614: 8,
     0x615: 8, 0x620: 8, 0x622: 8, 0x623: 8, 0x624: 8, 0x629: 8, 0x62A: 8,
     0x638: 8, 0x63B: 8, 0x671: 8, 0x675: 8, 0x68D: 8, 0x6FA: 8, 0x6FC: 8,
-  }],
+  },
 }
 
 
 # Exact normal-harness bus-1 CAN census from the maintainer's 2026 Camry
-# NRTD->READY + stationary P/R/N/D/B captures. This is deliberately not a
-# legacy CAN fingerprint: the current Corolla TSS3 fingerprint is a strict
-# subset, so registering both would make Corolla identification ambiguous.
-# The Camry platform is identity-bound by exact F181 matching instead.
-TSS3_CAN_CENSUS = {
+# NRTD->READY + stationary P/R/N/D/B captures. Unlike the provisional
+# Corolla corpus, Camry has exact same-car identity evidence and 32 additional
+# IDs/DLCs that disambiguate it from Corolla when the full READY census is seen.
+TSS3_CAN_CENSUS |= {
   CAR.TOYOTA_CAMRY_TSS3: {
     0x00F: 8, 0x025: 32, 0x030: 32, 0x081: 32, 0x08A: 32, 0x090: 32, 0x0AA: 8, 0x0C6: 8,
     0x0C9: 32, 0x0CA: 32, 0x0D5: 8, 0x0D7: 32, 0x0D8: 8, 0x0FC: 8, 0x0FE: 32, 0x101: 8,
@@ -70,10 +71,14 @@ TSS3_CAN_CENSUS = {
 
 
 # Exact Camry TSS3 CAN fingerprint. The retained Camry census has 32 IDs/DLCs
-# not present in the Corolla TSS3 fingerprint (including 0x0C9/32 and 0x1FD/32),
-# so the normal comma CAN fingerprint pipeline can identify the platform in READY
-# even when the EPS does not answer F181 during startup firmware discovery.
-FINGERPRINTS[CAR.TOYOTA_CAMRY_TSS3] = [TSS3_CAN_CENSUS[CAR.TOYOTA_CAMRY_TSS3]]
+# not present in the Corolla TSS3 observed census (including 0x0C9/32 and
+# 0x1FD/32), so the normal comma CAN fingerprint pipeline can identify the
+# platform in READY even when the EPS does not answer F181 during startup
+# firmware discovery. Corolla remains deliberately absent until exact identity
+# evidence can make a non-ambiguous fingerprint.
+FINGERPRINTS = {
+  CAR.TOYOTA_CAMRY_TSS3: [TSS3_CAN_CENSUS[CAR.TOYOTA_CAMRY_TSS3]],
+}
 
 
 FW_VERSIONS = {
