@@ -120,6 +120,7 @@ class CarState(CarStateBase):
       ret.rightBlindspot = bool(cp.vl["BSM"]["R_ADJACENT"] or cp.vl["BSM"]["R_APPROACHING"])
 
     driver_torque_invalid = cp.vl["TSS3_EPS_TELEMETRY"]["DRIVER_TORQUE_INVALID"] != 0
+    ret.vehicleSensorsInvalid = ret.vehicleSensorsInvalid or driver_torque_invalid
     ret.steeringTorque = (cp.vl["TSS3_EPS_TELEMETRY"]["STEERING_WHEEL_TORQUE_COARSE"] +
                           cp.vl["TSS3_EPS_TELEMETRY"]["STEERING_WHEEL_TORQUE_FINE"]) if not driver_torque_invalid else 0.0
     ret.steeringTorqueEps = 0.0

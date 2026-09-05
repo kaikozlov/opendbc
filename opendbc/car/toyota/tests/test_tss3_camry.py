@@ -158,7 +158,7 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
     self.assertTrue(cs.leftBlindspot)
     self.assertTrue(cs.rightBlindspot)
 
-  def test_carstate_exposes_provisional_driver_torque_threshold_and_neutral_fault_policy(self):
+  def test_carstate_driver_intervention_and_sensor_validity(self):
     ci = CarInterface(self.CP)
     packer = CANPacker(DBC[CAR.TOYOTA_CAMRY_TSS3][Bus.pt])
     base = CAMRY_COMMON | {0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]}
@@ -172,21 +172,26 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
       })
       return msg
 
-    cs = update_with_frame_set(ci, base | {0x030: eps_msg(2.0)})
-    self.assertGreaterEqual(cs.steeringTorque, 2.0)
-    self.assertTrue(cs.steeringPressed)
-
-    cs = update_with_frame_set(ci, base | {0x030: eps_msg(0.5)})
-    self.assertFalse(cs.steeringPressed)
+    for torque, pressed in ((2.0, True), (-2.0, True), (0.5, False), (-0.5, False)):
+      with self.subTest(torque=torque):
+        cs = update_with_frame_set(ci, base | {0x030: eps_msg(torque)})
+        self.assertAlmostEqual(cs.steeringTorque, torque)
+        self.assertEqual(cs.steeringPressed, pressed)
+        self.assertFalse(cs.vehicleSensorsInvalid)
 
     cs = update_with_frame_set(ci, base | {0x030: eps_msg(2.0, invalid=1)})
     self.assertAlmostEqual(cs.steeringTorque, 0.0)
     self.assertFalse(cs.steeringPressed)
 
-    # Fault status bits stay policy-neutral until a same-car asserted/recovery
-    # transition proves the mapping.
-    self.assertFalse(cs.steerFaultTemporary)
-    self.assertFalse(cs.steerFaultPermanent)
+    self.assertTrue(cs.vehicleSensorsInvalid)
+
+    cs = update_with_frame_set(ci, base | {0x030: eps_msg(2.0)})
+    self.assertTrue(cs.steeringPressed)
+    self.assertFalse(cs.vehicleSensorsInvalid)
+
+    _, wheel_fault, _ = packer.make_can_msg("WHEEL_SPEEDS", 0, {"WHEEL_SPEED_FL_FAULT": 1})
+    cs = update_with_frame_set(ci, base | {0x030: eps_msg(2.0), 0x0AA: wheel_fault})
+    self.assertTrue(cs.vehicleSensorsInvalid)
 
   def test_controller_sends_clean_b6_like_a_normal_angle_port(self):
     ci = CarInterface(self.CP)

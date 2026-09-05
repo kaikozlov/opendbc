@@ -80,7 +80,7 @@ class TestToyotaCorollaTSS3(unittest.TestCase):
     self.assertAlmostEqual(CS.steeringTorque, 1.06, places=6)
     self.assertEqual(CS.steeringTorqueEps, 0.0)
     # The read-only Corolla TSS3 port has no target-native driver-override
-    # threshold; do not transfer the exact-F33 2.0 N.m policy across EPS targets.
+    # threshold; do not transfer the provisional Camry threshold across EPS targets.
     self.assertFalse(CS.steeringPressed)
     self.assertFalse(CS.steerFaultTemporary)
     self.assertFalse(CS.steerFaultPermanent)
@@ -131,10 +131,12 @@ class TestToyotaCorollaTSS3(unittest.TestCase):
     self.assertTrue(CS.canValid)
     self.assertEqual(CS.steeringTorque, 0.0)
     self.assertFalse(CS.steeringPressed)
-    # Exact-F33's DEM/validity mapping is not transferred to this read-only
-    # Corolla target merely because the wire carrier is shared.
-    self.assertFalse(CS.steerFaultTemporary)
-    self.assertFalse(CS.steerFaultPermanent)
+    self.assertTrue(CS.vehicleSensorsInvalid)
+
+    packet = [CanData(address, dat, 1) for address, dat in SPAN_FRAMES.items()]
+    CS = CI.update([(1_200_000_000, packet)])
+    self.assertAlmostEqual(CS.steeringTorque, 1.06, places=6)
+    self.assertFalse(CS.vehicleSensorsInvalid)
 
   def test_b6_receiver_fields_round_trip_without_enabling_sender(self):
     packer = CANPacker("toyota_tss3_pt_generated")
