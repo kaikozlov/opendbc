@@ -158,18 +158,33 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
     self.assertTrue(cs.leftBlindspot)
     self.assertTrue(cs.rightBlindspot)
 
-  def test_carstate_exposes_torque_without_inventing_override_or_fault_policy(self):
+  def test_carstate_exposes_provisional_driver_torque_threshold_and_neutral_fault_policy(self):
     ci = CarInterface(self.CP)
     packer = CANPacker(DBC[CAR.TOYOTA_CAMRY_TSS3][Bus.pt])
-    _, eps, _ = packer.make_can_msg("TSS3_EPS_TELEMETRY", 0, {
-      "STEERING_WHEEL_TORQUE_COARSE": 2.0,
-      "STEERING_WHEEL_TORQUE_FINE": 0.0,
-      "DRIVER_TORQUE_INVALID": 0,
-      "STEERING_FAULT_INHIBIT_STATUS": 1,
-    })
-    cs = update_with_frame_set(ci, CAMRY_COMMON | {0x030: eps, 0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]})
+    base = CAMRY_COMMON | {0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]}
+
+    def eps_msg(coarse: float, invalid: int = 0) -> bytes:
+      _, msg, _ = packer.make_can_msg("TSS3_EPS_TELEMETRY", 0, {
+        "STEERING_WHEEL_TORQUE_COARSE": coarse,
+        "STEERING_WHEEL_TORQUE_FINE": 0.0,
+        "DRIVER_TORQUE_INVALID": invalid,
+        "STEERING_FAULT_INHIBIT_STATUS": 1,
+      })
+      return msg
+
+    cs = update_with_frame_set(ci, base | {0x030: eps_msg(2.0)})
     self.assertGreaterEqual(cs.steeringTorque, 2.0)
+    self.assertTrue(cs.steeringPressed)
+
+    cs = update_with_frame_set(ci, base | {0x030: eps_msg(0.5)})
     self.assertFalse(cs.steeringPressed)
+
+    cs = update_with_frame_set(ci, base | {0x030: eps_msg(2.0, invalid=1)})
+    self.assertAlmostEqual(cs.steeringTorque, 0.0)
+    self.assertFalse(cs.steeringPressed)
+
+    # Fault status bits stay policy-neutral until a same-car asserted/recovery
+    # transition proves the mapping.
     self.assertFalse(cs.steerFaultTemporary)
     self.assertFalse(cs.steerFaultPermanent)
 

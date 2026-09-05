@@ -5,7 +5,7 @@ from opendbc.car import Bus, DT_CTRL, create_button_events, structs
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.common.filter_simple import FirstOrderFilter
 from opendbc.car.interfaces import CarStateBase
-from opendbc.car.toyota.values import ToyotaFlags, CAR, DBC, STEER_THRESHOLD, EPS_SCALE
+from opendbc.car.toyota.values import ToyotaFlags, CAR, DBC, STEER_THRESHOLD, EPS_SCALE, TSS3_STEER_DRIVER_TORQUE_THRESHOLD
 
 ButtonType = structs.CarState.ButtonEvent.Type
 SteerControlType = structs.CarParams.SteerControlType
@@ -123,11 +123,15 @@ class CarState(CarStateBase):
     ret.steeringTorque = (cp.vl["TSS3_EPS_TELEMETRY"]["STEERING_WHEEL_TORQUE_COARSE"] +
                           cp.vl["TSS3_EPS_TELEMETRY"]["STEERING_WHEEL_TORQUE_FINE"]) if not driver_torque_invalid else 0.0
     ret.steeringTorqueEps = 0.0
-    # The target exposes physical driver torque plus independent torque-invalid
-    # and steering-fault/inhibit status bits, but no validated openpilot driver-
-    # override threshold or temporary/permanent fault mapping. Keep those policy
-    # fields neutral rather than inventing semantics from representation limits.
-    ret.steeringPressed = False
+    # Normal openpilot driver-state semantics: physical torque above the
+    # exact-F33 provisional threshold marks driver intervention (feeds
+    # DesireHelper lane-change entry and the saturation-timer override). The
+    # 0x030 torque sign convention is not yet dynamically confirmed.
+    if self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:
+      ret.steeringPressed = abs(ret.steeringTorque) > TSS3_STEER_DRIVER_TORQUE_THRESHOLD
+    # The target exposes independent torque-invalid and steering-fault/inhibit
+    # status bits, but no same-car asserted/recovery fault transition yet. Keep
+    # openpilot fault classification neutral rather than inventing a mapping.
     ret.steerFaultTemporary = False
     ret.steerFaultPermanent = False
 

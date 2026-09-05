@@ -633,6 +633,14 @@ FW_QUERY_CONFIG = FwQueryConfig(
 
 STEER_THRESHOLD = 100
 
+# Exact-F33 driver-intervention threshold in N.m for Camry TSS3. This is
+# physical 0x030 torque, not the classic raw-count STEER_THRESHOLD scale.
+# Provisional, derived from the 2026-09-04 route-3d distributions (straight-
+# driving >10 m/s p90 ~1.14 N.m vs preLaneChange median ~1.30 N.m); confirm
+# torque sign/direction and the final value dynamically before treating it as
+# validated.
+TSS3_STEER_DRIVER_TORQUE_THRESHOLD = 1.2
+
 # These cars have non-standard EPS torque scale factors. All others are 73
 EPS_SCALE = defaultdict(lambda: 73,
                         {CAR.TOYOTA_PRIUS: 66, CAR.TOYOTA_COROLLA: 88, CAR.LEXUS_IS: 77, CAR.LEXUS_RC: 77, CAR.LEXUS_CTH: 100, CAR.TOYOTA_PRIUS_V: 100})
