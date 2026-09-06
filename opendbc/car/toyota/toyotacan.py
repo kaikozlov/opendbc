@@ -97,6 +97,14 @@ def create_tss3_brake_cancel_command(packer, stock_brake):
   return packer.make_can_msg("BRAKE_MODULE", 2, values)
 
 
+def create_tss3_hud_command(stock_hud):
+  """Clone the live FRC HUD frame while suppressing its hands-off warning state."""
+  dat = bytearray(int(stock_hud[f"BYTE_{i}"]) for i in range(8))
+  dat[1] &= ~0x0C
+  dat[2] &= ~0x40
+  return 0x412, bytes(dat), 0
+
+
 def create_acc_cancel_command(packer):
   values = {
     "GAS_RELEASED": 0,

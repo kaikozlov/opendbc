@@ -473,6 +473,7 @@ static safety_config toyota_init(uint16_t param) {
   if (toyota_tss3) {
     static const CanMsg toyota_tss3_tx_msgs[] = {
       {0x0B6, 0, 32, .check_relay = true},
+      {0x412, 0, 8, .check_relay = true},
       {0x101, 2, 8, .check_relay = false},
     };
     static RxCheck toyota_tss3_rx_checks[] = {

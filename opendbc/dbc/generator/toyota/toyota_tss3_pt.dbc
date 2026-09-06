@@ -109,6 +109,16 @@ BO_ 182 TSS3_LATERAL_CONTROL: 32 XXX
 BO_ 593 TSS3_CRUISE_DISPLAY: 8 XXX
  SG_ UI_SET_SPEED : 23|8@0+ (1,0) [0|255] "" XXX
 
+BO_ 1042 TSS3_LKAS_HUD: 8 XXX
+ SG_ BYTE_0 : 7|8@0+ (1,0) [0|255] "" XXX
+ SG_ BYTE_1 : 15|8@0+ (1,0) [0|255] "" XXX
+ SG_ BYTE_2 : 23|8@0+ (1,0) [0|255] "" XXX
+ SG_ BYTE_3 : 31|8@0+ (1,0) [0|255] "" XXX
+ SG_ BYTE_4 : 39|8@0+ (1,0) [0|255] "" XXX
+ SG_ BYTE_5 : 47|8@0+ (1,0) [0|255] "" XXX
+ SG_ BYTE_6 : 55|8@0+ (1,0) [0|255] "" XXX
+ SG_ BYTE_7 : 63|8@0+ (1,0) [0|255] "" XXX
+
 BO_ 257 BRAKE_MODULE: 8 XXX
  SG_ SET_ME_1 : 7|1@0+ (1,0) [0|1] "" XXX
  SG_ BRAKE_PRESSED : 3|1@0+ (1,0) [0|1] "" XXX
@@ -197,6 +207,7 @@ CM_ SG_ 138 FRESHNESS_MESSAGE_LSB2 "SecOC FV4 B28[7:6] message-counter low2; adv
 CM_ SG_ 138 FRESHNESS_RESET_LSB2 "SecOC FV4 B28[5:4] reset-counter low2; agrees with the preceding authenticated 0x00F on 19,868/20,615 drive-A and 23,093/23,996 drive-B eligible frames.";
 CM_ SG_ 138 CMAC_MSB28 "B28[3:0]..B31[7:4]: effectively frame-unique in both retained drives, matching the Toyota ordinary-P5 transmitted MAC28. Exact sender key/profile remains unrecovered.";
 CM_ BO_ 593 "TSS3 Camry cluster cruise-set display carrier. B2 follows the vehicle UI set speed in the currently selected display units; retained maintainer captures prove imperial values. Interpret units through legacy BODY_CONTROL_STATE_2.UNITS, matching upstream Toyota CarState.";
+CM_ BO_ 1042 "Raw-byte TSS3 Camry FRC-side HUD carrier retained for stock-clone replacement. 2026-09-06 highway captures join B1[3:2]=3 to the native hands-off warning cycle and observe B2[6] only as a rare escalation inside that cycle. Other byte semantics remain intentionally unmapped.";
 CM_ SG_ 593 UI_SET_SPEED "Set speed shown in the vehicle UI, in the vehicle-selected unit. Retained maintainer Camry: 21->22->23->24->25 across four RES+ presses while internal 0x08A B10 follows 32->34->35->37->39 km/h.";
 CM_ SG_ 1552 UNITS "Legacy Toyota vehicle-unit selector retained on TSS3. Upstream Toyota treats values 1/2 as metric and other values as imperial; maintainer Camry is observed at 0 in imperial configuration.";
 CM_ BO_ 849 "F33/H/F retained EPS status PDU. Only B2[7:5] status code and B2[4] companion flag are statically closed; do not map to temporary/permanent fault without live transitions.";

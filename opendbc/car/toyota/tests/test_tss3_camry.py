@@ -42,7 +42,7 @@ def fingerprint() -> dict[int, dict[int, int]]:
 
 
 def update_with_frame_set(ci: CarInterface, frames: dict[int, bytes], repeats: int = 20):
-  packet = [CanData(address, dat, 2 if address in (0x08A, 0x251) else 0) for address, dat in frames.items()]
+  packet = [CanData(address, dat, 2 if address in (0x08A, 0x251, 0x412) else 0) for address, dat in frames.items()]
   ret = None
   for i in range(repeats):
     ret = ci.update([(1_000_000_000 + i * 10_000_000, packet)])
@@ -236,6 +236,18 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
                            int.from_bytes(dat[4:6], "big", signed=True) * (1024 / 17870), delta=0.03)
     self.assertFalse(any(addr == 0x08A for addr, _, _ in sends))
 
+  def test_controller_replaces_stock_hud_without_hands_off_nag(self):
+    ci = CarInterface(self.CP)
+    stock_hud = bytes.fromhex("140c404401ee9307")
+    update_with_frame_set(ci, CAMRY_COMMON | {
+      0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive],
+      0x412: stock_hud,
+    })
+
+    _, sends = ci.apply(control(1.0), 2_000_000_000)
+    hud = [m for m in sends if m[0] == 0x412]
+    self.assertEqual(hud, [(0x412, bytes.fromhex("1400004401ee9307"), 0)])
+
   def test_controller_inactive_b6_tracks_measured_angle(self):
     ci = CarInterface(self.CP)
     cs = update_with_frame_set(ci, CAMRY_COMMON | {0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]})
@@ -388,9 +400,14 @@ class TestToyotaCamryTSS3PandaSafety(unittest.TestCase):
 
     self.assertFalse(self.s.safety_tx_hook(libsafety_py.make_CANPacket(0x101, 0, good)))
 
-  def test_relay_forwards_stock_08a_and_blocks_stock_b6_replacement(self):
+  def test_relay_forwards_stock_08a_and_replaces_camera_owned_messages(self):
     self.assertEqual(self.s.safety_fwd_hook(2, 0x08A), 0)
     self.assertEqual(self.s.safety_fwd_hook(2, 0x0B6), -1)
+    self.assertEqual(self.s.safety_fwd_hook(2, 0x412), -1)
+
+    hud = bytes.fromhex("1400004401ee9307")
+    self.assertTrue(self.s.safety_tx_hook(libsafety_py.make_CANPacket(0x412, 0, hud)))
+    self.assertFalse(self.s.safety_tx_hook(libsafety_py.make_CANPacket(0x412, 2, hud)))
 
 
 if __name__ == "__main__":

@@ -99,6 +99,12 @@ class CarController(CarControllerBase):
       # Follow the normal openpilot lateral contract: controlsd owns CC.latActive.
       # 0x08A remains a stock request-plane observation and is never synthesized here.
       lat_active = CC.latActive
+
+      # Match the normal Toyota integration: replace the camera HUD message so
+      # Toyota's torque-based hands-off nag does not compete with openpilot DM.
+      if self.frame % 20 == 0 and CS.tss3_lkas_hud:
+        can_sends.append(toyotacan.create_tss3_hud_command(CS.tss3_lkas_hud))
+
       if self.frame % 2 == 0:
         if CC.cruiseControl.cancel:
           can_sends.append(toyotacan.create_tss3_brake_cancel_command(self.packer, CS.tss3_brake_module))

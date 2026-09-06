@@ -53,6 +53,7 @@ class CarState(CarStateBase):
     self.secoc_synchronization = None
     self.tss3_brake_module = None
     self.tss3_lateral_request = None
+    self.tss3_lkas_hud = {}
 
   def _update_tss3(self, cp: CANParser, cp_cam: CANParser) -> structs.CarState:
     ret = structs.CarState()
@@ -139,6 +140,8 @@ class CarState(CarStateBase):
     if self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:
       lateral = cp_cam
       self.tss3_lateral_request = copy.copy(lateral.vl["TSS3_LATERAL_REQUEST"])
+      if len(lateral.vl_all["TSS3_LKAS_HUD"]["BYTE_0"]):
+        self.tss3_lkas_hud = copy.copy(lateral.vl["TSS3_LKAS_HUD"])
       ret.cruiseState.enabled = bool(self.tss3_lateral_request["CRUISE_OPERATING_LATCH"])
       # The retained Camry drives prove this latch follows actual MAIN activation
       # and CANCEL. No distinct TSS3 standby/main-only carrier is recovered yet.
@@ -343,6 +346,7 @@ class CarState(CarStateBase):
         parsers[Bus.cam] = CANParser(DBC[CP.carFingerprint][Bus.pt], [
           ("TSS3_LATERAL_REQUEST", 83),
           ("TSS3_CRUISE_DISPLAY", 1),
+          ("TSS3_LKAS_HUD", float('nan')),
         ], 2)
       return parsers
 
