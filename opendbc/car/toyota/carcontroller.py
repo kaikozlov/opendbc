@@ -91,7 +91,9 @@ class CarController(CarControllerBase):
 
   def update(self, CC, CS, now_nanos):
     if self.CP.flags & ToyotaFlags.TSS3:
-      if self.CP.carFingerprint != CAR.TOYOTA_CAMRY_TSS3:
+      # dashcamOnly/noOutput is the single CarParams ownership boundary for
+      # research-only TSS3 platforms whose actuation encoder is not implemented.
+      if self.CP.dashcamOnly:
         self.frame += 1
         return CC.actuators.as_builder(), []
 

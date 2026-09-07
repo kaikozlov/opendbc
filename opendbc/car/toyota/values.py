@@ -150,9 +150,9 @@ class ToyotaTSS3PlatformConfig(PlatformConfig):
   dbc_dict: dict = field(default_factory=lambda: {Bus.pt: 'toyota_tss3_pt_generated'})
 
   def init(self):
-    # TSS3 and SecOC are separate axes. The tracked Corolla H/F specimens use
-    # both, but TSS3 must never imply TSS2 through config inheritance.
-    self.flags |= ToyotaFlags.TSS3 | ToyotaFlags.SECOC
+    # TSS generation and authentication architecture are independent axes.
+    # Each platform declares SecOC explicitly below when source evidence requires it.
+    self.flags |= ToyotaFlags.TSS3
 
 
 class CAR(Platforms):
@@ -207,7 +207,7 @@ class CAR(Platforms):
   TOYOTA_CAMRY_TSS3 = ToyotaTSS3PlatformConfig(
     [ToyotaTSS3CarDocs("Toyota Camry Hybrid 2026")],
     TOYOTA_CAMRY.specs,
-    flags=ToyotaFlags.HYBRID,
+    flags=ToyotaFlags.HYBRID | ToyotaFlags.SECOC,
   )
   TOYOTA_CHR = PlatformConfig(
     [
@@ -255,6 +255,7 @@ class CAR(Platforms):
     # Reuse the existing Corolla dynamics only as non-actuating metadata until
     # target-specific dynamics are measured. This platform is dashcam/noOutput.
     TOYOTA_COROLLA_TSS2.specs,
+    flags=ToyotaFlags.SECOC,
   )
   TOYOTA_HIGHLANDER = PlatformConfig(
     [

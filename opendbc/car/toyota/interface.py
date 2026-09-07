@@ -30,6 +30,10 @@ class CarInterface(CarInterfaceBase):
       ret.radarUnavailable = True
       ret.openpilotLongitudinalControl = False
       ret.autoResumeSng = False
+      # TSS generation and SecOC are independent platform axes. The TSS3 branch
+      # returns before the generic SECOC handling below, so derive key ownership
+      # directly from the explicit platform flag here.
+      ret.secOcRequired = bool(ret.flags & ToyotaFlags.SECOC.value)
       ret.minEnableSpeed = -1.
       ret.centerToFront = ret.wheelbase * 0.44
 
@@ -54,7 +58,6 @@ class CarInterface(CarInterfaceBase):
         # interface is implemented through the normal platform/safety path.
         ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.noOutput)]
         ret.dashcamOnly = True
-        ret.secOcRequired = True
 
       return ret
 
