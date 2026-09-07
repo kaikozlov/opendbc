@@ -5,11 +5,10 @@ from opendbc.car.toyota.values import CAR
 Ecu = CarParams.Ecu
 
 
-# Observed TSS3 CAN topology is retained separately from FPv1 identity.
+# Observed TSS3 CAN topology is retained separately from confirmed firmware identity.
 # Span's 2025 Corolla driving rlog (2026-07-29) has MOCK carParams and no
-# F181 identity join. Its topology is a strict subset of the exact Camry
-# census, so registering it in FINGERPRINTS makes the two platforms ambiguous.
-# Keep the corpus evidence, but do not promote Corolla to a CAN identity.
+# F181 identity join. Its census is a strict subset of Camry's. Keep it as a
+# competing CAN candidate: subset traffic alone must not identify either car.
 TSS3_CAN_CENSUS = {
   CAR.TOYOTA_COROLLA_TSS3: {
     0x00F: 8, 0x025: 32, 0x030: 32, 0x081: 32, 0x08A: 32, 0x090: 32, 0x0AA: 8,
@@ -70,14 +69,12 @@ TSS3_CAN_CENSUS |= {
 }
 
 
-# Exact Camry TSS3 CAN fingerprint. The retained Camry census has 32 IDs/DLCs
-# not present in the Corolla TSS3 observed census (including 0x0C9/32 and
-# 0x1FD/32), so the normal comma CAN fingerprint pipeline can identify the
-# platform in READY even when the EPS does not answer F181 during startup
-# firmware discovery. Corolla remains deliberately absent until exact identity
-# evidence can make a non-ambiguous fingerprint.
+# Camry-only traffic eliminates the provisional Corolla candidate and permits
+# normal CAN identification in READY without an EPS F181 reply. Without that
+# traffic, both candidates survive and fingerprinting correctly remains ambiguous.
 FINGERPRINTS = {
   CAR.TOYOTA_CAMRY_TSS3: [TSS3_CAN_CENSUS[CAR.TOYOTA_CAMRY_TSS3]],
+  CAR.TOYOTA_COROLLA_TSS3: [TSS3_CAN_CENSUS[CAR.TOYOTA_COROLLA_TSS3]],
 }
 
 

@@ -112,6 +112,25 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
     self.assertFalse(cs.cruiseState.available)
     self.assertFalse(cs.cruiseState.enabled)
 
+  def test_camera_request_timeout_uses_native_cadence(self):
+    parser = CarInterface.CarState.get_can_parsers(self.CP)[Bus.cam]
+    frames = [CanData(address, CAMRY_COMMON[address], 2) for address in (0x08A, 0x251)]
+    # Native Camry bus-2 0x08A is 40 Hz in stationary and driving rlogs.
+    for t in range(1_000_000_000, 1_100_000_001, 25_000_000):
+      parser.update([(t, frames)])
+      self.assertTrue(parser.can_valid)
+
+    # Preserve the normal ten-period allowance, not ten periods at the old 83 Hz.
+    for t in range(1_110_000_000, 1_300_000_001, 10_000_000):
+      parser.update([(t, [])])
+      self.assertTrue(parser.can_valid)
+
+    # Loss of the stream must still invalidate the parser.
+    for t in range(1_310_000_000, 1_410_000_001, 10_000_000):
+      parser.update([(t, [])])
+      valid = parser.can_valid
+    self.assertFalse(valid)
+
   def test_carstate_exposes_stock_cruise_button_events(self):
     ci = CarInterface(self.CP)
     base = CAMRY_COMMON | {0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]}

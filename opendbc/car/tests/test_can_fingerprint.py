@@ -17,7 +17,11 @@ class TestCanFingerprint(unittest.TestCase):
       fingerprint_iter = iter([can])
       car_fingerprint, finger = can_fingerprint(lambda **kwargs: [next(fingerprint_iter, [])])  # noqa: B023
 
-      assert car_fingerprint == car_model
+      # A complete census can still be a subset of another platform's census.
+      # Elimination-based fingerprinting must not choose either in that case.
+      compatible = {candidate for candidate, variants in FINGERPRINTS.items()
+                    if any(fingerprint.items() <= variant.items() for variant in variants)}
+      assert car_fingerprint == (car_model if len(compatible) == 1 else None)
       assert finger[0] == fingerprint
       assert finger[1] == fingerprint
       assert finger[2] == {}

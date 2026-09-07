@@ -342,9 +342,9 @@ class CarState(CarStateBase):
       parsers = {Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, pt_bus)}
       if CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:
         # The Toyota-B relay isolates the FRC side on Panda bus 2. Read the
-        # native request there; bus 0 carries vehicle/EPS state and the replacement 0x08A output.
+        # native request there; bus 0 carries vehicle/EPS state.
         parsers[Bus.cam] = CANParser(DBC[CP.carFingerprint][Bus.pt], [
-          ("TSS3_LATERAL_REQUEST", 83),
+          ("TSS3_LATERAL_REQUEST", 40),
           ("TSS3_CRUISE_DISPLAY", 1),
           ("TSS3_LKAS_HUD", float('nan')),
         ], 2)
