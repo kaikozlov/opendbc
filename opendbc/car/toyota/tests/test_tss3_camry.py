@@ -40,7 +40,7 @@ CAMRY_NATIVE_BUS = {
 }
 CAMRY_NATIVE_HZ = {
   0x00F: 10, 0x025: 100, 0x030: 100, 0x08A: 40, 0x0AA: 100,
-  0x0FE: 30, 0x101: 50, 0x116: 40, 0x127: 60, 0x251: 1,
+  0x0FE: 30, 0x101: 50, 0x116: 40, 0x127: 50, 0x251: 1,
   0x3B7: 3, 0x3F6: 1, 0x412: 1, 0x51E: 1, 0x610: 3,
   0x614: 1, 0x620: 3, 0x622: 1,
 }
@@ -221,9 +221,10 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
 
   def test_periodic_inputs_invalidate_and_recover_at_native_cadence(self):
     base = CAMRY_COMMON | {0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]}
-    # These were historically exempted from alive checks despite being periodic.
-    periodic_inputs = (0x127, 0x51E, 0x3B7, 0x614, 0x620, 0x622, 0x610, 0x3F6, 0x412)
-    for address in periodic_inputs:
+    # Every parser-checked source must independently invalidate and recover.
+    # The rates are conservative floors of the measured native cadence, not
+    # synthetic target frequencies for the vehicle.
+    for address in CAMRY_NATIVE_HZ:
       with self.subTest(address=hex(address)):
         ci = CarInterface(self.CP)
         cs = replay_at_native_cadence(ci, base, 1.1)

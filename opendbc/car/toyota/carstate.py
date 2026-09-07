@@ -342,7 +342,7 @@ class CarState(CarStateBase):
         # chassis, gear, READY, stalk, units, and cruise-switch state cannot
         # survive a missing source indefinitely.
         pt_messages += [
-          ("GEAR_PACKET_HYBRID", 60),
+          ("GEAR_PACKET_HYBRID", 50),
           ("TSS3_READY_STATUS", 1),
           ("ESP_CONTROL", 3),
           ("BLINKERS_STATE", 1),
