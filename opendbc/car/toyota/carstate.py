@@ -127,11 +127,11 @@ class CarState(CarStateBase):
                           cp.vl["TSS3_EPS_TELEMETRY"]["STEERING_WHEEL_TORQUE_FINE"]) if not driver_torque_invalid else 0.0
     ret.steeringTorqueEps = 0.0
     # Normal openpilot driver-state semantics: physical torque above the
-    # exact-F33 provisional threshold marks driver intervention (feeds
-    # DesireHelper lane-change entry and the saturation-timer override). The
-    # 0x030 torque sign convention is not yet dynamically confirmed.
+    # exact-F33 threshold marks driver intervention (feeds DesireHelper lane-
+    # change entry and the saturation-timer override). Same-car post-fix lane-
+    # change starts validate the 0x030 sign convention: left positive, right negative.
     if self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:
-      ret.steeringPressed = abs(ret.steeringTorque) > TSS3_STEER_DRIVER_TORQUE_THRESHOLD
+      ret.steeringPressed = abs(ret.steeringTorque) >= TSS3_STEER_DRIVER_TORQUE_THRESHOLD
     # Exact-F33 recovers STEERING_FAULT_INHIBIT_STATUS as an immediate selected
     # steering fault/inhibit aggregate. Map that directly to openpilot's ordinary
     # temporary steering-unavailable state; no TSS3 permanent-fault policy is

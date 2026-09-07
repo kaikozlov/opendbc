@@ -249,16 +249,17 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
     packer = CANPacker(DBC[CAR.TOYOTA_CAMRY_TSS3][Bus.pt])
     base = CAMRY_COMMON | {0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]}
 
-    def eps_msg(coarse: float, invalid: int = 0, steering_inhibit: int = 0) -> bytes:
+    def eps_msg(coarse: float, fine: float = 0.0, invalid: int = 0, steering_inhibit: int = 0) -> bytes:
       _, msg, _ = packer.make_can_msg("TSS3_EPS_TELEMETRY", 0, {
         "STEERING_WHEEL_TORQUE_COARSE": coarse,
-        "STEERING_WHEEL_TORQUE_FINE": 0.0,
+        "STEERING_WHEEL_TORQUE_FINE": fine,
         "DRIVER_TORQUE_INVALID": invalid,
         "STEERING_FAULT_INHIBIT_STATUS": steering_inhibit,
       })
       return msg
 
-    for torque, pressed in ((2.0, True), (-2.0, True), (0.5, False), (-0.5, False)):
+    for torque, pressed in ((2.0, True), (-2.0, True), (0.7, True), (-0.7, True),
+                            (0.6, True), (-0.6, True), (0.5, False), (-0.5, False)):
       with self.subTest(torque=torque):
         cs = update_with_frame_set(ci, base | {0x030: eps_msg(torque)})
         self.assertAlmostEqual(cs.steeringTorque, torque)
@@ -266,6 +267,10 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
         self.assertFalse(cs.vehicleSensorsInvalid)
         self.assertFalse(cs.steerFaultTemporary)
         self.assertFalse(cs.steerFaultPermanent)
+
+    cs = update_with_frame_set(ci, base | {0x030: eps_msg(0.6, fine=0.01)})
+    self.assertAlmostEqual(cs.steeringTorque, 0.61, places=2)
+    self.assertTrue(cs.steeringPressed)
 
     cs = update_with_frame_set(ci, base | {0x030: eps_msg(2.0, steering_inhibit=1)})
     self.assertTrue(cs.steerFaultTemporary)

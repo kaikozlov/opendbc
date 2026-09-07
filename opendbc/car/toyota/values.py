@@ -635,11 +635,12 @@ STEER_THRESHOLD = 100
 
 # Exact-F33 driver-intervention threshold in N.m for Camry TSS3. This is
 # physical 0x030 torque, not the classic raw-count STEER_THRESHOLD scale.
-# Provisional, derived from the 2026-09-04 route-3d distributions (straight-
-# driving >10 m/s p90 ~1.14 N.m vs preLaneChange median ~1.30 N.m); confirm
-# torque sign/direction and the final value dynamically before treating it as
-# validated.
-TSS3_STEER_DRIVER_TORQUE_THRESHOLD = 1.2
+# Same-car 2026-09-06 native 0x371 driver-steering detection gives a 0.67 N.m
+# median assertion transition on both independent drives; a simple 0.6 N.m
+# threshold reproduces that hysteretic state with ~94-95% specificity and
+# ~75-77% sensitivity. Post-fix lane-change starts independently validate the
+# torque sign convention (left positive, right negative).
+TSS3_STEER_DRIVER_TORQUE_THRESHOLD = 0.6
 
 # These cars have non-standard EPS torque scale factors. All others are 73
 EPS_SCALE = defaultdict(lambda: 73,
