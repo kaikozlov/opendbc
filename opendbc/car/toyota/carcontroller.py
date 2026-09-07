@@ -86,6 +86,8 @@ class CarController(CarControllerBase):
     self.tss3_inactive_companions = TSS3B6CompanionFields()
     self.tss3_sequence = 0
     self.tss3_message_counter = 0
+    self.tss3_last_hud = None
+    self.tss3_last_hud_frame = -100
 
   def update(self, CC, CS, now_nanos):
     if self.CP.flags & ToyotaFlags.TSS3:
@@ -100,13 +102,21 @@ class CarController(CarControllerBase):
       # 0x08A remains a stock request-plane observation and is never synthesized here.
       lat_active = CC.latActive
 
-      # Match the normal Toyota integration: replace the camera HUD message so
-      # Toyota's torque-based hands-off nag does not compete with openpilot DM,
-      # while rendering openpilot's lane visibility on the stock cluster surface.
-      if self.frame % 20 == 0 and CS.tss3_lkas_hud:
-        can_sends.append(toyotacan.create_tss3_hud_command(
-          CS.tss3_lkas_hud, CC.hudControl.leftLaneVisible, CC.hudControl.rightLaneVisible, lat_active,
-        ))
+      # Replace the camera-owned cluster HUD at its native ~1 Hz heartbeat, with
+      # bounded event updates for display-state changes. Same-car route 3f shows
+      # a 1002 ms median heartbeat and no 0x412 interval below ~79 ms.
+      if CS.tss3_lkas_hud:
+        steer_alert = CC.hudControl.visualAlert == VisualAlert.steerRequired
+        hud_msg = toyotacan.create_tss3_hud_command(
+          CS.tss3_lkas_hud, CC.hudControl.leftLaneVisible, CC.hudControl.rightLaneVisible, lat_active, steer_alert,
+        )
+        hud_changed = hud_msg != self.tss3_last_hud
+        heartbeat_due = self.frame - self.tss3_last_hud_frame >= 100
+        event_due = hud_changed and self.frame - self.tss3_last_hud_frame >= 10
+        if heartbeat_due or event_due:
+          can_sends.append(hud_msg)
+          self.tss3_last_hud = hud_msg
+          self.tss3_last_hud_frame = self.frame
 
       if self.frame % 2 == 0:
         if CC.cruiseControl.cancel:

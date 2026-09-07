@@ -139,11 +139,11 @@ class CarState(CarStateBase):
     # change starts validate the 0x030 sign convention: left positive, right negative.
     if self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:
       ret.steeringPressed = abs(ret.steeringTorque) >= TSS3_STEER_DRIVER_TORQUE_THRESHOLD
-    # Exact-F33 recovers STEERING_FAULT_INHIBIT_STATUS as an immediate selected
-    # steering fault/inhibit aggregate. Map that directly to openpilot's ordinary
-    # temporary steering-unavailable state; no TSS3 permanent-fault policy is
-    # inferred without a same-car asserted/recovery classification.
-    ret.steerFaultTemporary = bool(cp.vl["TSS3_EPS_TELEMETRY"]["STEERING_FAULT_INHIBIT_STATUS"])
+    # Exact-F33 exposes a selected steering fault/inhibit aggregate, but retained
+    # driving captures never assert it and do not establish recoverable-vs-permanent
+    # semantics. Keep openpilot fault policy neutral until a synchronized asserted/
+    # recovery capture (or an equivalent target-native classification) closes it.
+    ret.steerFaultTemporary = False
     ret.steerFaultPermanent = False
 
     if self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:

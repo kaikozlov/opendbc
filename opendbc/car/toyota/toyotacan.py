@@ -97,8 +97,8 @@ def create_tss3_brake_cancel_command(packer, stock_brake):
   return packer.make_can_msg("BRAKE_MODULE", 2, values)
 
 
-def create_tss3_hud_command(stock_hud, left_line: bool, right_line: bool, lat_active: bool):
-  """Clone the live FRC HUD frame, render openpilot lane state, and suppress Toyota's hands-off nag."""
+def create_tss3_hud_command(stock_hud, left_line: bool, right_line: bool, lat_active: bool, steer_alert: bool):
+  """Clone the live FRC HUD frame and render the recovered openpilot HUD subset."""
   dat = bytearray(int(stock_hud[f"BYTE_{i}"]) for i in range(8))
 
   # The normal road-state 0x412 alphabet is exact on the maintainer Camry:
@@ -113,7 +113,11 @@ def create_tss3_hud_command(stock_hud, left_line: bool, right_line: bool, lat_ac
     dat[3] = (left_state << 4) | right_state
     dat[4] = 1 if lat_active else 2
 
-  dat[1] &= ~0x0C
+  # B1[3:2] is the source-real hands-off visual warning. Toyota's internal
+  # torque-based warning is replaced by openpilot DM's steer-required state.
+  # B2[6] is a later Toyota escalation stage and remains cleared: no TSS3
+  # cluster chime/audibleAlert contract has been recovered yet.
+  dat[1] = (dat[1] & ~0x0C) | (0x0C if steer_alert else 0)
   dat[2] &= ~0x40
   return 0x412, bytes(dat), 0
 

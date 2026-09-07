@@ -72,8 +72,8 @@ def update_with_frame_set(ci: CarInterface, frames: dict[int, bytes], repeats: i
   return ret
 
 
-def replay_native(ci: CarInterface, frames: dict[int, bytes], duration_s: float, omit: set[int] | None = None):
-  """Replay a compact original-capture fixture at its native buses/cadences."""
+def replay_at_native_cadence(ci: CarInterface, frames: dict[int, bytes], duration_s: float, omit: set[int] | None = None):
+  """Schedule source-real payloads synthetically at measured native buses/cadences."""
   omit = omit or set()
   now = getattr(ci, "_tss3_replay_now_nanos", 1_000_000_000)
   next_due = getattr(ci, "_tss3_replay_next_due", {})
@@ -99,7 +99,7 @@ def replay_native(ci: CarInterface, frames: dict[int, bytes], duration_s: float,
 
 
 def control(angle_deg: float, lat_active: bool = True, cancel: bool = False,
-            left_lane: bool = False, right_lane: bool = False):
+            left_lane: bool = False, right_lane: bool = False, steer_alert: bool = False):
   cc = structs.CarControl()
   cc.enabled = True
   cc.latActive = lat_active
@@ -107,6 +107,8 @@ def control(angle_deg: float, lat_active: bool = True, cancel: bool = False,
   cc.actuators.steeringAngleDeg = angle_deg
   cc.hudControl.leftLaneVisible = left_lane
   cc.hudControl.rightLaneVisible = right_lane
+  if steer_alert:
+    cc.hudControl.visualAlert = structs.CarControl.HUDControl.VisualAlert.steerRequired
   return cc.as_reader()
 
 
@@ -224,14 +226,14 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
     for address in periodic_inputs:
       with self.subTest(address=hex(address)):
         ci = CarInterface(self.CP)
-        cs = replay_native(ci, base, 1.1)
+        cs = replay_at_native_cadence(ci, base, 1.1)
         self.assertTrue(cs.canValid)
 
         timeout_s = 10 / CAMRY_NATIVE_HZ[address]
-        cs = replay_native(ci, base, timeout_s + 0.2, omit={address})
+        cs = replay_at_native_cadence(ci, base, timeout_s + 0.2, omit={address})
         self.assertFalse(cs.canValid)
 
-        cs = replay_native(ci, base, max(0.2, 1 / CAMRY_NATIVE_HZ[address] + 0.05))
+        cs = replay_at_native_cadence(ci, base, max(0.2, 1 / CAMRY_NATIVE_HZ[address] + 0.05))
         self.assertTrue(cs.canValid)
 
   def test_carstate_exposes_stock_cruise_button_events(self):
@@ -308,8 +310,10 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
     self.assertAlmostEqual(cs.steeringTorque, 0.61, places=2)
     self.assertTrue(cs.steeringPressed)
 
+    # The raw selected steering fault/inhibit aggregate is intentionally not
+    # promoted to temporary/permanent policy without an asserted/recovery join.
     cs = update_with_frame_set(ci, base | {0x030: eps_msg(2.0, steering_inhibit=1)})
-    self.assertTrue(cs.steerFaultTemporary)
+    self.assertFalse(cs.steerFaultTemporary)
     self.assertFalse(cs.steerFaultPermanent)
 
     cs = update_with_frame_set(ci, base | {0x030: eps_msg(2.0, invalid=1)})
@@ -397,11 +401,39 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
     self.assertEqual(hud, bytes.fromhex("1400004201ee9307"))
 
     # Inactive recognized lines use state 1 and the normal inactive mode tuple.
-    for _ in range(19):
+    # Display changes are published no faster than the native ~10 Hz event path.
+    for _ in range(9):
       ci.apply(control(1.0, lat_active=False, left_lane=True, right_lane=False), 2_010_000_000)
     _, sends = ci.apply(control(1.0, lat_active=False, left_lane=True, right_lane=False), 2_020_000_000)
     hud = next(dat for addr, dat, bus in sends if addr == 0x412 and bus == 0)
     self.assertEqual(hud, bytes.fromhex("1200001202ee9307"))
+
+  def test_controller_hud_matches_native_heartbeat_and_openpilot_steer_alert(self):
+    ci = CarInterface(self.CP)
+    update_with_frame_set(ci, CAMRY_COMMON | {
+      0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive],
+      0x412: bytes.fromhex("140c404401ee9307"),
+    })
+
+    # First replacement is immediate. Stable HUD state then follows the native
+    # ~1 Hz heartbeat rather than the old 5 Hz ordinary-Toyota cadence.
+    _, sends = ci.apply(control(1.0, left_lane=True, right_lane=True), 2_000_000_000)
+    self.assertEqual(len([m for m in sends if m[0] == 0x412]), 1)
+    hud_count = 0
+    for i in range(1, 100):
+      _, sends = ci.apply(control(1.0, left_lane=True, right_lane=True), 2_000_000_000 + i * 10_000_000)
+      hud_count += len([m for m in sends if m[0] == 0x412])
+    self.assertEqual(hud_count, 0)
+    _, sends = ci.apply(control(1.0, left_lane=True, right_lane=True), 3_000_000_000)
+    self.assertEqual(len([m for m in sends if m[0] == 0x412]), 1)
+
+    # The recovered B1[3:2] hands-off visual is owned by openpilot while the
+    # unrecovered B2[6] escalation/chime state remains suppressed.
+    for i in range(1, 10):
+      ci.apply(control(1.0, left_lane=True, right_lane=True, steer_alert=True), 3_000_000_000 + i * 10_000_000)
+    _, sends = ci.apply(control(1.0, left_lane=True, right_lane=True, steer_alert=True), 3_100_000_000)
+    hud = next(dat for addr, dat, bus in sends if addr == 0x412 and bus == 0)
+    self.assertEqual(hud, bytes.fromhex("140c004401ee9307"))
 
   def test_controller_inactive_b6_tracks_measured_angle(self):
     ci = CarInterface(self.CP)

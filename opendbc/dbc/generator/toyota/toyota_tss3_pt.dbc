@@ -233,7 +233,7 @@ CM_ SG_ 48 STEERING_WHEEL_TORQUE_FINE "Signed hundredths remainder. Exact torque
 CM_ SG_ 254 RES_BUTTON_MIRROR_N "Redundant active-low complement of RES_BUTTON; both are observed on the physical switch carrier.";
 CM_ SG_ 254 SET_BUTTON_MIRROR_N "Redundant active-low complement of SET_BUTTON; both are observed on the physical switch carrier.";
 CM_ SG_ 254 CANCEL_BUTTON_MIRROR_N "Redundant active-low complement of CANCEL_BUTTON; both are observed on the physical switch carrier.";
-CM_ SG_ 48 STEERING_FAULT_INHIBIT_STATUS "Target-native selected steering fault/inhibit status aggregate from FEBE7DAE; nominal-clear in retained driving captures. Exact-F33 consumes assertion as an immediate steering-inhibit condition, so CarState maps it to temporary steering-unavailable. This is not an exhaustive EPS-fault bitmap and does not classify 0x351/0x394 permanent/recoverable faults.";
+CM_ SG_ 48 STEERING_FAULT_INHIBIT_STATUS "Target-native selected steering fault/inhibit status aggregate from FEBE7DAE; nominal-clear in retained driving captures. This is not an exhaustive EPS-fault bitmap, and no retained asserted/recovery episode classifies it as temporary or permanent for openpilot policy.";
 CM_ SG_ 48 DRIVER_TORQUE_INVALID "Target-native driver-torque invalid/inhibit gate from FEBE7DB2; nominal-clear in all 6000 tracked Span frames.";
 CM_ SG_ 48 EPS_STATUS_B6_BIT1 "Runtime status bit from FEBE7DB3; exact OEM meaning unresolved.";
 CM_ SG_ 48 EPS_STATUS_B6_BIT3 "Runtime status bit from FEBE7E09; exact OEM meaning unresolved.";
