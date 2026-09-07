@@ -146,6 +146,9 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
     self.assertEqual(cs.gearShifter, structs.CarState.GearShifter.drive)
     self.assertTrue(cs.cruiseState.available)
     self.assertTrue(cs.cruiseState.enabled)
+    # The fixture is physically stopped, but stock ACC is still in its ordinary
+    # pre-hold state (0x08A B7=0x47), so resume-required standstill is false.
+    self.assertFalse(cs.cruiseState.standstill)
     self.assertFalse(cs.carNotReady)
     self.assertAlmostEqual(cs.cruiseState.speed, CAMRY_COMMON[0x08A][10] * CV.KPH_TO_MS, places=5)
     self.assertAlmostEqual(cs.cruiseState.speedCluster, CAMRY_COMMON[0x251][2] * CV.MPH_TO_MS, places=5)
@@ -156,6 +159,25 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
     cs = update_with_frame_set(ci, CAMRY_COMMON | {0x610: metric_units, 0x251: metric_display,
                                                    0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]})
     self.assertAlmostEqual(cs.cruiseState.speedCluster, 34 * CV.KPH_TO_MS, places=5)
+
+    # Source-real route-3b stock-ACC hold states. 0x67 is the ordinary held
+    # standstill state; 0x66 is its accelerator-override companion just before
+    # the state clears. Both occur at exact zero speed after a delayed stop.
+    stock_hold = bytes.fromhex("00000008a0002d67fe703bfe707fff007ffffff7400b10006400350029b3a489")
+    cs = update_with_frame_set(ci, CAMRY_COMMON | {0x08A: stock_hold,
+                                                   0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]})
+    self.assertTrue(cs.cruiseState.standstill)
+    stock_hold_gas = bytes.fromhex("00000008a0002c66fe703bfe707fff007ffffff7400b100064002b008676d649")
+    cs = update_with_frame_set(ci, CAMRY_COMMON | {0x08A: stock_hold_gas,
+                                                   0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]})
+    self.assertTrue(cs.cruiseState.standstill)
+
+    # B7 bit5 alone is not the contract: this source-real moving transition has
+    # B7=0x65 and must not be classified as stock-ACC standstill.
+    moving_transition = bytes.fromhex("0000000880044765fda800fda87fff007fff0030000b100064003b006acb6f13")
+    cs = update_with_frame_set(ci, CAMRY_COMMON | {0x08A: moving_transition,
+                                                   0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]})
+    self.assertFalse(cs.cruiseState.standstill)
 
     cruise_off = bytearray(CAMRY_COMMON[0x08A])
     cruise_off[3] &= ~0x08

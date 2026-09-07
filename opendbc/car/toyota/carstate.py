@@ -145,6 +145,10 @@ class CarState(CarStateBase):
       if len(lateral.vl_all["TSS3_LKAS_HUD"]["BYTE_0"]):
         self.tss3_lkas_hud = copy.copy(lateral.vl["TSS3_LKAS_HUD"])
       ret.cruiseState.enabled = bool(self.tss3_lateral_request["CRUISE_OPERATING_LATCH"])
+      # Native 0x08A B7 values 0x66/0x67 are the delayed stock-ACC standstill/
+      # resume-required state. They appear only at exact zero speed after several
+      # seconds stopped and clear on accelerator/resume before vehicle motion.
+      ret.cruiseState.standstill = ret.cruiseState.enabled and int(self.tss3_lateral_request["CRUISE_SUBSTATE_2"]) in (0x66, 0x67)
       # 0x251 B1[4] is the independent persistent cruise-main state: it rises
       # after the first effective MAIN press and survives CANCEL while the
       # 0x08A operating latch drops, matching Toyota's normal available/enabled split.
