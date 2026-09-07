@@ -101,9 +101,12 @@ class CarController(CarControllerBase):
       lat_active = CC.latActive
 
       # Match the normal Toyota integration: replace the camera HUD message so
-      # Toyota's torque-based hands-off nag does not compete with openpilot DM.
+      # Toyota's torque-based hands-off nag does not compete with openpilot DM,
+      # while rendering openpilot's lane visibility on the stock cluster surface.
       if self.frame % 20 == 0 and CS.tss3_lkas_hud:
-        can_sends.append(toyotacan.create_tss3_hud_command(CS.tss3_lkas_hud))
+        can_sends.append(toyotacan.create_tss3_hud_command(
+          CS.tss3_lkas_hud, CC.hudControl.leftLaneVisible, CC.hudControl.rightLaneVisible, lat_active,
+        ))
 
       if self.frame % 2 == 0:
         if CC.cruiseControl.cancel:

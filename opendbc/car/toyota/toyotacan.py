@@ -97,9 +97,22 @@ def create_tss3_brake_cancel_command(packer, stock_brake):
   return packer.make_can_msg("BRAKE_MODULE", 2, values)
 
 
-def create_tss3_hud_command(stock_hud):
-  """Clone the live FRC HUD frame while suppressing its hands-off warning state."""
+def create_tss3_hud_command(stock_hud, left_line: bool, right_line: bool, lat_active: bool):
+  """Clone the live FRC HUD frame, render openpilot lane state, and suppress Toyota's hands-off nag."""
   dat = bytearray(int(stock_hud[f"BYTE_{i}"]) for i in range(8))
+
+  # The normal road-state 0x412 alphabet is exact on the maintainer Camry:
+  # inactive recognized/missing lanes are nibble 1/2, active recognized lanes
+  # are nibble 4, with B0 low mode 2->4 and B4 2->1 when lateral control is active.
+  # Preserve startup/noncanonical frames instead of projecting road semantics onto them.
+  if (dat[0] & 0xF0) == 0x10 and dat[4] in (1, 2):
+    visible_line = 4 if lat_active else 1
+    left_state = visible_line if left_line else 2
+    right_state = visible_line if right_line else 2
+    dat[0] = (dat[0] & ~0x06) | (0x04 if lat_active else 0x02)
+    dat[3] = (left_state << 4) | right_state
+    dat[4] = 1 if lat_active else 2
+
   dat[1] &= ~0x0C
   dat[2] &= ~0x40
   return 0x412, bytes(dat), 0

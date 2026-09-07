@@ -98,12 +98,15 @@ def replay_native(ci: CarInterface, frames: dict[int, bytes], duration_s: float,
   return ret
 
 
-def control(angle_deg: float, lat_active: bool = True, cancel: bool = False):
+def control(angle_deg: float, lat_active: bool = True, cancel: bool = False,
+            left_lane: bool = False, right_lane: bool = False):
   cc = structs.CarControl()
   cc.enabled = True
   cc.latActive = lat_active
   cc.cruiseControl.cancel = cancel
   cc.actuators.steeringAngleDeg = angle_deg
+  cc.hudControl.leftLaneVisible = left_lane
+  cc.hudControl.rightLaneVisible = right_lane
   return cc.as_reader()
 
 
@@ -334,9 +337,30 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
       0x412: stock_hud,
     })
 
-    _, sends = ci.apply(control(1.0), 2_000_000_000)
+    _, sends = ci.apply(control(1.0, left_lane=True, right_lane=True), 2_000_000_000)
     hud = [m for m in sends if m[0] == 0x412]
     self.assertEqual(hud, [(0x412, bytes.fromhex("1400004401ee9307"), 0)])
+
+  def test_controller_renders_tss3_lane_visibility_on_stock_hud(self):
+    ci = CarInterface(self.CP)
+    stock_hud = bytes.fromhex("1200002202ee9307")
+    update_with_frame_set(ci, CAMRY_COMMON | {
+      0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive],
+      0x412: stock_hud,
+    })
+
+    # High nibble is left, low nibble is right. Active recognized lines use 4;
+    # missing lines retain 2.
+    _, sends = ci.apply(control(1.0, left_lane=True, right_lane=False), 2_000_000_000)
+    hud = next(dat for addr, dat, bus in sends if addr == 0x412 and bus == 0)
+    self.assertEqual(hud, bytes.fromhex("1400004201ee9307"))
+
+    # Inactive recognized lines use state 1 and the normal inactive mode tuple.
+    for _ in range(19):
+      ci.apply(control(1.0, lat_active=False, left_lane=True, right_lane=False), 2_010_000_000)
+    _, sends = ci.apply(control(1.0, lat_active=False, left_lane=True, right_lane=False), 2_020_000_000)
+    hud = next(dat for addr, dat, bus in sends if addr == 0x412 and bus == 0)
+    self.assertEqual(hud, bytes.fromhex("1200001202ee9307"))
 
   def test_controller_inactive_b6_tracks_measured_angle(self):
     ci = CarInterface(self.CP)
