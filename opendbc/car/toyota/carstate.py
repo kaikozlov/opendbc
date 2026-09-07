@@ -71,8 +71,10 @@ class CarState(CarStateBase):
       cp.vl["WHEEL_SPEEDS"]["WHEEL_SPEED_RR"],
     )
     if self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:
-      # Exact Camry retains Toyota's physical cluster-speed carrier on 0x610.
-      # Use the observed UI speed directly instead of a pre-TSS3 fudge factor.
+      # Exact Camry retains Toyota's 0x610 UI-speed carrier. Same-car road data
+      # joins it closely to wheel/vEgo speed, but no synchronized meter-display
+      # observation yet proves that it is the literal dash indication. Use the
+      # wheel-correlated UI speed directly instead of a pre-TSS3 fudge factor.
       ret.vEgoCluster = cp.vl["BODY_CONTROL_STATE_2"]["UI_SPEED"] * CV.KPH_TO_MS
     else:
       # The provisional Corolla corpus has no equivalent recovered cluster-speed
@@ -154,11 +156,13 @@ class CarState(CarStateBase):
       ret.cruiseState.enabled = bool(self.tss3_lateral_request["CRUISE_OPERATING_LATCH"])
       # Native 0x08A B7 values 0x66/0x67 are the delayed stock-ACC standstill/
       # resume-required state. They appear only at exact zero speed after several
-      # seconds stopped and clear on accelerator/resume before vehicle motion.
+      # seconds stopped; all retained episodes clear with accelerator input before
+      # vehicle motion. No RES-button clear join is established.
       ret.cruiseState.standstill = ret.cruiseState.enabled and int(self.tss3_lateral_request["CRUISE_SUBSTATE_2"]) in (0x66, 0x67)
-      # 0x251 B1[4] is the independent persistent cruise-main state: it rises
-      # after the first effective MAIN press and survives CANCEL while the
-      # 0x08A operating latch drops, matching Toyota's normal available/enabled split.
+      # 0x251 B1[4] is an independent persistent cruise-availability/latch state:
+      # it rises after the first effective MAIN activation and survives both
+      # CANCEL and later MAIN deactivation while the 0x08A operating latch drops.
+      # Exact ignition-off/reset semantics and the OEM field name remain unjoined.
       ret.cruiseState.available = bool(lateral.vl["TSS3_CRUISE_DISPLAY"]["CRUISE_MAIN_STATE"])
       set_speed_kph = float(self.tss3_lateral_request["SET_SPEED"])
       ret.cruiseState.speed = set_speed_kph * CV.KPH_TO_MS if set_speed_kph > 0 else 0.0

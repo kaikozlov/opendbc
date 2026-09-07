@@ -389,25 +389,42 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
 
   def test_controller_renders_tss3_lane_visibility_on_stock_hud(self):
     ci = CarInterface(self.CP)
-    stock_hud = bytes.fromhex("1200002202ee9307")
+    stock_hud = bytes.fromhex("1200001202ee9307")
     update_with_frame_set(ci, CAMRY_COMMON | {
       0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive],
       0x412: stock_hud,
     })
 
-    # High nibble is left, low nibble is right. Active recognized lines use 4;
-    # missing lines retain 2.
-    _, sends = ci.apply(control(1.0, left_lane=True, right_lane=False), 2_000_000_000)
+    # Existing road data does not prove whether B3 high/low is left/right.
+    # For an asymmetric openpilot request, preserve the stock per-side nibble
+    # orientation while converting recognized state 1 -> active state 4.
+    _, sends = ci.apply(control(1.0, left_lane=False, right_lane=True), 2_000_000_000)
     hud = next(dat for addr, dat, bus in sends if addr == 0x412 and bus == 0)
     self.assertEqual(hud, bytes.fromhex("1400004201ee9307"))
 
-    # Inactive recognized lines use state 1 and the normal inactive mode tuple.
-    # Display changes are published no faster than the native ~10 Hz event path.
+    # Inactive recognized lines return to state 1 on the same stock-oriented
+    # nibble. Display changes are published no faster than the native ~10 Hz
+    # event path.
     for _ in range(9):
-      ci.apply(control(1.0, lat_active=False, left_lane=True, right_lane=False), 2_010_000_000)
-    _, sends = ci.apply(control(1.0, lat_active=False, left_lane=True, right_lane=False), 2_020_000_000)
+      ci.apply(control(1.0, lat_active=False, left_lane=False, right_lane=True), 2_010_000_000)
+    _, sends = ci.apply(control(1.0, lat_active=False, left_lane=False, right_lane=True), 2_020_000_000)
     hud = next(dat for addr, dat, bus in sends if addr == 0x412 and bus == 0)
-    self.assertEqual(hud, bytes.fromhex("1200001202ee9307"))
+    self.assertEqual(hud, stock_hud)
+
+  def test_controller_preserves_noncanonical_hud_mode(self):
+    ci = CarInterface(self.CP)
+    # Route-3b retained noncanonical road frame: B0 low mode 0 is outside the
+    # two recovered road-state shapes and must not be rewritten to the normal
+    # inactive lane display.
+    stock_hud = bytes.fromhex("1000042102ee9307")
+    update_with_frame_set(ci, CAMRY_COMMON | {
+      0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive],
+      0x412: stock_hud,
+    })
+
+    _, sends = ci.apply(control(1.0, lat_active=False, left_lane=True, right_lane=False, steer_alert=True), 2_000_000_000)
+    hud = next(dat for addr, dat, bus in sends if addr == 0x412 and bus == 0)
+    self.assertEqual(hud, stock_hud)
 
   def test_controller_hud_matches_native_heartbeat_and_openpilot_steer_alert(self):
     ci = CarInterface(self.CP)

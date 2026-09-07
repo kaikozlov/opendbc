@@ -101,17 +101,32 @@ def create_tss3_hud_command(stock_hud, left_line: bool, right_line: bool, lat_ac
   """Clone the live FRC HUD frame and render the recovered openpilot HUD subset."""
   dat = bytearray(int(stock_hud[f"BYTE_{i}"]) for i in range(8))
 
-  # The normal road-state 0x412 alphabet is exact on the maintainer Camry:
-  # inactive recognized/missing lanes are nibble 1/2, active recognized lanes
-  # are nibble 4, with B0 low mode 2->4 and B4 2->1 when lateral control is active.
-  # Preserve startup/noncanonical frames instead of projecting road semantics onto them.
-  if (dat[0] & 0xF0) == 0x10 and dat[4] in (1, 2):
-    visible_line = 4 if lat_active else 1
-    left_state = visible_line if left_line else 2
-    right_state = visible_line if right_line else 2
-    dat[0] = (dat[0] & ~0x06) | (0x04 if lat_active else 0x02)
-    dat[3] = (left_state << 4) | right_state
-    dat[4] = 1 if lat_active else 2
+  # The ordinary road-state 0x412 alphabet is recovered on the maintainer
+  # Camry: inactive recognized/missing lanes are nibble 1/2, active recognized
+  # lanes are nibble 4, with B0 low mode 2->4 and B4 2->1 under lateral control.
+  # The retained corpus also contains B0=0x10 noncanonical shapes. Their mode
+  # semantics are unknown, so preserve the complete stock payload rather than
+  # partially applying lane or warning rewrites to an unknown display mode.
+  if dat[0] not in (0x12, 0x14) or dat[4] not in (1, 2):
+    return 0x412, bytes(dat), 0
+
+  visible_line = 4 if lat_active else 1
+  if left_line == right_line:
+    # Symmetric visibility is orientation-free and can be rendered directly.
+    high_state = low_state = visible_line if left_line else 2
+  else:
+    # Existing road data does not yet prove which B3 nibble is left versus
+    # right. Preserve the stock frame's per-side orientation for asymmetric
+    # cases, while translating recognized state 1<->4 for active/inactive mode.
+    def normalize_stock_lane(state: int) -> int:
+      return visible_line if state in (1, 4) else state
+
+    high_state = normalize_stock_lane(dat[3] >> 4)
+    low_state = normalize_stock_lane(dat[3] & 0x0F)
+
+  dat[0] = (dat[0] & ~0x06) | (0x04 if lat_active else 0x02)
+  dat[3] = (high_state << 4) | low_state
+  dat[4] = 1 if lat_active else 2
 
   # B1[3:2] is the source-real hands-off visual warning. Toyota's internal
   # torque-based warning is replaced by openpilot DM's steer-required state.
