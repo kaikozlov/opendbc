@@ -334,6 +334,7 @@ class TestToyotaStockLongitudinalAngle(TestToyotaStockLongitudinalBase, TestToyo
 class TestToyotaTss3ForwardingSafety(unittest.TestCase):
 
   def setUp(self):
+    self.packer = CANPackerSafety("toyota_tss3_pt_generated")
     self.safety = libsafety_py.libsafety
     self.safety.set_safety_hooks(CarParams.SafetyModel.toyota, ToyotaSafetyFlags.TSS3)
     self.safety.init_tests()
@@ -343,6 +344,22 @@ class TestToyotaTss3ForwardingSafety(unittest.TestCase):
 
   def _tx(self, msg):
     return self.safety.safety_tx_hook(msg)
+
+  @staticmethod
+  def _fix_toyota_checksum(msg):
+    address, dat, bus = msg
+    dat = bytearray(dat)
+    checksum = len(dat) + (address & 0xFF) + ((address >> 8) & 0xFF) + sum(dat[:-1])
+    dat[-1] = checksum & 0xFF
+    return address, bytes(dat), bus
+
+  def _brake_cancel_msg(self, *, pressed=True, set_me_1=1, byte_1=0, byte_3=0):
+    return self.packer.make_can_msg_safety("BRAKE_MODULE", 2, {
+      "SET_ME_1": set_me_1,
+      "BRAKE_PRESSED": int(pressed),
+      "BRAKE_BYTE_1": byte_1,
+      "BRAKE_BYTE_3": byte_3,
+    }, fix_checksum=self._fix_toyota_checksum)
 
   def test_stock_lateral_request_is_forwarded(self):
     self.assertEqual(0, self.safety.safety_fwd_hook(2, 0x08A))
@@ -364,6 +381,16 @@ class TestToyotaTss3ForwardingSafety(unittest.TestCase):
     self._rx(common.make_msg(0, 0x08A, 32))
     self._rx(common.make_msg(2, 0x08A, 32))
     self.assertFalse(self.safety.get_relay_malfunction())
+
+  def test_brake_cancel_checks_cancel_semantic_not_stock_template(self):
+    # The stock-clone fields can legitimately vary. Panda constrains the
+    # cancel actuation itself rather than encoding a second Brake Module template.
+    self.assertTrue(self._tx(self._brake_cancel_msg(set_me_1=0, byte_1=0xA5, byte_3=0x5A)))
+    self.assertFalse(self._tx(self._brake_cancel_msg(pressed=False, byte_1=0xA5, byte_3=0x5A)))
+
+    bad_checksum = self._brake_cancel_msg(byte_1=0xA5, byte_3=0x5A)
+    bad_checksum.data[7] ^= 1
+    self.assertFalse(self._tx(bad_checksum))
 
 
 class TestToyotaSecOcSafetyBase(TestToyotaSafetyBase):

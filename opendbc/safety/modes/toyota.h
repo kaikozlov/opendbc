@@ -254,13 +254,12 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
   bool tx = true;
 
   if (toyota_tss3 && (msg->addr == 0x101U)) {
-    // TSS3 stock-ACC cancel: ordinary Brake Module status cloned onto the
-    // downstream relay side with only BRAKE_PRESSED asserted.
+    // Stock-longitudinal cancel: the controller clones the native Brake Module
+    // frame and asserts BRAKE_PRESSED. Safety owns the cancel bit and checksum;
+    // unrelated status bytes remain the controller's stock-clone responsibility.
     const bool brake_cancel = GET_BIT(msg, 3U);
-    const bool stock_shape = (msg->data[0] == 0x88U) && (msg->data[2] == 0U) &&
-                             (msg->data[4] == 0U) && (msg->data[5] == 0U) && (msg->data[6] == 0U);
     const bool checksum_valid = msg->data[7] == toyota_compute_checksum(msg);
-    tx = brake_cancel && stock_shape && checksum_valid;
+    tx = brake_cancel && checksum_valid;
   } else if (toyota_tss3 && (msg->addr == 0x0B6U)) {
     static const AngleSteeringLimits TOYOTA_TSS3_ANGLE_STEERING_LIMITS = {
       .max_angle = 1745,

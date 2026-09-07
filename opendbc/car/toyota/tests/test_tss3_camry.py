@@ -585,7 +585,7 @@ class TestToyotaCamryTSS3PandaSafety(unittest.TestCase):
     self.assertFalse(self.s.get_controls_allowed())
     self.assertFalse(self.s.safety_tx_hook(libsafety_py.make_CANPacket(0x08A, 0, CAMRY_COMMON[0x08A])))
 
-  def test_brake_cancel_safety_allows_only_stock_shaped_checked_frame(self):
+  def test_brake_cancel_safety_checks_cancel_bit_checksum_and_bus(self):
     good = bytes.fromhex("8800000600000098")
     self.assertTrue(self.s.safety_tx_hook(libsafety_py.make_CANPacket(0x101, 2, good)))
 
@@ -594,10 +594,12 @@ class TestToyotaCamryTSS3PandaSafety(unittest.TestCase):
     brake_off[7] = (8 + 1 + 1 + sum(brake_off[:7])) & 0xFF
     self.assertFalse(self.s.safety_tx_hook(libsafety_py.make_CANPacket(0x101, 2, bytes(brake_off))))
 
-    bad_shape = bytearray(good)
-    bad_shape[4] = 1
-    bad_shape[7] = (8 + 1 + 1 + sum(bad_shape[:7])) & 0xFF
-    self.assertFalse(self.s.safety_tx_hook(libsafety_py.make_CANPacket(0x101, 2, bytes(bad_shape))))
+    # Unrelated Brake Module status bytes are stock-cloned by CarController and
+    # are not a second Panda permission/template surface.
+    varied_stock = bytearray(good)
+    varied_stock[4] = 1
+    varied_stock[7] = (8 + 1 + 1 + sum(varied_stock[:7])) & 0xFF
+    self.assertTrue(self.s.safety_tx_hook(libsafety_py.make_CANPacket(0x101, 2, bytes(varied_stock))))
 
     bad_checksum = bytearray(good)
     bad_checksum[7] ^= 1
