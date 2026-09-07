@@ -117,8 +117,9 @@ class CarState(CarStateBase):
     ret.genericToggle = bool(cp.vl["LIGHT_STALK"]["AUTO_HIGH_BEAM"])
 
     if self.CP.enableBsm:
-      ret.leftBlindspot = bool(cp.vl["BSM"]["L_ADJACENT"] or cp.vl["BSM"]["L_APPROACHING"])
-      ret.rightBlindspot = bool(cp.vl["BSM"]["R_ADJACENT"] or cp.vl["BSM"]["R_APPROACHING"])
+      bsm = cp_cam if self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3 else cp
+      ret.leftBlindspot = bool(bsm.vl["BSM"]["L_ADJACENT"] or bsm.vl["BSM"]["L_APPROACHING"])
+      ret.rightBlindspot = bool(bsm.vl["BSM"]["R_ADJACENT"] or bsm.vl["BSM"]["R_APPROACHING"])
 
     driver_torque_invalid = cp.vl["TSS3_EPS_TELEMETRY"]["DRIVER_TORQUE_INVALID"] != 0
     ret.vehicleSensorsInvalid = ret.vehicleSensorsInvalid or driver_torque_invalid
@@ -321,21 +322,33 @@ class CarState(CarStateBase):
         ("WHEEL_SPEEDS", 100),
         ("BRAKE_MODULE", 50),
         ("GAS_PEDAL", 40),
-        ("GEAR_PACKET_HYBRID", float('nan')),
-        ("TSS3_READY_STATUS", float('nan')),
-        ("ESP_CONTROL", float('nan')),
-        ("BLINKERS_STATE", float('nan')),
-        ("BODY_CONTROL_STATE", float('nan')),
-        ("LIGHT_STALK", float('nan')),
       ]
-      if CP.enableBsm:
-        pt_messages.append(("BSM", float('nan')))
       if CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:
+        # Exact-F33 relay-correct captures establish these as periodic native
+        # bus-0 streams. Keep them in normal CANParser liveness so stale body,
+        # chassis, gear, READY, stalk, units, and cruise-switch state cannot
+        # survive a missing source indefinitely.
         pt_messages += [
-          ("TSS3_CRUISE_SWITCH", 33),
-          ("BODY_CONTROL_STATE_2", float('nan')),
+          ("GEAR_PACKET_HYBRID", 60),
+          ("TSS3_READY_STATUS", 1),
+          ("ESP_CONTROL", 3),
+          ("BLINKERS_STATE", 1),
+          ("BODY_CONTROL_STATE", 3),
+          ("LIGHT_STALK", 1),
+          ("TSS3_CRUISE_SWITCH", 30),
+          ("BODY_CONTROL_STATE_2", 3),
         ]
       else:
+        pt_messages += [
+          ("GEAR_PACKET_HYBRID", float('nan')),
+          ("TSS3_READY_STATUS", float('nan')),
+          ("ESP_CONTROL", float('nan')),
+          ("BLINKERS_STATE", float('nan')),
+          ("BODY_CONTROL_STATE", float('nan')),
+          ("LIGHT_STALK", float('nan')),
+        ]
+        if CP.enableBsm:
+          pt_messages.append(("BSM", float('nan')))
         pt_messages.append(("TSS3_LATERAL_REQUEST", float('nan')))
 
       pt_bus = 1 if CP.carFingerprint == CAR.TOYOTA_COROLLA_TSS3 else 0
@@ -343,11 +356,14 @@ class CarState(CarStateBase):
       if CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:
         # The Toyota-B relay isolates the FRC side on Panda bus 2. Read the
         # native request there; bus 0 carries vehicle/EPS state.
-        parsers[Bus.cam] = CANParser(DBC[CP.carFingerprint][Bus.pt], [
+        cam_messages = [
           ("TSS3_LATERAL_REQUEST", 40),
           ("TSS3_CRUISE_DISPLAY", 1),
-          ("TSS3_LKAS_HUD", float('nan')),
-        ], 2)
+          ("TSS3_LKAS_HUD", 1),
+        ]
+        if CP.enableBsm:
+          cam_messages.append(("BSM", 1))
+        parsers[Bus.cam] = CANParser(DBC[CP.carFingerprint][Bus.pt], cam_messages, 2)
       return parsers
 
     pt_messages = [

@@ -21,10 +21,28 @@ CAMRY_COMMON = {
   0x101: bytes.fromhex("800000010000008b"),
   0x116: bytes.fromhex("000000007b4b235a"),
   0x251: bytes.fromhex("c01015908030a080"),
+  0x3B7: bytes.fromhex("0000000020000008"),
+  0x3F6: bytes.fromhex("81ea6e0480ba4808"),
+  0x412: bytes.fromhex("1400004401ee9307"),
   0x610: bytes.fromhex("00001d4ed0fffc00"),
   0x51E: bytes.fromhex("80006e0000000000"),
   0x614: bytes.fromhex("00004a3000003303"),
   0x620: bytes.fromhex("000000008000001a"),
+  0x622: bytes.fromhex("0000000000730000"),
+}
+
+# Native source/cadence from the relay-correct September Camry captures. The
+# decoder helper below intentionally does not model cadence; integration tests
+# use replay_native() so topology/liveness cannot be hidden by synthetic 100 Hz
+# traffic.
+CAMRY_NATIVE_BUS = {
+  0x08A: 2, 0x251: 2, 0x3F6: 2, 0x412: 2,
+}
+CAMRY_NATIVE_HZ = {
+  0x00F: 10, 0x025: 100, 0x030: 100, 0x08A: 40, 0x0AA: 100,
+  0x0FE: 30, 0x101: 50, 0x116: 40, 0x127: 60, 0x251: 1,
+  0x3B7: 3, 0x3F6: 1, 0x412: 1, 0x51E: 1, 0x610: 3,
+  0x614: 1, 0x620: 3, 0x622: 1,
 }
 CAMRY_GEAR = {
   structs.CarState.GearShifter.park: bytes.fromhex("00100000000ebe0c"),
@@ -37,15 +55,46 @@ CAMRY_GEAR = {
 
 def fingerprint() -> dict[int, dict[int, int]]:
   fp = {i: {} for i in range(8)}
-  fp[0] = {0x025: 32, 0x0AA: 8, 0x3F6: 8}
+  fp[0] = {0x025: 32, 0x0AA: 8}
+  fp[2] = {0x3F6: 8}
   return fp
 
 
 def update_with_frame_set(ci: CarInterface, frames: dict[int, bytes], repeats: int = 20):
-  packet = [CanData(address, dat, 2 if address in (0x08A, 0x251, 0x412) else 0) for address, dat in frames.items()]
+  """Field-decoder helper: monotonic timestamps and native buses, not cadence."""
+  packet = [CanData(address, dat, CAMRY_NATIVE_BUS.get(address, 0)) for address, dat in frames.items()]
+  now = getattr(ci, "_tss3_test_now_nanos", 1_000_000_000)
   ret = None
-  for i in range(repeats):
-    ret = ci.update([(1_000_000_000 + i * 10_000_000, packet)])
+  for _ in range(repeats):
+    now += 10_000_000
+    ret = ci.update([(now, packet)])
+  ci._tss3_test_now_nanos = now
+  return ret
+
+
+def replay_native(ci: CarInterface, frames: dict[int, bytes], duration_s: float, omit: set[int] | None = None):
+  """Replay a compact original-capture fixture at its native buses/cadences."""
+  omit = omit or set()
+  now = getattr(ci, "_tss3_replay_now_nanos", 1_000_000_000)
+  next_due = getattr(ci, "_tss3_replay_next_due", {})
+  ret = None
+  end = now + int(duration_s * 1e9)
+  while now <= end:
+    packet = []
+    for address, dat in frames.items():
+      hz = CAMRY_NATIVE_HZ[address]
+      due = next_due.get(address, now)
+      if now >= due:
+        if address not in omit:
+          packet.append(CanData(address, dat, CAMRY_NATIVE_BUS.get(address, 0)))
+        period = int(1e9 / hz)
+        while due <= now:
+          due += period
+        next_due[address] = due
+    ret = ci.update([(now, packet)])
+    now += 10_000_000
+  ci._tss3_replay_now_nanos = now
+  ci._tss3_replay_next_due = next_due
   return ret
 
 
@@ -112,24 +161,22 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
     self.assertFalse(cs.cruiseState.available)
     self.assertFalse(cs.cruiseState.enabled)
 
-  def test_camera_request_timeout_uses_native_cadence(self):
-    parser = CarInterface.CarState.get_can_parsers(self.CP)[Bus.cam]
-    frames = [CanData(address, CAMRY_COMMON[address], 2) for address in (0x08A, 0x251)]
-    # Native Camry bus-2 0x08A is 40 Hz in stationary and driving rlogs.
-    for t in range(1_000_000_000, 1_100_000_001, 25_000_000):
-      parser.update([(t, frames)])
-      self.assertTrue(parser.can_valid)
+  def test_periodic_inputs_invalidate_and_recover_at_native_cadence(self):
+    base = CAMRY_COMMON | {0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]}
+    # These were historically exempted from alive checks despite being periodic.
+    periodic_inputs = (0x127, 0x51E, 0x3B7, 0x614, 0x620, 0x622, 0x610, 0x3F6, 0x412)
+    for address in periodic_inputs:
+      with self.subTest(address=hex(address)):
+        ci = CarInterface(self.CP)
+        cs = replay_native(ci, base, 1.1)
+        self.assertTrue(cs.canValid)
 
-    # Preserve the normal ten-period allowance, not ten periods at the old 83 Hz.
-    for t in range(1_110_000_000, 1_300_000_001, 10_000_000):
-      parser.update([(t, [])])
-      self.assertTrue(parser.can_valid)
+        timeout_s = 10 / CAMRY_NATIVE_HZ[address]
+        cs = replay_native(ci, base, timeout_s + 0.2, omit={address})
+        self.assertFalse(cs.canValid)
 
-    # Loss of the stream must still invalidate the parser.
-    for t in range(1_310_000_000, 1_410_000_001, 10_000_000):
-      parser.update([(t, [])])
-      valid = parser.can_valid
-    self.assertFalse(valid)
+        cs = replay_native(ci, base, max(0.2, 1 / CAMRY_NATIVE_HZ[address] + 0.05))
+        self.assertTrue(cs.canValid)
 
   def test_carstate_exposes_stock_cruise_button_events(self):
     ci = CarInterface(self.CP)
@@ -244,8 +291,9 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
     ci = CarInterface(self.CP)
     update_with_frame_set(ci, CAMRY_COMMON | {0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]})
     output, sends = ci.apply(control(5.0), 2_000_000_000)
-    self.assertEqual(len(sends), 1)
-    addr, dat, bus = sends[0]
+    b6 = [m for m in sends if m[0] == 0x0B6]
+    self.assertEqual(len(b6), 1)
+    addr, dat, bus = b6[0]
     self.assertEqual((addr, bus, len(dat)), (0x0B6, 0, 32))
     self.assertEqual(dat[3] & 0x3F, 11)
     self.assertEqual(dat[6] & 0x04, 0)

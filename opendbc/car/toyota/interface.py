@@ -44,7 +44,9 @@ class CarInterface(CarInterfaceBase):
         # full-range lateral capability and let controlsd own latActive.
         ret.minSteerSpeed = 0.
         ret.steerAtStandstill = True
-        ret.enableBsm = 0x3F6 in fingerprint[0]
+        # On the Toyota-B relay topology the Camry BSM frame is native on the
+        # camera/FRC side (Panda bus 2), not the vehicle/EPS side.
+        ret.enableBsm = 0x3F6 in fingerprint[2]
         ret.steerActuatorDelay = 0.18
         ret.steerLimitTimer = 0.8
       else:
