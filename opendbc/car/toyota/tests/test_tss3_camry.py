@@ -157,7 +157,24 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
     cruise_off = bytearray(CAMRY_COMMON[0x08A])
     cruise_off[3] &= ~0x08
     cruise_off[10] = 0
-    cs = update_with_frame_set(ci, CAMRY_COMMON | {0x08A: bytes(cruise_off), 0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]})
+    # Original same-car CANCEL state: operation clears while 0x251 B1[4]
+    # preserves cruise main/availability.
+    cancelled_display = bytes.fromhex("a01015488028a080")
+    cs = update_with_frame_set(ci, CAMRY_COMMON | {
+      0x08A: bytes(cruise_off),
+      0x251: cancelled_display,
+      0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive],
+    })
+    self.assertTrue(cs.cruiseState.available)
+    self.assertFalse(cs.cruiseState.enabled)
+
+    # Before the first effective MAIN press, the same carrier has B1[4]=0.
+    pre_main_display = bytes.fromhex("a00000488028a080")
+    cs = update_with_frame_set(ci, CAMRY_COMMON | {
+      0x08A: bytes(cruise_off),
+      0x251: pre_main_display,
+      0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive],
+    })
     self.assertFalse(cs.cruiseState.available)
     self.assertFalse(cs.cruiseState.enabled)
 
@@ -229,12 +246,12 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
     packer = CANPacker(DBC[CAR.TOYOTA_CAMRY_TSS3][Bus.pt])
     base = CAMRY_COMMON | {0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]}
 
-    def eps_msg(coarse: float, invalid: int = 0) -> bytes:
+    def eps_msg(coarse: float, invalid: int = 0, steering_inhibit: int = 0) -> bytes:
       _, msg, _ = packer.make_can_msg("TSS3_EPS_TELEMETRY", 0, {
         "STEERING_WHEEL_TORQUE_COARSE": coarse,
         "STEERING_WHEEL_TORQUE_FINE": 0.0,
         "DRIVER_TORQUE_INVALID": invalid,
-        "STEERING_FAULT_INHIBIT_STATUS": 1,
+        "STEERING_FAULT_INHIBIT_STATUS": steering_inhibit,
       })
       return msg
 
@@ -244,6 +261,12 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
         self.assertAlmostEqual(cs.steeringTorque, torque)
         self.assertEqual(cs.steeringPressed, pressed)
         self.assertFalse(cs.vehicleSensorsInvalid)
+        self.assertFalse(cs.steerFaultTemporary)
+        self.assertFalse(cs.steerFaultPermanent)
+
+    cs = update_with_frame_set(ci, base | {0x030: eps_msg(2.0, steering_inhibit=1)})
+    self.assertTrue(cs.steerFaultTemporary)
+    self.assertFalse(cs.steerFaultPermanent)
 
     cs = update_with_frame_set(ci, base | {0x030: eps_msg(2.0, invalid=1)})
     self.assertAlmostEqual(cs.steeringTorque, 0.0)

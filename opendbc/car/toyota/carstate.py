@@ -132,10 +132,11 @@ class CarState(CarStateBase):
     # 0x030 torque sign convention is not yet dynamically confirmed.
     if self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:
       ret.steeringPressed = abs(ret.steeringTorque) > TSS3_STEER_DRIVER_TORQUE_THRESHOLD
-    # The target exposes independent torque-invalid and steering-fault/inhibit
-    # status bits, but no same-car asserted/recovery fault transition yet. Keep
-    # openpilot fault classification neutral rather than inventing a mapping.
-    ret.steerFaultTemporary = False
+    # Exact-F33 recovers STEERING_FAULT_INHIBIT_STATUS as an immediate selected
+    # steering fault/inhibit aggregate. Map that directly to openpilot's ordinary
+    # temporary steering-unavailable state; no TSS3 permanent-fault policy is
+    # inferred without a same-car asserted/recovery classification.
+    ret.steerFaultTemporary = bool(cp.vl["TSS3_EPS_TELEMETRY"]["STEERING_FAULT_INHIBIT_STATUS"])
     ret.steerFaultPermanent = False
 
     if self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:
@@ -144,9 +145,10 @@ class CarState(CarStateBase):
       if len(lateral.vl_all["TSS3_LKAS_HUD"]["BYTE_0"]):
         self.tss3_lkas_hud = copy.copy(lateral.vl["TSS3_LKAS_HUD"])
       ret.cruiseState.enabled = bool(self.tss3_lateral_request["CRUISE_OPERATING_LATCH"])
-      # The retained Camry drives prove this latch follows actual MAIN activation
-      # and CANCEL. No distinct TSS3 standby/main-only carrier is recovered yet.
-      ret.cruiseState.available = ret.cruiseState.enabled
+      # 0x251 B1[4] is the independent persistent cruise-main state: it rises
+      # after the first effective MAIN press and survives CANCEL while the
+      # 0x08A operating latch drops, matching Toyota's normal available/enabled split.
+      ret.cruiseState.available = bool(lateral.vl["TSS3_CRUISE_DISPLAY"]["CRUISE_MAIN_STATE"])
       set_speed_kph = float(self.tss3_lateral_request["SET_SPEED"])
       ret.cruiseState.speed = set_speed_kph * CV.KPH_TO_MS if set_speed_kph > 0 else 0.0
       cluster_set_speed = float(lateral.vl["TSS3_CRUISE_DISPLAY"]["UI_SET_SPEED"])

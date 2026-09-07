@@ -107,6 +107,7 @@ BO_ 182 TSS3_LATERAL_CONTROL: 32 XXX
  SG_ CMAC_MSB28 : 227|28@0+ (1,0) [0|268435455] "" XXX
 
 BO_ 593 TSS3_CRUISE_DISPLAY: 8 XXX
+ SG_ CRUISE_MAIN_STATE : 12|1@0+ (1,0) [0|1] "" XXX
  SG_ UI_SET_SPEED : 23|8@0+ (1,0) [0|255] "" XXX
 
 BO_ 1042 TSS3_LKAS_HUD: 8 XXX
@@ -196,6 +197,7 @@ CM_ SG_ 138 CRUISE_SUBSTATE_2 "B7 mirrors cruise engagement sub-state: 18 with c
 CM_ SG_ 138 REQUEST_WORD_B8 "Signed16 B8:B9, byte-identical to B11:B12. When cruise is latched (B3[3] and B10=set speed) this tracks (set speed − 0x0AA km/h) at r≈0.99, slope ~120–131 counts/km/h (near Q7). Longitudinal sidecar on the TSS request PDU, not a pinion. Not a GTS+ DID join; do not send as a command.";
 CM_ SG_ 138 REQUEST_WORD_B8_MIRROR "Byte-identical redundant copy of REQUEST_WORD_B8 at B11:B12; equality holds in 44,613/44,613 deduped retained bus-0 frames across both drives.";
 CM_ SG_ 138 SET_SPEED "B10 latched cruise set speed, 1 km/h/count: three RES+ presses change 66->67->68->70 and SET-/CANCEL transitions close through independent 0x0AA vehicle speed. Zero when cruise is off. FRC_P5 DID 0x1901 Memory Vehicle Speed corroborates the set-speed concept in km/h without proving the wire mapping.";
+CM_ SG_ 593 CRUISE_MAIN_STATE "B1[4] persistent cruise-main/availability state. On routes 0000002c--c784367b7e and 0000003d--0e812cecba it starts 0, rises 129.9/160.4 ms after the first effective MAIN press, and remains 1 through five observed CANCEL events while 0x08A CRUISE_OPERATING_LATCH clears. No true MAIN-off edge is retained, so the OEM field name remains unjoined; this is the observed state used for openpilot cruiseState.available.";
 CM_ SG_ 593 UI_SET_SPEED "Exact maintainer Camry imperial-cluster set speed. Route 0000002c--c784367b7e B2 transitions 0->21->22->23->24->25->19->21->19 across stock cruise activation/re-engagement and four RES+ presses; the RES+ UI transitions precede the corresponding 0x08A internal-km/h SET_SPEED updates by about 11 ms. This is the TSS3 analogue of Toyota's separate UI_SET_SPEED semantic; unit transfer is exact only for the observed imperial cluster.";
 CM_ SG_ 138 RESERVED_16BIT_B13 "B13:B14 constant 0x7FFF in all retained frames: Toyota unpublished signed16 pinion sentinel (ADU 2A04/1B40 invalid). EPS-facing 1B40_3 copy is not published on this PDU.";
 CM_ SG_ 138 RESERVED_16BIT_B16 "B16:B17 constant 0x7FFF in all retained frames: same unpublished signed16 pinion sentinel as B13:B14.";
@@ -206,7 +208,7 @@ CM_ SG_ 138 LATERAL_REQUEST_LEVEL "B24 steering assist gain, TSS3 recorder 5282 
 CM_ SG_ 138 FRESHNESS_MESSAGE_LSB2 "SecOC FV4 B28[7:6] message-counter low2; advances +1 on every same-reset B26+1 pair (CORR-135 structural match against preceding authenticated 0x00F).";
 CM_ SG_ 138 FRESHNESS_RESET_LSB2 "SecOC FV4 B28[5:4] reset-counter low2; agrees with the preceding authenticated 0x00F on 19,868/20,615 drive-A and 23,093/23,996 drive-B eligible frames.";
 CM_ SG_ 138 CMAC_MSB28 "B28[3:0]..B31[7:4]: effectively frame-unique in both retained drives, matching the Toyota ordinary-P5 transmitted MAC28. Exact sender key/profile remains unrecovered.";
-CM_ BO_ 593 "TSS3 Camry cluster cruise-set display carrier. B2 follows the vehicle UI set speed in the currently selected display units; retained maintainer captures prove imperial values. Interpret units through legacy BODY_CONTROL_STATE_2.UNITS, matching upstream Toyota CarState.";
+CM_ BO_ 593 "TSS3 Camry cluster cruise state/display carrier. B1[4] separates persistent cruise main/availability from the 0x08A operating latch, while B2 follows the vehicle UI set speed in the currently selected display units. Interpret units through legacy BODY_CONTROL_STATE_2.UNITS, matching upstream Toyota CarState.";
 CM_ BO_ 1042 "Raw-byte TSS3 Camry FRC-side HUD carrier retained for stock-clone replacement. 2026-09-06 highway captures join B1[3:2]=3 to the native hands-off warning cycle and observe B2[6] only as a rare escalation inside that cycle. Other byte semantics remain intentionally unmapped.";
 CM_ SG_ 593 UI_SET_SPEED "Set speed shown in the vehicle UI, in the vehicle-selected unit. Retained maintainer Camry: 21->22->23->24->25 across four RES+ presses while internal 0x08A B10 follows 32->34->35->37->39 km/h.";
 CM_ SG_ 1552 UNITS "Legacy Toyota vehicle-unit selector retained on TSS3. Upstream Toyota treats values 1/2 as metric and other values as imperial; maintainer Camry is observed at 0 in imperial configuration.";
