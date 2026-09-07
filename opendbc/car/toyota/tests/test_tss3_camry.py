@@ -203,6 +203,20 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
     self.assertFalse(cs.cruiseState.available)
     self.assertFalse(cs.cruiseState.enabled)
 
+  def test_carstate_uses_source_real_cluster_speed(self):
+    ci = CarInterface(self.CP)
+    # Coherent native route-2c pair: 0x610 UI_SPEED=29 km/h and the preceding
+    # 0x0AA wheel-speed frame 9.93 ms earlier while the car is moving.
+    frames = CAMRY_COMMON | {
+      0x610: bytes.fromhex("00001d4ed0008c00"),
+      0x0AA: bytes.fromhex("25a0259525902581"),
+      0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive],
+    }
+    cs = update_with_frame_set(ci, frames)
+    self.assertGreater(cs.vEgo, 1.0)
+    # CarInterfaceBase applies the normal 0.5 km/h cluster-speed hysteresis.
+    self.assertAlmostEqual(cs.vEgoCluster, (29 - 0.5) * CV.KPH_TO_MS, places=5)
+
   def test_periodic_inputs_invalidate_and_recover_at_native_cadence(self):
     base = CAMRY_COMMON | {0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]}
     # These were historically exempted from alive checks despite being periodic.

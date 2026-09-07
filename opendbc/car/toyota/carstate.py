@@ -70,7 +70,14 @@ class CarState(CarStateBase):
       cp.vl["WHEEL_SPEEDS"]["WHEEL_SPEED_RL"],
       cp.vl["WHEEL_SPEEDS"]["WHEEL_SPEED_RR"],
     )
-    ret.vEgoCluster = ret.vEgo
+    if self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:
+      # Exact Camry retains Toyota's physical cluster-speed carrier on 0x610.
+      # Use the observed UI speed directly instead of a pre-TSS3 fudge factor.
+      ret.vEgoCluster = cp.vl["BODY_CONTROL_STATE_2"]["UI_SPEED"] * CV.KPH_TO_MS
+    else:
+      # The provisional Corolla corpus has no equivalent recovered cluster-speed
+      # contract; preserve CarInterfaceBase's ordinary vEgo fallback.
+      ret.vEgoCluster = ret.vEgo
     ret.standstill = abs(ret.vEgoRaw) < 1e-3
     ret.vehicleSensorsInvalid = any(cp.vl["WHEEL_SPEEDS"][f"WHEEL_SPEED_{whl}_FAULT"]
                                     for whl in ("FL", "FR", "RL", "RR"))
