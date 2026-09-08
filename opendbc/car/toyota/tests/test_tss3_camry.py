@@ -1,4 +1,8 @@
+import struct
 import unittest
+
+from Crypto.Cipher import AES
+from Crypto.Hash import CMAC
 
 from opendbc.can import CANPacker
 from opendbc.car import Bus, CanData, structs
@@ -370,7 +374,16 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
     self.assertEqual(dat[3] & 0x3F, 11)
     self.assertEqual(dat[6] & 0x04, 0)
     self.assertEqual(dat[8:10], b"\x64\x64")
-    self.assertEqual(int.from_bytes(dat[28:32], "big") & 0x0FFFFFFF, 0)
+    # The Gate-2 patch bypasses receiver comparison, not SecOC framing. Emit a
+    # normal FV4||MAC28 envelope using the fixed AES-128 dummy key.
+    reset_cnt = 0x145C
+    freshness = struct.pack(">HI", 0x01B2, (reset_cnt << 12) | ((reset_cnt & 0x3) << 2))
+    cmac = CMAC.new(bytes(16), ciphermod=AES)
+    cmac.update(b"\x00\xb6" + dat[:28] + freshness)
+    expected_mac28 = int.from_bytes(cmac.digest()[:4], "big") >> 4
+    actual_mac28 = ((dat[28] & 0x0F) << 24) | int.from_bytes(dat[29:32], "big")
+    self.assertEqual(actual_mac28, expected_mac28)
+    self.assertNotEqual(actual_mac28, 0)
     self.assertAlmostEqual(output.steeringAngleDeg,
                            int.from_bytes(dat[4:6], "big", signed=True) * (1024 / 17870), delta=0.03)
     self.assertFalse(any(addr == 0x08A for addr, _, _ in sends))
@@ -464,7 +477,7 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
     commanded_deg = int.from_bytes(dat[4:6], "big", signed=True) * (1024 / 17870)
     self.assertAlmostEqual(commanded_deg, cs.steeringAngleDeg, delta=0.12)
 
-  def test_b6_sequence_and_zero_marker_freshness_progress(self):
+  def test_b6_sequence_and_secoc_freshness_progress(self):
     ci = CarInterface(self.CP)
     update_with_frame_set(ci, CAMRY_COMMON | {0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]})
     _, sends = ci.apply(control(1.0), 2_000_000_000)
@@ -475,8 +488,11 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
 
     self.assertEqual((second[7] - first[7]) & 0x3F, 1)
     self.assertEqual(((second[28] >> 6) - (first[28] >> 6)) & 0x3, 1)
-    self.assertEqual(int.from_bytes(first[28:32], "big") & 0x0FFFFFFF, 0)
-    self.assertEqual(int.from_bytes(second[28:32], "big") & 0x0FFFFFFF, 0)
+    first_mac28 = ((first[28] & 0x0F) << 24) | int.from_bytes(first[29:32], "big")
+    second_mac28 = ((second[28] & 0x0F) << 24) | int.from_bytes(second[29:32], "big")
+    self.assertNotEqual(first_mac28, 0)
+    self.assertNotEqual(second_mac28, 0)
+    self.assertNotEqual(first_mac28, second_mac28)
 
   def test_b6_freshness_counter_reanchors_on_sync_reset(self):
     ci = CarInterface(self.CP)

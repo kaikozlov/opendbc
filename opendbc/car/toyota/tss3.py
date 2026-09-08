@@ -15,6 +15,10 @@ TSS3_B6_TARGET_LATERAL_ID_INACTIVE = 0
 TSS3_B6_TARGET_LATERAL_ID_LTA_LCA = 11
 TSS3_B6_TARGET_ANGLE_SCALE_DEG = 1024 / 17870
 TSS3_B6_SEQUENCE_MODULUS = 64
+# Receiver-side Gate-2 development patches ignore CMAC validity, but the sender
+# should still emit the normal AES-CMAC/FV4 envelope rather than the historical
+# zero-MAC bridge marker. The key value is intentionally arbitrary.
+TSS3_B6_DUMMY_SECOC_KEY = bytes(16)
 
 
 @dataclass(frozen=True)
@@ -127,24 +131,12 @@ def build_b6_application(*, target_lateral_id: int, target_angle_raw: int, seque
   return TSS3B6Application(bytes(data), target_lateral_id, target_angle_raw, sequence)
 
 
-def build_b6_zero_marker_frame(application: TSS3B6Application, freshness: TSS3Freshness) -> tuple[int, bytes, int]:
-  """Build B6 for exact-F33 with the installed Gate-2 development patch.
-
-  Preserve the live transmitted FV4 nibble while forcing only the 28 MAC bits to zero.
-  """
-  if len(application.data) != TSS3_B6_APPLICATION_LEN:
-    raise ValueError(f"B6 application must be {TSS3_B6_APPLICATION_LEN} bytes")
-  data = application.data + bytes.fromhex(f"{freshness.transmitted_nibble:x}0000000")
-  if len(data) != TSS3_B6_LEN:
-    raise AssertionError("internal B6 payload length drift")
-  return TSS3_B6_ADDR, data, 0
-
 def build_b6_secoc_frame(key: bytes, application: TSS3B6Application, freshness: TSS3Freshness) -> tuple[int, bytes, int]:
   """Build a normal secured B6 frame for the Gate-2-patched exact-F33 EPS.
 
   The installed receiver patch bypasses the CMAC comparison, not SecOC framing.
-  Keep the stock DataID/application/freshness/MSB28 construction and sign with
-  the configured (dummy on the patched platform) SecOC key.
+  Keep the stock DataID/application/freshness/MSB28 construction even when the
+  sender uses an arbitrary dummy key on the patched platform.
   """
   if len(application.data) != TSS3_B6_APPLICATION_LEN:
     raise ValueError(f"B6 application must be {TSS3_B6_APPLICATION_LEN} bytes")

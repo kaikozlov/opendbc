@@ -8,9 +8,9 @@ from opendbc.car.common.pid import PIDController
 from opendbc.car.secoc import add_mac, build_sync_mac
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.toyota import toyotacan
-from opendbc.car.toyota.tss3 import (TSS3B6CompanionFields, TSS3B6Template, TSS3Freshness,
+from opendbc.car.toyota.tss3 import (TSS3B6CompanionFields, TSS3B6Template, TSS3Freshness, TSS3_B6_DUMMY_SECOC_KEY,
                                      TSS3_B6_TARGET_LATERAL_ID_INACTIVE, TSS3_B6_TARGET_LATERAL_ID_LTA_LCA,
-                                     build_b6_application, build_b6_zero_marker_frame, target_angle_deg_to_raw)
+                                     build_b6_application, build_b6_secoc_frame, target_angle_deg_to_raw)
 from opendbc.car.toyota.values import CAR, CarControllerParams, ToyotaFlags
 from opendbc.can import CANPacker
 
@@ -144,7 +144,7 @@ class CarController(CarControllerBase):
           companions=self.tss3_active_companions if lat_active else self.tss3_inactive_companions,
         )
         freshness = TSS3Freshness(int(sync["TRIP_CNT"]), reset_counter, self.tss3_message_counter)
-        can_sends.append(build_b6_zero_marker_frame(application, freshness))
+        can_sends.append(build_b6_secoc_frame(TSS3_B6_DUMMY_SECOC_KEY, application, freshness))
 
         self.tss3_sequence = (self.tss3_sequence + 1) & 0x3F
         self.tss3_message_counter = (self.tss3_message_counter + 1) & 0xFF
