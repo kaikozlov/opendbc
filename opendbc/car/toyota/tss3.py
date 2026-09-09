@@ -15,10 +15,6 @@ TSS3_B6_TARGET_LATERAL_ID_INACTIVE = 0
 TSS3_B6_TARGET_LATERAL_ID_LTA_LCA = 11
 TSS3_B6_TARGET_ANGLE_SCALE_DEG = 1024 / 17870
 TSS3_B6_SEQUENCE_MODULUS = 64
-# Receiver-side Gate-2 development patches ignore CMAC validity, but the sender
-# should still emit the normal AES-CMAC/FV4 envelope rather than the historical
-# zero-MAC bridge marker. The key value is intentionally arbitrary.
-TSS3_B6_DUMMY_SECOC_KEY = bytes(16)
 
 
 @dataclass(frozen=True)
@@ -131,13 +127,21 @@ def build_b6_application(*, target_lateral_id: int, target_angle_raw: int, seque
   return TSS3B6Application(bytes(data), target_lateral_id, target_angle_raw, sequence)
 
 
-def build_b6_secoc_frame(key: bytes, application: TSS3B6Application, freshness: TSS3Freshness) -> tuple[int, bytes, int]:
-  """Build a normal secured B6 frame for the Gate-2-patched exact-F33 EPS.
+def build_b6_inline_signer_frame(application: TSS3B6Application) -> tuple[int, bytes, int]:
+  """Emit the exact marker consumed by the F33 EPS-resident inline signer.
 
-  The installed receiver patch bypasses the CMAC comparison, not SecOC framing.
-  Keep the stock DataID/application/freshness/MSB28 construction even when the
-  sender uses an arbitrary dummy key on the patched platform.
+  B0..B27 are the ordinary B6 application payload. The four-byte secured
+  trailer is deliberately zero: the EPS resident owns full SecOC freshness and
+  replaces B28..B31 with FV4||CMAC-MSB28 after CanIf admission and before the
+  stock SecOC verifier.
   """
+  if len(application.data) != TSS3_B6_APPLICATION_LEN:
+    raise ValueError(f"B6 application must be {TSS3_B6_APPLICATION_LEN} bytes")
+  return TSS3_B6_ADDR, application.data + bytes(4), 0
+
+
+def build_b6_secoc_frame(key: bytes, application: TSS3B6Application, freshness: TSS3Freshness) -> tuple[int, bytes, int]:
+  """Build a normal secured B6 frame when the sender owns the SecOC key."""
   if len(application.data) != TSS3_B6_APPLICATION_LEN:
     raise ValueError(f"B6 application must be {TSS3_B6_APPLICATION_LEN} bytes")
   data = add_mac_to_payload(
