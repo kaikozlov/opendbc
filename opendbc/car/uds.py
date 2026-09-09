@@ -376,10 +376,13 @@ class CanClient:
 
             carlog.debug(f"CAN-RX: {hex(rx_addr)} - 0x{bytes.hex(rx_data)}")
 
-            # Cut off sub addr in first byte
+            # Cut off sub addr in first byte. A frame with another sub-address is
+            # traffic for a different logical ECU on this shared address (e.g. a late
+            # response on Toyota's 0x750 bus) - drop it and keep waiting for ours.
             if self.rx_sub_addr is not None:
               if rx_data[0] != self.rx_sub_addr:
-                raise InvalidSubAddressError(f"isotp - rx: invalid sub-address: {rx_data[0]}, expected: {self.rx_sub_addr}")
+                carlog.debug(f"isotp - rx: ignoring frame for sub-address: {rx_data[0]}, expected: {self.rx_sub_addr}")
+                continue
               rx_data = rx_data[1:]
 
             self.rx_buff.append(rx_data)
