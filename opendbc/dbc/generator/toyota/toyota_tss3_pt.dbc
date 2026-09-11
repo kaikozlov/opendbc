@@ -109,6 +109,14 @@ BO_ 374 PCM_CRUISE: 8 XXX
  SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
 
 BO_ 593 TSS3_CRUISE_DISPLAY: 8 XXX
+ SG_ BYTE_0 : 0|8@1+ (1,0) [0|255] "" XXX
+ SG_ BYTE_1 : 8|8@1+ (1,0) [0|255] "" XXX
+ SG_ BYTE_2 : 16|8@1+ (1,0) [0|255] "" XXX
+ SG_ BYTE_3 : 24|8@1+ (1,0) [0|255] "" XXX
+ SG_ BYTE_4 : 32|8@1+ (1,0) [0|255] "" XXX
+ SG_ BYTE_5 : 40|8@1+ (1,0) [0|255] "" XXX
+ SG_ BYTE_6 : 48|8@1+ (1,0) [0|255] "" XXX
+ SG_ BYTE_7 : 56|8@1+ (1,0) [0|255] "" XXX
  SG_ CRUISE_MAIN_STATE : 12|1@0+ (1,0) [0|1] "" XXX
  SG_ UI_SET_SPEED : 23|8@0+ (1,0) [0|255] "" XXX
 

@@ -87,6 +87,16 @@ def create_tss3_accel_command(template: dict[str, float], accel: float | None, *
   return 0x160, bytes(data), 0
 
 
+def create_tss3_drcc_state_command(template: dict[str, float]):
+  """Remap a live Camry conventional-cruise display frame to its observed DRCC state."""
+  data = bytearray(int(template[f"BYTE_{i}"]) for i in range(8))
+  state = {0x88: 0xA0, 0x90: 0xC0}.get(data[0])
+  if state is None:
+    return None
+  data[0] = state
+  return 0x251, bytes(data), 1
+
+
 def create_pcs_commands(packer, accel, active, mass):
   values1 = {
     "COUNTER": 0,
