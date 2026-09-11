@@ -7,6 +7,7 @@ from opendbc.car.carlog import carlog
 from opendbc.car.structs import CarParams, CarParamsT
 from opendbc.car.fingerprints import eliminate_incompatible_cars, all_legacy_fingerprint_cars
 from opendbc.car.fw_versions import ObdCallback, get_fw_versions_ordered, get_present_ecus, match_fw_to_car
+from opendbc.car.fw_query_definitions import PlatformResolverContext
 from opendbc.car.mock.values import CAR as MOCK
 from opendbc.car.values import BRANDS
 from opendbc.car.vin import get_vin, is_valid_vin, VIN_UNKNOWN
@@ -107,7 +108,12 @@ def fingerprint(can_recv: CanRecvCallable, can_send: CanSendCallable, set_obd_mu
       car_fw = get_fw_versions_ordered(can_recv, can_send, set_obd_multiplexing, vin, ecu_rx_addrs)
       cached = False
 
-    exact_fw_match, fw_candidates = match_fw_to_car(car_fw, vin)
+    resolver_context = PlatformResolverContext(
+      vin_rx_addr=vin_rx_addr if vin_rx_addr >= 0 else None,
+      vin_rx_bus=vin_rx_bus if vin_rx_bus >= 0 else None,
+      ecu_rx_addrs=frozenset(ecu_rx_addrs),
+    )
+    exact_fw_match, fw_candidates = match_fw_to_car(car_fw, vin, resolver_context=resolver_context)
   else:
     vin_rx_addr, vin_rx_bus, vin = -1, -1, VIN_UNKNOWN
     exact_fw_match, fw_candidates, car_fw = True, set(), []

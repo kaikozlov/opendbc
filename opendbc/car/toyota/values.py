@@ -8,7 +8,8 @@ from opendbc.car.lateral import AngleSteeringLimits
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.structs import CarParams
 from opendbc.car.docs_definitions import CarFootnote, CarDocs, Column, CarParts, CarHarness, SupportType
-from opendbc.car.fw_query_definitions import FwQueryConfig, Request, StdQueries
+from opendbc.car.fw_query_definitions import FwQueryConfig, OfflineFwVersions, PlatformResolverContext, Request, StdQueries
+from opendbc.car.toyota import platform_resolver
 
 Ecu = CarParams.Ecu
 MIN_ACC_SPEED = 19. * CV.MPH_TO_MS
@@ -479,6 +480,40 @@ def match_fw_to_car_fuzzy(live_fw_versions, vin, offline_fw_versions) -> set[str
   return {str(c) for c in (candidates - FUZZY_EXCLUDED_PLATFORMS)}
 
 
+# Toyota vehicle types are release/region-specific OEM identities. This bridge
+# is deliberately curated: the GTS resolver may identify an unsupported car,
+# but it cannot declare that car control-compatible with an openpilot platform.
+TOYOTA_PLATFORM_BY_VEHICLE: dict[tuple[str, int], CAR] = {
+  # Camry/Camry HV 2021-24. All resolve the established TSS2 architecture
+  # (FRC category 430), distinct from the category-498 TSS3 architecture.
+  ("NA", 12339): CAR.TOYOTA_CAMRY_TSS2,
+  ("NA", 12340): CAR.TOYOTA_CAMRY_TSS2,
+  ("NA", 12401): CAR.TOYOTA_CAMRY_TSS2,
+  ("NA", 12404): CAR.TOYOTA_CAMRY_TSS2,
+  ("NA", 12505): CAR.TOYOTA_CAMRY_TSS2,
+  ("NA", 12506): CAR.TOYOTA_CAMRY_TSS2,
+  ("NA", 12507): CAR.TOYOTA_CAMRY_TSS2,
+  ("NA", 12606): CAR.TOYOTA_CAMRY_TSS2,
+  ("NA", 12607): CAR.TOYOTA_CAMRY_TSS2,
+  ("NA", 12608): CAR.TOYOTA_CAMRY_TSS2,
+}
+
+
+def resolve_platform(live_fw_versions, vin: str, offline_fw_versions: OfflineFwVersions,
+                     context: PlatformResolverContext) -> set[str]:
+  del live_fw_versions, offline_fw_versions
+  matches = tuple(
+    match for match in platform_resolver.resolve_all_regions(platform_resolver.load_data(), vin, context.vin_rx_addr)
+    if match.resolution_complete
+  )
+  # An incomplete compatibility map must fail closed when an OEM identity is
+  # ambiguous. Every viable identity has to map to the same platform.
+  if not matches or any((match.region, match.vehicle_type) not in TOYOTA_PLATFORM_BY_VEHICLE for match in matches):
+    return set()
+  platforms = {TOYOTA_PLATFORM_BY_VEHICLE[(match.region, match.vehicle_type)] for match in matches}
+  return {str(platform) for platform in platforms} if len(platforms) == 1 else set()
+
+
 # Regex patterns for parsing more general platform-specific identifiers from FW versions.
 # - Part number: Toyota part number (usually last character needs to be ignored to find a match).
 #    Each ECU address has just one part number.
@@ -579,6 +614,7 @@ FW_QUERY_CONFIG = FwQueryConfig(
     (Ecu.hvac, 0x7c4, None),
   ],
   match_fw_to_car_fuzzy=match_fw_to_car_fuzzy,
+  resolve_platform=resolve_platform,
 )
 
 STEER_THRESHOLD = 100

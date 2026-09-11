@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import random
 import re
 import time
@@ -11,6 +11,7 @@ from opendbc.car.structs import CarParams
 from opendbc.car.fingerprints import FW_VERSIONS
 from opendbc.car.fw_versions import FW_QUERY_CONFIGS, FUZZY_EXCLUDE_ECUS, VERSIONS, build_fw_dict, \
                                     match_fw_to_car, get_brand_ecu_matches, get_fw_versions, get_present_ecus
+from opendbc.car.fw_query_definitions import PlatformResolverContext
 from opendbc.car.vin import get_vin
 from opendbc.testing import parameterized
 
@@ -25,6 +26,24 @@ class TestFwFingerprint(unittest.TestCase):
     candidates = list(candidates)
     assert len(candidates) == 1, f"got more than one candidate: {candidates}"
     assert candidates[0] == expected
+
+  def test_brand_platform_resolver_receives_startup_context(self):
+    context = PlatformResolverContext(vin_rx_addr=0x7E8, vin_rx_bus=1, ecu_rx_addrs=frozenset({(0x7E8, None, 1)}))
+    resolver = Mock(return_value={"TOYOTA RESOLVER TEST"})
+    with patch.object(FW_QUERY_CONFIGS["toyota"], "resolve_platform", resolver):
+      exact, matches = match_fw_to_car([], "JTDAA12K0T0123456", allow_exact=False, resolver_context=context)
+    self.assertFalse(exact)
+    self.assertEqual(matches, {"TOYOTA RESOLVER TEST"})
+    resolver.assert_called_once_with({}, "JTDAA12K0T0123456", VERSIONS["toyota"], context)
+
+  def test_exact_firmware_match_precedes_platform_resolver(self):
+    resolver = Mock(return_value={"RESOLVER"})
+    with patch("opendbc.car.fw_versions.match_fw_to_car_exact", return_value={"EXACT"}), \
+         patch.object(FW_QUERY_CONFIGS["toyota"], "resolve_platform", resolver):
+      exact, matches = match_fw_to_car([], "JTDAA12K0T0123456", resolver_context=PlatformResolverContext())
+    self.assertTrue(exact)
+    self.assertEqual(matches, {"EXACT"})
+    resolver.assert_not_called()
 
   @parameterized("brand, car_model, ecus, test_non_essential",
                  [(b, c, e[c], n) for b, e in VERSIONS.items() for c in e for n in (True, False)])

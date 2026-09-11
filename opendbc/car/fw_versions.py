@@ -10,7 +10,7 @@ from opendbc.car.carlog import carlog
 from opendbc.car.structs import CarParams
 from opendbc.car.ecu_addrs import get_ecu_addrs
 from opendbc.car.fingerprints import FW_VERSIONS
-from opendbc.car.fw_query_definitions import ESSENTIAL_ECUS, AddrType, EcuAddrBusType, FwQueryConfig, LiveFwVersions, OfflineFwVersions
+from opendbc.car.fw_query_definitions import ESSENTIAL_ECUS, AddrType, EcuAddrBusType, FwQueryConfig, LiveFwVersions, OfflineFwVersions, PlatformResolverContext
 from opendbc.car.interfaces import get_interface_attr
 from opendbc.car.isotp_parallel_query import IsoTpParallelQuery
 
@@ -144,28 +144,40 @@ def match_fw_to_car_exact(live_fw_versions: LiveFwVersions, match_brand: str | N
 
 
 def match_fw_to_car(fw_versions: list[CarParams.CarFw], vin: str, allow_exact: bool = True,
-                    allow_fuzzy: bool = True, log: bool = True) -> tuple[bool, set[str]]:
-  # Try exact matching first
-  exact_matches: list[tuple[bool, MatchFwToCar]] = []
+                    allow_fuzzy: bool = True, log: bool = True,
+                    resolver_context: PlatformResolverContext | None = None) -> tuple[bool, set[str]]:
+  # Preserve exact firmware matching as the first choice.
   if allow_exact:
-    exact_matches = [(True, match_fw_to_car_exact)]
-  if allow_fuzzy:
-    exact_matches.append((False, match_fw_to_car_fuzzy))
-
-  for exact_match, match_func in exact_matches:
     # For each brand, attempt to fingerprint using all FW returned from its queries
     matches: set[str] = set()
     for brand in VERSIONS.keys():
       fw_versions_dict = build_fw_dict(fw_versions, filter_brand=brand)
-      matches |= match_func(fw_versions_dict, match_brand=brand, log=log)
+      matches |= match_fw_to_car_exact(fw_versions_dict, match_brand=brand, log=log)
+    if len(matches):
+      return True, matches
+
+  if allow_fuzzy and resolver_context is not None:
+    matches = set()
+    for brand in VERSIONS.keys():
+      config = FW_QUERY_CONFIGS[brand]
+      if config.resolve_platform is not None:
+        fw_versions_dict = build_fw_dict(fw_versions, filter_brand=brand)
+        matches |= config.resolve_platform(fw_versions_dict, vin, VERSIONS[brand], resolver_context)
+    if len(matches):
+      return False, matches
+
+  if allow_fuzzy:
+    matches = set()
+    for brand in VERSIONS.keys():
+      fw_versions_dict = build_fw_dict(fw_versions, filter_brand=brand)
+      matches |= match_fw_to_car_fuzzy(fw_versions_dict, match_brand=brand, log=log)
 
       # If specified and no matches so far, fall back to brand's fuzzy fingerprinting function
       config = FW_QUERY_CONFIGS[brand]
-      if not exact_match and not len(matches) and config.match_fw_to_car_fuzzy is not None:
+      if not len(matches) and config.match_fw_to_car_fuzzy is not None:
         matches |= config.match_fw_to_car_fuzzy(fw_versions_dict, vin, VERSIONS[brand])
-
     if len(matches):
-      return exact_match, matches
+      return False, matches
 
   return True, set()
 
