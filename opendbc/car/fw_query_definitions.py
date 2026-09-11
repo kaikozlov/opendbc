@@ -14,6 +14,14 @@ EcuAddrSubAddr = tuple[Ecu, int, int | None]
 LiveFwVersions = dict[AddrType, set[bytes]]
 OfflineFwVersions = dict[str, dict[EcuAddrSubAddr, list[bytes]]]
 
+
+@dataclass(frozen=True)
+class PlatformResolverContext:
+  """Additional read-only identity context collected during fingerprinting."""
+  vin_rx_addr: int | None = None
+  vin_rx_bus: int | None = None
+  ecu_rx_addrs: frozenset[EcuAddrBusType] = frozenset()
+
 # A global list of addresses we will only ever consider for VIN responses
 # engine, hybrid controller, Ford abs, Hyundai CAN FD cluster, 29-bit engine, PGM-FI
 # TODO: move these to each brand's FW query config
@@ -108,6 +116,9 @@ class FwQueryConfig:
   # Function a brand can implement to provide better fuzzy matching. Takes in FW versions and VIN,
   # returns set of candidates. Only will match if one candidate is returned
   match_fw_to_car_fuzzy: Callable[[LiveFwVersions, str, OfflineFwVersions], set[str]] | None = None
+  # Optional OEM-native platform resolver. Unlike firmware fuzzy matching, this
+  # also receives the VIN responder and discovered diagnostic endpoints.
+  resolve_platform: Callable[[LiveFwVersions, str, OfflineFwVersions, PlatformResolverContext], set[str]] | None = None
 
   def __post_init__(self):
     # Asserts that a request exists if extra ecus are used
