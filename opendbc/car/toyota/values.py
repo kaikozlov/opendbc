@@ -74,6 +74,7 @@ class ToyotaFlags(IntFlag):
   # Detected flags
   HYBRID = 1
   DISABLE_RADAR = 4
+  EPS_DIAGNOSTICS_UNAVAILABLE = 8192
 
   # Static flags
   TSS2 = 8

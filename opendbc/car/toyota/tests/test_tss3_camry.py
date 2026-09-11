@@ -3,6 +3,7 @@ import unittest
 from opendbc.car import Bus, CanData, structs
 from opendbc.car.fw_versions import match_fw_to_car
 from opendbc.car.fw_query_definitions import PlatformResolverContext
+from opendbc.car.toyota.carstate import CarState
 from opendbc.car.toyota.fingerprints import FW_VERSIONS
 from opendbc.car.toyota.interface import CarInterface
 from opendbc.car.toyota.values import CAR, DBC, EPS_SCALE, ToyotaFlags, ToyotaSafetyFlags, resolve_platform
@@ -105,6 +106,13 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     exact, matches = match_fw_to_car(car_fw, VIN_UNKNOWN, allow_fuzzy=False)
     self.assertTrue(exact)
     self.assertEqual(matches, {str(CAR.TOYOTA_CAMRY_TSS3)})
+
+    cp = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint(), car_fw, False, False, False)
+    self.assertTrue(cp.flags & ToyotaFlags.EPS_DIAGNOSTICS_UNAVAILABLE)
+    self.assertEqual(cp.minSteerSpeed, 1000.)
+    self.assertFalse(cp.steerAtStandstill)
+    parsers = CarState.get_can_parsers(cp)
+    self.assertTrue(parsers[Bus.pt].message_states[0x030].ignore_alive)
 
   def test_stock_toyota_b_state_is_entirely_on_bus_one(self):
     ci = CarInterface(self.CP)

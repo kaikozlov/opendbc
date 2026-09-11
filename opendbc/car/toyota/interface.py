@@ -34,6 +34,11 @@ class CarInterface(CarInterfaceBase):
       ret.centerToFront = ret.wheelbase * 0.44
 
       if candidate == CAR.TOYOTA_CAMRY_TSS3:
+        has_eps_firmware = any(f.ecu == Ecu.eps and f.address == 0x7A1 for f in car_fw)
+        has_abs_firmware = any(f.ecu == Ecu.abs and f.address == 0x7B0 for f in car_fw)
+        if has_abs_firmware and not has_eps_firmware:
+          ret.flags |= ToyotaFlags.EPS_DIAGNOSTICS_UNAVAILABLE.value
+
         ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.toyota)]
         ret.safetyConfigs[0].safetyParam = (EPS_SCALE[candidate] |
                                              ToyotaSafetyFlags.F33.value)
@@ -43,8 +48,8 @@ class CarInterface(CarInterfaceBase):
         # The EPS-resident helper owns native B6 signing; openpilot owns only
         # the bounded C7 sideband and therefore needs no host SecOC key.
         ret.secOcRequired = False
-        ret.minSteerSpeed = 0.
-        ret.steerAtStandstill = True
+        ret.minSteerSpeed = 1000. if ret.flags & ToyotaFlags.EPS_DIAGNOSTICS_UNAVAILABLE else 0.
+        ret.steerAtStandstill = not bool(ret.flags & ToyotaFlags.EPS_DIAGNOSTICS_UNAVAILABLE)
         # Stock Toyota-B exposes the EPS/Brake network on Panda bus 1.
         ret.enableBsm = 0x3F6 in fingerprint[1]
         ret.steerActuatorDelay = 0.18
