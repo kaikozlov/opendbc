@@ -8,6 +8,7 @@ from opendbc.car.common.pid import PIDController
 from opendbc.car.secoc import add_mac, build_sync_mac
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.toyota import toyotacan
+from opendbc.car.toyota.tss3 import build_f33_signer_control, target_angle_deg_to_raw
 from opendbc.car.toyota.values import CAR, CarControllerParams, ToyotaFlags
 from opendbc.can import CANPacker
 
@@ -75,7 +76,37 @@ class CarController(CarControllerBase):
     self.secoc_acc_message_counter = 0
     self.secoc_prev_reset_counter = 0
 
+    self.tss3_control_sequence = 0
+
   def update(self, CC, CS, now_nanos):
+    if self.CP.flags & ToyotaFlags.TSS3:
+      if self.CP.dashcamOnly:
+        self.frame += 1
+        return CC.actuators.as_builder(), []
+
+      output = CC.actuators.as_builder()
+      can_sends = []
+      if self.frame % 2 == 0:
+        desired_angle = CC.actuators.steeringAngleDeg + CS.out.steeringAngleOffsetDeg
+        self.last_angle = apply_std_steer_angle_limits(
+          desired_angle, self.last_angle, CS.out.vEgoRaw,
+          CS.out.steeringAngleDeg + CS.out.steeringAngleOffsetDeg,
+          CC.latActive, self.params.TSS3_ANGLE_LIMITS,
+        )
+
+        if CC.latActive:
+          self.tss3_control_sequence = self.tss3_control_sequence % 0xFF + 1
+        else:
+          self.tss3_control_sequence = 0
+
+        can_sends.append(build_f33_signer_control(
+          target_angle_deg_to_raw(self.last_angle), self.tss3_control_sequence,
+        ))
+        output.steeringAngleDeg = self.last_angle
+
+      self.frame += 1
+      return output, can_sends
+
     actuators = CC.actuators
     stopping = actuators.longControlState == LongCtrlState.stopping
     hud_control = CC.hudControl

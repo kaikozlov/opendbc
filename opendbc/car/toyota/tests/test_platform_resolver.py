@@ -39,9 +39,9 @@ class TestToyotaPlatformResolver(unittest.TestCase):
     context = PlatformResolverContext(vin_rx_addr=0x7E8, vin_rx_bus=1)
     self.assertEqual(resolve_platform({}, "JTD1Z12K0N0123456", {}, context), {str(CAR.TOYOTA_CAMRY_TSS2)})
 
-  def test_oem_identity_does_not_enable_unmapped_tss3_platform(self):
+  def test_oem_identity_maps_exact_tss3_camry_platform(self):
     context = PlatformResolverContext(vin_rx_addr=0x7E8, vin_rx_bus=1)
-    self.assertEqual(resolve_platform({}, "JTDAA12K0T0123456", {}, context), set())
+    self.assertEqual(resolve_platform({}, "JTDAA12K0T0123456", {}, context), {str(CAR.TOYOTA_CAMRY_TSS3)})
 
   def test_ambiguous_identity_requires_every_candidate_to_be_mapped(self):
     context = PlatformResolverContext(vin_rx_addr=0x7E8, vin_rx_bus=1)

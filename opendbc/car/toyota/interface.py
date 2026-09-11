@@ -24,6 +24,36 @@ class CarInterface(CarInterfaceBase):
   @staticmethod
   def _get_params(ret: structs.CarParams, candidate, fingerprint, car_fw, alpha_long, is_release, docs) -> structs.CarParams:
     ret.brand = "toyota"
+
+    if ret.flags & ToyotaFlags.TSS3:
+      ret.steerControlType = SteerControlType.angle
+      ret.radarUnavailable = True
+      ret.openpilotLongitudinalControl = False
+      ret.autoResumeSng = False
+      ret.minEnableSpeed = -1.
+      ret.centerToFront = ret.wheelbase * 0.44
+
+      if candidate == CAR.TOYOTA_CAMRY_TSS3:
+        ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.toyota)]
+        ret.safetyConfigs[0].safetyParam = (EPS_SCALE[candidate] |
+                                             ToyotaSafetyFlags.STOCK_LONGITUDINAL.value |
+                                             ToyotaSafetyFlags.F33.value)
+        ret.dashcamOnly = False
+        # The EPS-resident helper owns native B6 signing; openpilot owns only
+        # the bounded C7 sideband and therefore needs no host SecOC key.
+        ret.secOcRequired = False
+        ret.minSteerSpeed = 0.
+        ret.steerAtStandstill = True
+        # Stock Toyota-B exposes the EPS/Brake network on Panda bus 1.
+        ret.enableBsm = 0x3F6 in fingerprint[1]
+        ret.steerActuatorDelay = 0.18
+        ret.steerLimitTimer = 0.8
+      else:
+        ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.noOutput)]
+        ret.dashcamOnly = True
+
+      return ret
+
     ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.toyota)]
     ret.safetyConfigs[0].safetyParam = EPS_SCALE[candidate]
 
