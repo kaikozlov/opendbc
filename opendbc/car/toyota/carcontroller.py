@@ -82,6 +82,7 @@ class CarController(CarControllerBase):
 
     self.tss3_control_sequence = 0
     self.tss3_longitudinal_counter = None
+    self.tss3_cruise_display_counter = 0
 
   def update(self, CC, CS, now_nanos):
     if self.CP.flags & ToyotaFlags.TSS3:
@@ -128,6 +129,19 @@ class CarController(CarControllerBase):
         self.tss3_longitudinal_counter = camera_counter
       elif not engaged:
         self.tss3_longitudinal_counter = camera_counter
+
+      # With unavailable EPS diagnostics, Toyota permits conventional cruise but
+      # reports DRCC unavailable. Follow each stock display update with the
+      # byte-exact DRCC equivalent so downstream ECUs see the adaptive mode while
+      # openpilot owns the intercepted longitudinal request.
+      display = CS.tss3_cruise_display
+      display_counter = CS.tss3_cruise_display_counter
+      if (self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3 and self.CP.openpilotLongitudinalControl and
+          self.CP.flags & ToyotaFlags.EPS_DIAGNOSTICS_UNAVAILABLE and display is not None and
+          display_counter != self.tss3_cruise_display_counter):
+        if (msg := toyotacan.create_tss3_drcc_state_command(display)) is not None:
+          can_sends.append(msg)
+        self.tss3_cruise_display_counter = display_counter
 
       self.frame += 1
       return output, can_sends

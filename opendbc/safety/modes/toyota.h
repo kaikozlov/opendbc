@@ -264,7 +264,9 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
 
     const bool signer_control = (msg->bus == 1U) && (msg->addr == 0x1FDC0002U);
     const bool long_control = !toyota_stock_longitudinal && (msg->bus == 0U) && (msg->addr == 0x160U);
-    tx = signer_control || long_control;
+    const bool drcc_state_control = !toyota_stock_longitudinal && !toyota_corolla_hf &&
+                                    (msg->bus == 1U) && (msg->addr == 0x251U);
+    tx = signer_control || long_control || drcc_state_control;
     if (signer_control) {
       const bool header_valid = (msg->data[0] == 0U) && (msg->data[1] == 0xC7U) &&
                                 (msg->data[3] == 0U) && (msg->data[6] == 0U) && (msg->data[7] == 0U);
@@ -281,6 +283,11 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
         int camry_coarse_accel = to_signed(msg->data[12] & 0x7FU, 7) * -100;
         tx = tx && !longitudinal_accel_checks(camry_coarse_accel, TOYOTA_LONG_LIMITS);
       }
+    }
+    if (drcc_state_control) {
+      const bool drcc_available = msg->data[0] == 0xA0U;
+      const bool drcc_active = (msg->data[0] == 0xC0U) && get_longitudinal_allowed();
+      tx = drcc_available || drcc_active;
     }
     return tx;
   }
@@ -475,6 +482,7 @@ static safety_config toyota_init(uint16_t param) {
     static const CanMsg toyota_tss3_signer_long_tx_msgs[] = {
       {0x1FDC0002, 1, 8, .check_relay = false},
       {0x160, 0, 32, .check_relay = true, .disable_static_blocking = true},
+      {0x251, 1, 8, .check_relay = false},
     };
     if (toyota_stock_longitudinal) {
       SET_TX_MSGS(toyota_tss3_signer_stock_long_tx_msgs, ret);

@@ -52,10 +52,16 @@ class CarState(CarStateBase):
     self.gvc = 0.0
     self.secoc_synchronization = None
     self.tss3_longitudinal_request = None
+    self.tss3_cruise_display = None
+    self.tss3_cruise_display_counter = 0
 
   def _update_tss3(self, cp: CANParser, cp_cam: CANParser) -> structs.CarState:
     if cp_cam.vl_all["TSS3_LONGITUDINAL_REQUEST"]["COUNTER"]:
       self.tss3_longitudinal_request = copy.copy(cp_cam.vl["TSS3_LONGITUDINAL_REQUEST"])
+
+    if self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3 and cp.vl_all["TSS3_CRUISE_DISPLAY"]["BYTE_0"]:
+      self.tss3_cruise_display = copy.copy(cp.vl["TSS3_CRUISE_DISPLAY"])
+      self.tss3_cruise_display_counter += 1
 
     if self.CP.carFingerprint == CAR.TOYOTA_COROLLA_TSS3:
       return self._update_tss3_corolla(cp)
