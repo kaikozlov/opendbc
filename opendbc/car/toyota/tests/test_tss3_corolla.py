@@ -97,7 +97,7 @@ def control(angle, active=True, accel=0.0, long_active=False):
 
 class TestToyotaCorollaTSS3(unittest.TestCase):
   def setUp(self):
-    self.CP = CarInterface.get_params(CAR.TOYOTA_COROLLA_TSS3, fingerprint(), [], False, False, False)
+    self.CP = CarInterface.get_params(CAR.TOYOTA_COROLLA_TSS3, fingerprint(), [], True, False, False)
 
   def test_platform_contract_and_identities(self):
     self.assertTrue(self.CP.flags & ToyotaFlags.TSS3)
@@ -106,6 +106,7 @@ class TestToyotaCorollaTSS3(unittest.TestCase):
     self.assertFalse(self.CP.dashcamOnly)
     self.assertFalse(self.CP.secOcRequired)
     self.assertTrue(self.CP.openpilotLongitudinalControl)
+    self.assertTrue(self.CP.alphaLongitudinalAvailable)
     self.assertTrue(self.CP.autoResumeSng)
     self.assertEqual(self.CP.steerControlType, structs.CarParams.SteerControlType.angle)
     self.assertEqual(self.CP.safetyConfigs[0].safetyModel, structs.CarParams.SafetyModel.toyota)
@@ -120,8 +121,15 @@ class TestToyotaCorollaTSS3(unittest.TestCase):
     ])
     for vehicle_type in (12512, 12513, 12514, 12515, 12516, 12821, 12822, 12823, 12824, 12827):
       self.assertEqual(TOYOTA_PLATFORM_BY_VEHICLE[("NA", vehicle_type)], CAR.TOYOTA_COROLLA_TSS3)
-    self.assertTrue(any(request.bus == 1 and request.whitelist_ecus == [Ecu.eps] and not request.obd_multiplexing
+    self.assertTrue(any(request.bus == 1 and request.whitelist_ecus == [Ecu.eps, Ecu.abs] and not request.obd_multiplexing
                         for request in FW_QUERY_CONFIG.requests))
+
+  def test_alpha_long_gating(self):
+    cp = CarInterface.get_params(CAR.TOYOTA_COROLLA_TSS3, fingerprint(), [], False, False, False)
+    self.assertTrue(cp.alphaLongitudinalAvailable)
+    self.assertFalse(cp.openpilotLongitudinalControl)
+    self.assertFalse(cp.autoResumeSng)
+    self.assertTrue(cp.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.STOCK_LONGITUDINAL)
 
   def test_real_span_frames_decode_target_native_state(self):
     ci = CarInterface(self.CP)

@@ -76,7 +76,7 @@ def control(angle: float, active: bool = True, accel: float = 0.0, long_active: 
 
 class TestToyotaCamryTSS3(unittest.TestCase):
   def setUp(self):
-    self.CP = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint(), [], False, False, False)
+    self.CP = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint(), [], True, False, False)
 
   def test_platform_contract(self):
     self.assertTrue(self.CP.flags & ToyotaFlags.TSS3)
@@ -85,6 +85,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertFalse(self.CP.dashcamOnly)
     self.assertFalse(self.CP.secOcRequired)
     self.assertTrue(self.CP.openpilotLongitudinalControl)
+    self.assertTrue(self.CP.alphaLongitudinalAvailable)
     self.assertTrue(self.CP.autoResumeSng)
     self.assertEqual(self.CP.steerControlType, structs.CarParams.SteerControlType.angle)
     self.assertEqual(self.CP.safetyConfigs[0].safetyModel, structs.CarParams.SafetyModel.toyota)
@@ -92,6 +93,13 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertFalse(self.CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.STOCK_LONGITUDINAL)
     self.assertEqual(DBC[CAR.TOYOTA_CAMRY_TSS3][Bus.pt], "toyota_tss3_pt_generated")
     self.assertTrue(self.CP.enableBsm)
+
+  def test_alpha_long_gating(self):
+    cp = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint(), [], False, False, False)
+    self.assertTrue(cp.alphaLongitudinalAvailable)
+    self.assertFalse(cp.openpilotLongitudinalControl)
+    self.assertFalse(cp.autoResumeSng)
+    self.assertTrue(cp.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.STOCK_LONGITUDINAL)
 
   def test_exact_identity_and_oem_resolver(self):
     fw = FW_VERSIONS[CAR.TOYOTA_CAMRY_TSS3]
@@ -109,6 +117,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
 
     cp = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint(), car_fw, False, False, False)
     self.assertTrue(cp.flags & ToyotaFlags.EPS_DIAGNOSTICS_UNAVAILABLE)
+    self.assertFalse(cp.openpilotLongitudinalControl)
     self.assertEqual(cp.minSteerSpeed, 1000.)
     self.assertFalse(cp.steerAtStandstill)
     parsers = CarState.get_can_parsers(cp)
