@@ -52,17 +52,12 @@ def fingerprint() -> dict[int, dict[int, int]]:
   return fp
 
 
-def update_state(ci: CarInterface, moving: bool = False, counter_offset: int = 0, cruise_display: bytes | None = None,
-                 cruise_switch: bytes | None = None):
+def update_state(ci: CarInterface, moving: bool = False, counter_offset: int = 0):
   state = None
   for i in range(20):
     frames = dict(CAMRY_COMMON)
     if moving:
       frames[0x0AA] = bytes.fromhex("1c001c001c001c00")
-    if cruise_display is not None:
-      frames[0x251] = cruise_display
-    if cruise_switch is not None:
-      frames[0x0FE] = cruise_switch
     packets = ([CanData(address, data, 1) for address, data in frames.items()] +
                [CanData(0x160, long_with_counter(CAMRY_LONG, CAMRY_LONG[2] + counter_offset + i), 2)])
     state = ci.update([(1_000_000_000 + i * 10_000_000, packets)])
@@ -173,73 +168,6 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertEqual(data[4:6], bytes.fromhex("8514"))
     self.assertEqual(data[12], 0x73)
 
-  def test_dead_eps_follows_conventional_display_with_drcc_state(self):
-    abs_version = FW_VERSIONS[CAR.TOYOTA_CAMRY_TSS3][(Ecu.abs, 0x7B0, None)][0]
-    car_fw = [structs.CarParams.CarFw(ecu=Ecu.abs, fwVersion=abs_version, brand="toyota", address=0x7B0)]
-    cp = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint(), car_fw, True, False, False)
-    self.assertTrue(cp.flags & ToyotaFlags.EPS_DIAGNOSTICS_UNAVAILABLE)
-    self.assertTrue(cp.openpilotLongitudinalControl)
-    self.assertFalse(cp.pcmCruise)
-    self.assertTrue(cp.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.TSS3_LONG_BUTTONS)
-    ci = CarInterface(cp)
-
-    conventional_active = bytearray(CAMRY_COMMON[0x251])
-    conventional_active[0] = 0x90
-    update_state(ci, moving=True, cruise_display=bytes(conventional_active))
-    _, sends = ci.apply(control(0.0, active=False, long_active=True), 2_000_000_000)
-    _, data, bus = next(msg for msg in sends if msg[0] == 0x251)
-    expected = bytearray(conventional_active)
-    expected[0] = 0xC0
-    self.assertEqual((data, bus), (bytes(expected), 1))
-
-  def test_dead_eps_longitudinal_does_not_wait_for_stock_cruise_latch(self):
-    abs_version = FW_VERSIONS[CAR.TOYOTA_CAMRY_TSS3][(Ecu.abs, 0x7B0, None)][0]
-    car_fw = [structs.CarParams.CarFw(ecu=Ecu.abs, fwVersion=abs_version, brand="toyota", address=0x7B0)]
-    cp = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint(), car_fw, True, False, False)
-    ci = CarInterface(cp)
-
-    disabled = bytearray(CAMRY_COMMON[0x08A])
-    disabled[3] &= ~0x08
-    unavailable = bytearray(CAMRY_COMMON[0x251])
-    unavailable[0] = 0xE0
-    for i in range(20):
-      frames = dict(CAMRY_COMMON)
-      frames[0x08A] = bytes(disabled)
-      frames[0x251] = bytes(unavailable)
-      frames[0x0AA] = bytes.fromhex("1c001c001c001c00")
-      packets = ([CanData(address, data, 1) for address, data in frames.items()] +
-                 [CanData(0x160, long_with_counter(CAMRY_LONG, CAMRY_LONG[2] + i), 2)])
-      state = ci.update([(1_000_000_000 + i * 10_000_000, packets)])
-    self.assertFalse(state.cruiseState.enabled)
-
-    output, sends = ci.apply(control(0.0, active=False, accel=-1.0, long_active=True), 2_000_000_000)
-    _, data, bus = next(msg for msg in sends if msg[0] == 0x160)
-    self.assertEqual(bus, 0)
-    self.assertEqual(data[4:6], bytes.fromhex("fc18"))
-    self.assertEqual(data[12], 0x0A)
-    self.assertEqual(output.accel, -1.0)
-
-  def test_dead_eps_main_button_owns_virtual_drcc_availability(self):
-    abs_version = FW_VERSIONS[CAR.TOYOTA_CAMRY_TSS3][(Ecu.abs, 0x7B0, None)][0]
-    car_fw = [structs.CarParams.CarFw(ecu=Ecu.abs, fwVersion=abs_version, brand="toyota", address=0x7B0)]
-    cp = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint(), car_fw, True, False, False)
-    ci = CarInterface(cp)
-
-    main = bytearray(CAMRY_COMMON[0x0FE])
-    main[7] |= 0x04
-    state = update_state(ci, cruise_switch=bytes(main))
-    self.assertTrue(state.cruiseState.available)
-    self.assertFalse(state.cruiseState.enabled)
-    _, sends = ci.apply(control(0.0, active=False, accel=-1.0, long_active=False), 2_000_000_000)
-    _, data, bus = next(msg for msg in sends if msg[0] == 0x160)
-    self.assertEqual(bus, 0)
-    self.assertEqual(data[4:6], bytes.fromhex("8000"))
-    self.assertEqual(data[12], 0)
-
-    update_state(ci, cruise_switch=CAMRY_COMMON[0x0FE])
-    state = update_state(ci, counter_offset=40, cruise_switch=bytes(main))
-    self.assertFalse(state.cruiseState.available)
-
   def test_inactive_c7_tracks_measured_angle_with_neutral_sequence(self):
     ci = CarInterface(self.CP)
     state = update_state(ci)
@@ -271,69 +199,6 @@ class TestToyotaCamryTSS3Safety(unittest.TestCase):
     self.assertFalse(self.safety.safety_tx_hook(self.c7(bus=0)))
     self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x08A, 1, CAMRY_COMMON[0x08A])))
 
-  def test_dead_eps_longitudinal_uses_physical_cruise_buttons(self):
-    param = (EPS_SCALE[CAR.TOYOTA_CAMRY_TSS3] | ToyotaSafetyFlags.F33 |
-             ToyotaSafetyFlags.TSS3_LONG_BUTTONS)
-    self.assertEqual(self.safety.set_safety_hooks(structs.CarParams.SafetyModel.toyota, param), 0)
-    self.safety.init_tests()
-
-    disabled = bytearray(CAMRY_COMMON[0x08A])
-    disabled[3] &= ~0x08
-    for address in (0x025, 0x0AA, 0x116, 0x101):
-      self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(address, 1, CAMRY_COMMON[address])))
-    self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x08A, 1, bytes(disabled))))
-    self.assertFalse(self.safety.get_controls_allowed())
-
-    neutral = bytearray(CAMRY_COMMON[0x0FE])
-    neutral[3] &= ~0x80
-    neutral[4] &= ~0xC0
-    neutral[6] &= ~0x80
-    neutral[7] &= ~0x64
-    main = bytearray(neutral)
-    main[7] |= 0x04
-    set_button = bytearray(neutral)
-    set_button[4] |= 0x80
-
-    for data in (main, neutral, set_button, neutral):
-      self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x0FE, 1, bytes(data))))
-    self.assertTrue(self.safety.get_controls_allowed())
-    self.assertTrue(self.safety.safety_tx_hook(self.long_request(-1.0)))
-    self.assertEqual(self.safety.safety_fwd_hook(2, 0x160), -1)
-
-    # The refusing FRC's protected latch no longer revokes button-owned control.
-    self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x08A, 1, bytes(disabled))))
-    self.assertTrue(self.safety.get_controls_allowed())
-
-    cancel = bytearray(neutral)
-    cancel[4] |= 0x40
-    self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x0FE, 1, bytes(cancel))))
-    self.assertFalse(self.safety.get_controls_allowed())
-    self.assertFalse(self.safety.safety_tx_hook(self.long_request(-1.0)))
-
-  def test_dead_eps_main_claims_frc_request_before_engagement(self):
-    param = (EPS_SCALE[CAR.TOYOTA_CAMRY_TSS3] | ToyotaSafetyFlags.F33 |
-             ToyotaSafetyFlags.TSS3_LONG_BUTTONS)
-    self.assertEqual(self.safety.set_safety_hooks(structs.CarParams.SafetyModel.toyota, param), 0)
-    self.safety.init_tests()
-
-    neutral = bytearray(CAMRY_COMMON[0x0FE])
-    neutral[3] &= ~0x80
-    neutral[4] &= ~0xC0
-    neutral[6] &= ~0x80
-    neutral[7] &= ~0x64
-    main = bytearray(neutral)
-    main[7] |= 0x04
-    self.assertEqual(self.safety.safety_fwd_hook(2, 0x160), 0)
-    self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x0FE, 1, bytes(main))))
-    self.assertFalse(self.safety.get_controls_allowed())
-    self.assertEqual(self.safety.safety_fwd_hook(2, 0x160), -1)
-    self.assertTrue(self.safety.safety_tx_hook(self.long_request(0.0)))
-    self.assertFalse(self.safety.safety_tx_hook(self.long_request(-0.1)))
-
-    self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x0FE, 1, bytes(neutral))))
-    self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x0FE, 1, bytes(main))))
-    self.assertEqual(self.safety.safety_fwd_hook(2, 0x160), 0)
-
   @staticmethod
   def long_request(accel: float, bus: int = 0):
     data = bytearray(CAMRY_LONG)
@@ -358,22 +223,6 @@ class TestToyotaCamryTSS3Safety(unittest.TestCase):
     gas[1] = 1
     self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x116, 1, bytes(gas))))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x160), 0)
-
-  def test_drcc_state_remap_is_bounded_by_stock_cruise_latch(self):
-    def state_msg(state: int, bus: int = 1):
-      data = bytearray(CAMRY_COMMON[0x251])
-      data[0] = state
-      return libsafety_py.make_CANPacket(0x251, bus, bytes(data))
-
-    self.assertTrue(self.safety.safety_tx_hook(state_msg(0xA0)))
-    self.assertTrue(self.safety.safety_tx_hook(state_msg(0xC0)))
-    for state in (0x80, 0x88, 0x90, 0xE0):
-      self.assertFalse(self.safety.safety_tx_hook(state_msg(state)))
-    self.assertFalse(self.safety.safety_tx_hook(state_msg(0xC0, bus=0)))
-
-    self.safety.set_controls_allowed(False)
-    self.assertTrue(self.safety.safety_tx_hook(state_msg(0xA0)))
-    self.assertFalse(self.safety.safety_tx_hook(state_msg(0xC0)))
 
   def test_rejects_bad_header_reserved_bytes_and_overangle(self):
     for index in (0, 1, 3, 6, 7):

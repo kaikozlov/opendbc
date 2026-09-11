@@ -62,7 +62,6 @@ static bool toyota_stock_longitudinal = false;
 static bool toyota_lta = false;
 static bool toyota_tss3_signer = false;
 static bool toyota_corolla_hf = false;
-static bool toyota_tss3_long_buttons = false;
 static int toyota_dbc_eps_torque_factor = 100;   // conversion factor for STEER_TORQUE_EPS in %: see dbc file
 
 static uint32_t toyota_compute_checksum(const CANPacket_t *msg) {
@@ -124,33 +123,10 @@ static void toyota_rx_hook(const CANPacket_t *msg) {
         UPDATE_VEHICLE_SPEED(speed / 4.0 * 0.01 * KPH_TO_MS);
       }
       if (!toyota_corolla_hf && (msg->addr == 0x8AU)) {
-        if (!toyota_tss3_long_buttons) {
-          pcm_cruise_check(GET_BIT(msg, 27U));
-        }
+        pcm_cruise_check(GET_BIT(msg, 27U));
       }
       if (toyota_corolla_hf && (msg->addr == 0x176U)) {
         pcm_cruise_check(GET_BIT(msg, 5U));
-      }
-      if (toyota_tss3_long_buttons && (msg->addr == 0xFEU)) {
-        const bool main = (msg->data[7] & 0x4U) != 0U;
-        const bool res = ((msg->data[3] & 0x80U) != 0U) && ((msg->data[6] & 0x80U) == 0U);
-        const bool set = ((msg->data[4] & 0x80U) != 0U) && ((msg->data[7] & 0x40U) == 0U);
-        const bool cancel = ((msg->data[4] & 0x40U) != 0U) && ((msg->data[7] & 0x20U) == 0U);
-        const int button = main ? 4 : res ? 3 : set ? 2 : cancel ? 1 : 0;
-
-        const bool set_released = (button != 2) && (cruise_button_prev == 2);
-        const bool res_released = (button != 3) && (cruise_button_prev == 3);
-        if (main && (cruise_button_prev != 4)) {
-          acc_main_on = !acc_main_on;
-          controls_allowed = false;
-        }
-        if (acc_main_on && (set_released || res_released)) {
-          controls_allowed = true;
-        }
-        if (cancel) {
-          controls_allowed = false;
-        }
-        cruise_button_prev = button;
       }
     }
   } else if (msg->bus == 0U) {
@@ -288,9 +264,7 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
 
     const bool signer_control = (msg->bus == 1U) && (msg->addr == 0x1FDC0002U);
     const bool long_control = !toyota_stock_longitudinal && (msg->bus == 0U) && (msg->addr == 0x160U);
-    const bool drcc_state_control = !toyota_stock_longitudinal && !toyota_corolla_hf &&
-                                    (msg->bus == 1U) && (msg->addr == 0x251U);
-    tx = signer_control || long_control || drcc_state_control;
+    tx = signer_control || long_control;
     if (signer_control) {
       const bool header_valid = (msg->data[0] == 0U) && (msg->data[1] == 0xC7U) &&
                                 (msg->data[3] == 0U) && (msg->data[6] == 0U) && (msg->data[7] == 0U);
@@ -307,11 +281,6 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
         int camry_coarse_accel = to_signed(msg->data[12] & 0x7FU, 7) * -100;
         tx = tx && !longitudinal_accel_checks(camry_coarse_accel, TOYOTA_LONG_LIMITS);
       }
-    }
-    if (drcc_state_control) {
-      const bool drcc_available = msg->data[0] == 0xA0U;
-      const bool drcc_active = (msg->data[0] == 0xC0U) && get_longitudinal_allowed();
-      tx = drcc_available || drcc_active;
     }
     return tx;
   }
@@ -456,7 +425,7 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
 
 static bool toyota_fwd_hook(int bus_num, int addr) {
   return toyota_tss3_signer && !toyota_stock_longitudinal && (bus_num == 2) &&
-         (addr == 0x160) && (get_longitudinal_allowed() || (toyota_tss3_long_buttons && acc_main_on));
+         (addr == 0x160) && get_longitudinal_allowed();
 }
 
 static safety_config toyota_init(uint16_t param) {
@@ -485,7 +454,6 @@ static safety_config toyota_init(uint16_t param) {
   const uint32_t TOYOTA_PARAM_LTA = 4UL << TOYOTA_PARAM_OFFSET;
   const uint32_t TOYOTA_PARAM_TSS3_SIGNER = 16UL << TOYOTA_PARAM_OFFSET;
   const uint32_t TOYOTA_PARAM_COROLLA_HF = 32UL << TOYOTA_PARAM_OFFSET;
-  const uint32_t TOYOTA_PARAM_TSS3_LONG_BUTTONS = 64UL << TOYOTA_PARAM_OFFSET;
 
 #ifdef ALLOW_DEBUG
   const uint32_t TOYOTA_PARAM_SECOC = 8UL << TOYOTA_PARAM_OFFSET;
@@ -497,7 +465,6 @@ static safety_config toyota_init(uint16_t param) {
   toyota_lta = GET_FLAG(param, TOYOTA_PARAM_LTA);
   toyota_tss3_signer = GET_FLAG(param, TOYOTA_PARAM_TSS3_SIGNER);
   toyota_corolla_hf = GET_FLAG(param, TOYOTA_PARAM_COROLLA_HF);
-  toyota_tss3_long_buttons = GET_FLAG(param, TOYOTA_PARAM_TSS3_LONG_BUTTONS);
   toyota_dbc_eps_torque_factor = param & TOYOTA_EPS_FACTOR;
 
   safety_config ret;
@@ -508,7 +475,6 @@ static safety_config toyota_init(uint16_t param) {
     static const CanMsg toyota_tss3_signer_long_tx_msgs[] = {
       {0x1FDC0002, 1, 8, .check_relay = false},
       {0x160, 0, 32, .check_relay = true, .disable_static_blocking = true},
-      {0x251, 1, 8, .check_relay = false},
     };
     if (toyota_stock_longitudinal) {
       SET_TX_MSGS(toyota_tss3_signer_stock_long_tx_msgs, ret);
@@ -530,7 +496,6 @@ static safety_config toyota_init(uint16_t param) {
         {.msg = {{0x0AA, 1, 8, 100U, .ignore_checksum = true, .ignore_counter = true}, {0}, {0}}},
         {.msg = {{0x116, 1, 8, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
         {.msg = {{0x101, 1, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
-        {.msg = {{0x0FE, 1, 32, 30U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
         {.msg = {{0x08A, 1, 32, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
       };
       SET_RX_CHECKS(toyota_f33_rx_checks, ret);
