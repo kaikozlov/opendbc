@@ -115,6 +115,7 @@ class CarController(CarControllerBase):
       cruise_engaged = CC.enabled if not self.CP.pcmCruise else CS.out.cruiseState.enabled
       engaged = (self.CP.openpilotLongitudinalControl and cruise_engaged and
                  not CS.out.gasPressed and template is not None)
+      frc_owned = self.CP.openpilotLongitudinalControl and not self.CP.pcmCruise and CS.out.cruiseState.available
       controlling = engaged and CC.longActive and CS.out.vEgo > TSS3_MIN_LONG_OVERRIDE_SPEED
       accel_max = TSS3_CAMRY_ACCEL_MAX if self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3 else TSS3_ACCEL_MAX
       accel = float(np.clip(CC.actuators.accel, TSS3_ACCEL_MIN, accel_max)) if controlling else 0.0
@@ -122,13 +123,14 @@ class CarController(CarControllerBase):
 
       # Be the sole 0x160 emitter while engaged, paced by the camera's live counter.
       # When openpilot is not actively controlling, relay the camera frame exactly.
-      if engaged and camera_counter != self.tss3_longitudinal_counter:
+      if (engaged or frc_owned) and camera_counter != self.tss3_longitudinal_counter:
+        requested_accel = accel if controlling else 0.0 if frc_owned else None
         can_sends.append(toyotacan.create_tss3_accel_command(
-          template, accel if controlling else None,
+          template, requested_accel,
           camry_b12=self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3,
         ))
         self.tss3_longitudinal_counter = camera_counter
-      elif not engaged:
+      elif not (engaged or frc_owned):
         self.tss3_longitudinal_counter = camera_counter
 
       # With unavailable EPS diagnostics, Toyota permits conventional cruise but

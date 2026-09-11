@@ -230,6 +230,11 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     state = update_state(ci, cruise_switch=bytes(main))
     self.assertTrue(state.cruiseState.available)
     self.assertFalse(state.cruiseState.enabled)
+    _, sends = ci.apply(control(0.0, active=False, accel=-1.0, long_active=False), 2_000_000_000)
+    _, data, bus = next(msg for msg in sends if msg[0] == 0x160)
+    self.assertEqual(bus, 0)
+    self.assertEqual(data[4:6], bytes.fromhex("8000"))
+    self.assertEqual(data[12], 0)
 
     update_state(ci, cruise_switch=CAMRY_COMMON[0x0FE])
     state = update_state(ci, counter_offset=40, cruise_switch=bytes(main))
@@ -304,6 +309,30 @@ class TestToyotaCamryTSS3Safety(unittest.TestCase):
     self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x0FE, 1, bytes(cancel))))
     self.assertFalse(self.safety.get_controls_allowed())
     self.assertFalse(self.safety.safety_tx_hook(self.long_request(-1.0)))
+
+  def test_dead_eps_main_claims_frc_request_before_engagement(self):
+    param = (EPS_SCALE[CAR.TOYOTA_CAMRY_TSS3] | ToyotaSafetyFlags.F33 |
+             ToyotaSafetyFlags.TSS3_LONG_BUTTONS)
+    self.assertEqual(self.safety.set_safety_hooks(structs.CarParams.SafetyModel.toyota, param), 0)
+    self.safety.init_tests()
+
+    neutral = bytearray(CAMRY_COMMON[0x0FE])
+    neutral[3] &= ~0x80
+    neutral[4] &= ~0xC0
+    neutral[6] &= ~0x80
+    neutral[7] &= ~0x64
+    main = bytearray(neutral)
+    main[7] |= 0x04
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x160), 0)
+    self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x0FE, 1, bytes(main))))
+    self.assertFalse(self.safety.get_controls_allowed())
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x160), -1)
+    self.assertTrue(self.safety.safety_tx_hook(self.long_request(0.0)))
+    self.assertFalse(self.safety.safety_tx_hook(self.long_request(-0.1)))
+
+    self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x0FE, 1, bytes(neutral))))
+    self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x0FE, 1, bytes(main))))
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x160), 0)
 
   @staticmethod
   def long_request(accel: float, bus: int = 0):

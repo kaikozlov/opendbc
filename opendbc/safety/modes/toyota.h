@@ -456,7 +456,7 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
 
 static bool toyota_fwd_hook(int bus_num, int addr) {
   return toyota_tss3_signer && !toyota_stock_longitudinal && (bus_num == 2) &&
-         (addr == 0x160) && get_longitudinal_allowed();
+         (addr == 0x160) && (get_longitudinal_allowed() || (toyota_tss3_long_buttons && acc_main_on));
 }
 
 static safety_config toyota_init(uint16_t param) {
