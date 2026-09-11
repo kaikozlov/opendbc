@@ -112,7 +112,8 @@ class CarController(CarControllerBase):
 
       template = CS.tss3_longitudinal_request
       camera_counter = int(template["COUNTER"]) if template is not None else None
-      engaged = (self.CP.openpilotLongitudinalControl and CS.out.cruiseState.enabled and
+      cruise_engaged = CC.enabled if not self.CP.pcmCruise else CS.out.cruiseState.enabled
+      engaged = (self.CP.openpilotLongitudinalControl and cruise_engaged and
                  not CS.out.gasPressed and template is not None)
       controlling = engaged and CC.longActive and CS.out.vEgo > TSS3_MIN_LONG_OVERRIDE_SPEED
       accel_max = TSS3_CAMRY_ACCEL_MAX if self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3 else TSS3_ACCEL_MAX
@@ -139,7 +140,8 @@ class CarController(CarControllerBase):
       if (self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3 and self.CP.openpilotLongitudinalControl and
           self.CP.flags & ToyotaFlags.EPS_DIAGNOSTICS_UNAVAILABLE and display is not None and
           display_counter != self.tss3_cruise_display_counter):
-        if (msg := toyotacan.create_tss3_drcc_state_command(display)) is not None:
+        state = 0xC0 if CC.enabled else 0xA0 if CS.out.cruiseState.available else 0x80
+        if (msg := toyotacan.create_tss3_drcc_state_command(display, state)) is not None:
           can_sends.append(msg)
         self.tss3_cruise_display_counter = display_counter
 

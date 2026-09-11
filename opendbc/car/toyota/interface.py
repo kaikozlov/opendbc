@@ -74,6 +74,13 @@ class CarInterface(CarInterfaceBase):
         ret.alphaLongitudinalAvailable = True
         ret.openpilotLongitudinalControl = alpha_long
         ret.autoResumeSng = ret.openpilotLongitudinalControl
+        # With a dead EPS the FRC refuses to arm stock DRCC. In Alpha Long,
+        # openpilot therefore owns engagement from the physical cruise buttons
+        # instead of waiting for the FRC's protected cruise-operating latch.
+        if (candidate == CAR.TOYOTA_CAMRY_TSS3 and ret.openpilotLongitudinalControl and
+            ret.flags & ToyotaFlags.EPS_DIAGNOSTICS_UNAVAILABLE):
+          ret.pcmCruise = False
+          ret.safetyConfigs[0].safetyParam |= ToyotaSafetyFlags.TSS3_LONG_BUTTONS.value
         if not ret.openpilotLongitudinalControl:
           ret.safetyConfigs[0].safetyParam |= ToyotaSafetyFlags.STOCK_LONGITUDINAL.value
 
