@@ -53,6 +53,9 @@ class CarState(CarStateBase):
     self.secoc_synchronization = None
 
   def _update_tss3(self, cp: CANParser) -> structs.CarState:
+    if self.CP.carFingerprint == CAR.TOYOTA_COROLLA_TSS3:
+      return self._update_tss3_corolla(cp)
+
     ret = structs.CarState()
 
     ret.brakePressed = cp.vl["BRAKE_MODULE"]["BRAKE_PRESSED"] != 0
@@ -127,6 +130,62 @@ class CarState(CarStateBase):
     if ret.cruiseState.speed != 0 and cluster_set_speed > 0:
       is_metric = cp.vl["BODY_CONTROL_STATE_2"]["UNITS"] in (1, 2)
       ret.cruiseState.speedCluster = cluster_set_speed * (CV.KPH_TO_MS if is_metric else CV.MPH_TO_MS)
+
+    return ret
+
+  def _update_tss3_corolla(self, cp: CANParser) -> structs.CarState:
+    ret = structs.CarState()
+    self.secoc_synchronization = copy.copy(cp.vl["SECOC_SYNCHRONIZATION"])
+
+    ret.brakePressed = cp.vl["BRAKE_MODULE"]["BRAKE_PRESSED"] != 0
+    ret.gasPressed = cp.vl["GAS_PEDAL"]["GAS_PEDAL_USER"] > 0
+    self.parse_wheel_speeds(ret,
+      cp.vl["WHEEL_SPEEDS"]["WHEEL_SPEED_FL"],
+      cp.vl["WHEEL_SPEEDS"]["WHEEL_SPEED_FR"],
+      cp.vl["WHEEL_SPEEDS"]["WHEEL_SPEED_RL"],
+      cp.vl["WHEEL_SPEEDS"]["WHEEL_SPEED_RR"],
+    )
+    ret.vEgoCluster = ret.vEgo
+    ret.standstill = abs(ret.vEgoRaw) < 1e-3
+    ret.vehicleSensorsInvalid = any(cp.vl["WHEEL_SPEEDS"][f"WHEEL_SPEED_{wheel}_FAULT"]
+                                    for wheel in ("FL", "FR", "RL", "RR"))
+
+    ret.steeringAngleDeg = cp.vl["STEER_ANGLE_SENSOR"]["STEER_ANGLE"] + cp.vl["STEER_ANGLE_SENSOR"]["STEER_FRACTION"]
+    ret.steeringRateDeg = cp.vl["STEER_ANGLE_SENSOR"]["STEER_RATE"]
+    ret.carNotReady = cp.vl["TSS3_READY_STATUS"]["READY_STATUS"] == 0
+    ret.gearShifter = self.parse_gear_shifter(self.shifter_values.get(int(cp.vl["GEAR_PACKET_HYBRID"]["GEAR"]), None))
+
+    ret.leftBlinker = cp.vl["BLINKERS_STATE"]["TURN_SIGNALS"] == 1
+    ret.rightBlinker = cp.vl["BLINKERS_STATE"]["TURN_SIGNALS"] == 2
+    ret.doorOpen = any(cp.vl["BODY_CONTROL_STATE"][door] for door in
+                       ("DOOR_OPEN_FL", "DOOR_OPEN_FR", "DOOR_OPEN_RL", "DOOR_OPEN_RR"))
+    ret.seatbeltUnlatched = cp.vl["BODY_CONTROL_STATE"]["SEATBELT_DRIVER_UNLATCHED"] != 0
+    ret.parkingBrake = cp.vl["BODY_CONTROL_STATE"]["PARKING_BRAKE"] == 1
+    ret.brakeHoldActive = cp.vl["ESP_CONTROL"]["BRAKE_HOLD_ACTIVE"] == 1
+    ret.espDisabled = cp.vl["ESP_CONTROL"]["TC_DISABLED"] != 0
+    ret.genericToggle = bool(cp.vl["LIGHT_STALK"]["AUTO_HIGH_BEAM"])
+
+    driver_torque_invalid = cp.vl["TSS3_EPS_TELEMETRY"]["DRIVER_TORQUE_INVALID"] != 0
+    ret.vehicleSensorsInvalid = ret.vehicleSensorsInvalid or driver_torque_invalid
+    ret.steeringTorque = (cp.vl["TSS3_EPS_TELEMETRY"]["STEERING_WHEEL_TORQUE_COARSE"] +
+                          cp.vl["TSS3_EPS_TELEMETRY"]["STEERING_WHEEL_TORQUE_FINE"]) if not driver_torque_invalid else 0.0
+    ret.steeringTorqueEps = 0.0
+    ret.steeringPressed = abs(ret.steeringTorque) >= TSS3_STEER_DRIVER_TORQUE_THRESHOLD
+    # H/F exposes one immediate fault/inhibit aggregate, but the retained data
+    # does not divide it into openpilot's temporary/permanent classes.
+    ret.steerFaultTemporary = False
+    ret.steerFaultPermanent = False
+
+    cruise = cp.vl["PCM_CRUISE"]
+    ret.cruiseState.enabled = bool(cruise["CRUISE_ACTIVE"])
+    # The two retained drives do not exercise an independent main-switch bit.
+    # A tester can engage only after stock ACC itself reports active.
+    ret.cruiseState.available = ret.cruiseState.enabled
+    ret.cruiseState.standstill = ret.cruiseState.enabled and int(cruise["CRUISE_STATE"]) == 7
+
+    if self.CP.enableBsm:
+      ret.leftBlindspot = bool(cp.vl["BSM"]["L_ADJACENT"] or cp.vl["BSM"]["L_APPROACHING"])
+      ret.rightBlindspot = bool(cp.vl["BSM"]["R_ADJACENT"] or cp.vl["BSM"]["R_APPROACHING"])
 
     return ret
 
@@ -285,7 +344,7 @@ class CarState(CarStateBase):
   @staticmethod
   def get_can_parsers(CP):
     if CP.flags & ToyotaFlags.TSS3:
-      pt_messages = [
+      common_messages = [
         ("STEER_ANGLE_SENSOR", 100),
         ("TSS3_EPS_TELEMETRY", 100),
         ("WHEEL_SPEEDS", 100),
@@ -297,11 +356,16 @@ class CarState(CarStateBase):
         ("BLINKERS_STATE", 1),
         ("BODY_CONTROL_STATE", 3),
         ("LIGHT_STALK", 1),
+      ]
+      pt_messages = common_messages + ([
+        ("SECOC_SYNCHRONIZATION", 10),
+        ("PCM_CRUISE", 30),
+      ] if CP.carFingerprint == CAR.TOYOTA_COROLLA_TSS3 else [
         ("TSS3_CRUISE_SWITCH", 30),
         ("BODY_CONTROL_STATE_2", 3),
         ("TSS3_LATERAL_REQUEST", 40),
         ("TSS3_CRUISE_DISPLAY", 1),
-      ]
+      ])
       if CP.enableBsm:
         pt_messages.append(("BSM", 1))
       # Stock Toyota-B exposes the complete EPS/Brake request and state plane

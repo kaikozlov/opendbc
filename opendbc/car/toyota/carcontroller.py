@@ -8,7 +8,7 @@ from opendbc.car.common.pid import PIDController
 from opendbc.car.secoc import add_mac, build_sync_mac
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.toyota import toyotacan
-from opendbc.car.toyota.tss3 import build_f33_signer_control, target_angle_deg_to_raw
+from opendbc.car.toyota.tss3 import build_signer_control, target_angle_deg_to_raw
 from opendbc.car.toyota.values import CAR, CarControllerParams, ToyotaFlags
 from opendbc.can import CANPacker
 
@@ -99,7 +99,7 @@ class CarController(CarControllerBase):
         else:
           self.tss3_control_sequence = 0
 
-        can_sends.append(build_f33_signer_control(
+        can_sends.append(build_signer_control(
           target_angle_deg_to_raw(self.last_angle), self.tss3_control_sequence,
         ))
         output.steeringAngleDeg = self.last_angle
