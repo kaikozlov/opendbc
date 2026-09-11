@@ -43,8 +43,6 @@ class CarInterface(CarInterfaceBase):
         ret.safetyConfigs[0].safetyParam = (EPS_SCALE[candidate] |
                                              ToyotaSafetyFlags.F33.value)
         ret.dashcamOnly = False
-        ret.openpilotLongitudinalControl = True
-        ret.autoResumeSng = True
         # The EPS-resident helper owns native B6 signing; openpilot owns only
         # the bounded C7 sideband and therefore needs no host SecOC key.
         ret.secOcRequired = False
@@ -60,8 +58,6 @@ class CarInterface(CarInterfaceBase):
                                              ToyotaSafetyFlags.TSS3_SIGNER.value |
                                              ToyotaSafetyFlags.COROLLA_HF.value)
         ret.dashcamOnly = False
-        ret.openpilotLongitudinalControl = True
-        ret.autoResumeSng = True
         # The RAM-resident helper signs a native EPS-local B6. openpilot sends
         # only the same C7 sideband used by the proven F33 recipe.
         ret.secOcRequired = False
@@ -73,6 +69,13 @@ class CarInterface(CarInterfaceBase):
       else:
         ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.noOutput)]
         ret.dashcamOnly = True
+
+      if not ret.dashcamOnly:
+        ret.alphaLongitudinalAvailable = True
+        ret.openpilotLongitudinalControl = alpha_long
+        ret.autoResumeSng = ret.openpilotLongitudinalControl
+        if not ret.openpilotLongitudinalControl:
+          ret.safetyConfigs[0].safetyParam |= ToyotaSafetyFlags.STOCK_LONGITUDINAL.value
 
       return ret
 
