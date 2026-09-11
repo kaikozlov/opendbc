@@ -65,7 +65,9 @@ class ToyotaSafetyFlags(IntFlag):
   STOCK_LONGITUDINAL = (2 << 8)
   LTA = (4 << 8)
   SECOC = (8 << 8)
-  F33 = (16 << 8)
+  TSS3_SIGNER = (16 << 8)
+  F33 = TSS3_SIGNER  # compatibility alias
+  COROLLA_HF = (32 << 8)
 
 
 class ToyotaFlags(IntFlag):
@@ -241,6 +243,14 @@ class CAR(Platforms):
       ToyotaCarDocs("Lexus UX Hybrid 2019-24"),
     ],
     CarSpecs(mass=3060. * CV.LB_TO_KG, wheelbase=2.67, steerRatio=13.9, tireStiffnessFactor=0.444),
+  )
+  TOYOTA_COROLLA_TSS3 = ToyotaTSS3PlatformConfig(
+    [
+      ToyotaTSS3CarDocs("Toyota Corolla 2023-25"),
+      ToyotaTSS3CarDocs("Toyota Corolla Hybrid 2023-25"),
+    ],
+    TOYOTA_COROLLA_TSS2.specs,
+    flags=ToyotaFlags.SECOC,
   )
   TOYOTA_HIGHLANDER = PlatformConfig(
     [
@@ -529,6 +539,13 @@ TOYOTA_PLATFORM_BY_VEHICLE: dict[tuple[str, int], CAR] = {
   ("NA", 12608): CAR.TOYOTA_CAMRY_TSS2,
   # Exact generation-20 Camry HV identity used by the maintainer vehicle.
   ("NA", 12862): CAR.TOYOTA_CAMRY_TSS3,
+  # Corolla generation-23 and generation-25 identities covering the two
+  # directly acquired H/F EPS specimens. Corolla Cross and GR Corolla remain
+  # separate even though GTS may place them in the same broad TSS3 family.
+  **{("NA", vehicle_type): CAR.TOYOTA_COROLLA_TSS3 for vehicle_type in (
+    12512, 12513, 12514, 12515, 12516,
+    12821, 12822, 12823, 12824, 12827,
+  )},
 }
 
 
@@ -609,13 +626,22 @@ FW_QUERY_CONFIG = FwQueryConfig(
                       Ecu.hybrid, Ecu.srs, Ecu.transmission, Ecu.hvac],
       bus=0,
     ),
+    # Stock Toyota-B exposes the TSS3 EPS diagnostic endpoint on bus 1. This
+    # makes the exact F181 records usable without changing older bus-0 queries.
+    Request(
+      [StdQueries.TESTER_PRESENT_REQUEST, StdQueries.DEFAULT_DIAGNOSTIC_REQUEST, StdQueries.EXTENDED_DIAGNOSTIC_REQUEST, StdQueries.UDS_VERSION_REQUEST],
+      [StdQueries.TESTER_PRESENT_RESPONSE, StdQueries.DEFAULT_DIAGNOSTIC_RESPONSE, StdQueries.EXTENDED_DIAGNOSTIC_RESPONSE, StdQueries.UDS_VERSION_RESPONSE],
+      whitelist_ecus=[Ecu.eps],
+      bus=1,
+      obd_multiplexing=False,
+    ),
   ],
   non_essential_ecus={
     # FIXME: On some models, abs can sometimes be missing
     Ecu.abs: [CAR.TOYOTA_RAV4, CAR.TOYOTA_COROLLA, CAR.TOYOTA_HIGHLANDER, CAR.TOYOTA_SIENNA, CAR.LEXUS_IS, CAR.TOYOTA_ALPHARD_TSS2,
-              CAR.TOYOTA_CAMRY_TSS3],
+              CAR.TOYOTA_CAMRY_TSS3, CAR.TOYOTA_COROLLA_TSS3],
     # The exact EPS identity is required; these two are corroborating.
-    Ecu.fwdCamera: [CAR.TOYOTA_CAMRY_TSS3],
+    Ecu.fwdCamera: [CAR.TOYOTA_CAMRY_TSS3, CAR.TOYOTA_COROLLA_TSS3],
     # On some models, the engine can show on two different addresses
     Ecu.engine: [CAR.TOYOTA_HIGHLANDER, CAR.TOYOTA_CAMRY, CAR.TOYOTA_COROLLA_TSS2, CAR.TOYOTA_CHR, CAR.TOYOTA_CHR_TSS2, CAR.LEXUS_IS,
                  CAR.LEXUS_IS_TSS2, CAR.LEXUS_RC, CAR.LEXUS_NX, CAR.LEXUS_NX_TSS2, CAR.LEXUS_RX, CAR.LEXUS_RX_TSS2],

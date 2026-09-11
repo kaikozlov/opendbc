@@ -48,6 +48,21 @@ class CarInterface(CarInterfaceBase):
         ret.enableBsm = 0x3F6 in fingerprint[1]
         ret.steerActuatorDelay = 0.18
         ret.steerLimitTimer = 0.8
+      elif candidate == CAR.TOYOTA_COROLLA_TSS3:
+        ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.toyota)]
+        ret.safetyConfigs[0].safetyParam = (EPS_SCALE[candidate] |
+                                             ToyotaSafetyFlags.STOCK_LONGITUDINAL.value |
+                                             ToyotaSafetyFlags.TSS3_SIGNER.value |
+                                             ToyotaSafetyFlags.COROLLA_HF.value)
+        ret.dashcamOnly = False
+        # The RAM-resident helper signs a native EPS-local B6. openpilot sends
+        # only the same C7 sideband used by the proven F33 recipe.
+        ret.secOcRequired = False
+        ret.minSteerSpeed = 0.
+        ret.steerAtStandstill = True
+        ret.enableBsm = 0x3F6 in fingerprint[1]
+        ret.steerActuatorDelay = 0.18
+        ret.steerLimitTimer = 0.8
       else:
         ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.noOutput)]
         ret.dashcamOnly = True
