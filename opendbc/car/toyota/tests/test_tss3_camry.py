@@ -1,10 +1,12 @@
 import unittest
 
 from opendbc.car import Bus, CanData, structs
+from opendbc.car.fw_versions import match_fw_to_car
 from opendbc.car.fw_query_definitions import PlatformResolverContext
 from opendbc.car.toyota.fingerprints import FW_VERSIONS
 from opendbc.car.toyota.interface import CarInterface
 from opendbc.car.toyota.values import CAR, DBC, EPS_SCALE, ToyotaFlags, ToyotaSafetyFlags, resolve_platform
+from opendbc.car.vin import VIN_UNKNOWN
 from opendbc.safety.tests.libsafety import libsafety_py
 
 
@@ -96,6 +98,13 @@ class TestToyotaCamryTSS3(unittest.TestCase):
       bytes.fromhex("023839363546333330373030300000000038413331313333303331303000000000")])
     context = PlatformResolverContext(vin_rx_addr=0x7E8, vin_rx_bus=1)
     self.assertEqual(resolve_platform({}, "JTDAA12K0T0123456", {}, context), {str(CAR.TOYOTA_CAMRY_TSS3)})
+
+  def test_exact_abs_identity_resolves_with_dead_eps_diagnostics(self):
+    version = FW_VERSIONS[CAR.TOYOTA_CAMRY_TSS3][(Ecu.abs, 0x7B0, None)][0]
+    car_fw = [structs.CarParams.CarFw(ecu=Ecu.abs, fwVersion=version, brand="toyota", address=0x7B0)]
+    exact, matches = match_fw_to_car(car_fw, VIN_UNKNOWN, allow_fuzzy=False)
+    self.assertTrue(exact)
+    self.assertEqual(matches, {str(CAR.TOYOTA_CAMRY_TSS3)})
 
   def test_stock_toyota_b_state_is_entirely_on_bus_one(self):
     ci = CarInterface(self.CP)

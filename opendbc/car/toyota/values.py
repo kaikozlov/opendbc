@@ -626,12 +626,13 @@ FW_QUERY_CONFIG = FwQueryConfig(
                       Ecu.hybrid, Ecu.srs, Ecu.transmission, Ecu.hvac],
       bus=0,
     ),
-    # Stock Toyota-B exposes the TSS3 EPS diagnostic endpoint on bus 1. This
-    # makes the exact F181 records usable without changing older bus-0 queries.
+    # Stock Toyota-B exposes the TSS3 EPS and ABS diagnostic endpoints on bus
+    # 1. Query both so an exact ABS identity can still resolve a car whose EPS
+    # diagnostic endpoint is unavailable.
     Request(
       [StdQueries.TESTER_PRESENT_REQUEST, StdQueries.DEFAULT_DIAGNOSTIC_REQUEST, StdQueries.EXTENDED_DIAGNOSTIC_REQUEST, StdQueries.UDS_VERSION_REQUEST],
       [StdQueries.TESTER_PRESENT_RESPONSE, StdQueries.DEFAULT_DIAGNOSTIC_RESPONSE, StdQueries.EXTENDED_DIAGNOSTIC_RESPONSE, StdQueries.UDS_VERSION_RESPONSE],
-      whitelist_ecus=[Ecu.eps],
+      whitelist_ecus=[Ecu.eps, Ecu.abs],
       bus=1,
       obd_multiplexing=False,
     ),
@@ -639,8 +640,10 @@ FW_QUERY_CONFIG = FwQueryConfig(
   non_essential_ecus={
     # FIXME: On some models, abs can sometimes be missing
     Ecu.abs: [CAR.TOYOTA_RAV4, CAR.TOYOTA_COROLLA, CAR.TOYOTA_HIGHLANDER, CAR.TOYOTA_SIENNA, CAR.LEXUS_IS, CAR.TOYOTA_ALPHARD_TSS2,
-              CAR.TOYOTA_CAMRY_TSS3, CAR.TOYOTA_COROLLA_TSS3],
-    # The exact EPS identity is required; these two are corroborating.
+              CAR.TOYOTA_COROLLA_TSS3],
+    # The Camry's exact ABS identity is sufficient when its EPS diagnostic
+    # endpoint is unavailable. Corolla still requires its exact EPS identity.
+    Ecu.eps: [CAR.TOYOTA_CAMRY_TSS3],
     Ecu.fwdCamera: [CAR.TOYOTA_CAMRY_TSS3, CAR.TOYOTA_COROLLA_TSS3],
     # On some models, the engine can show on two different addresses
     Ecu.engine: [CAR.TOYOTA_HIGHLANDER, CAR.TOYOTA_CAMRY, CAR.TOYOTA_COROLLA_TSS2, CAR.TOYOTA_CHR, CAR.TOYOTA_CHR_TSS2, CAR.LEXUS_IS,
