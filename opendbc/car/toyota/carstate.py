@@ -44,7 +44,6 @@ class CarState(CarStateBase):
     self.lkas_button = 0
     self.distance_button = 0
     self.tss3_cruise_button = 0
-    self.tss3_virtual_main = False
 
     self.pcm_follow_distance = 0
 
@@ -53,16 +52,10 @@ class CarState(CarStateBase):
     self.gvc = 0.0
     self.secoc_synchronization = None
     self.tss3_longitudinal_request = None
-    self.tss3_cruise_display = None
-    self.tss3_cruise_display_counter = 0
 
   def _update_tss3(self, cp: CANParser, cp_cam: CANParser) -> structs.CarState:
     if cp_cam.vl_all["TSS3_LONGITUDINAL_REQUEST"]["COUNTER"]:
       self.tss3_longitudinal_request = copy.copy(cp_cam.vl["TSS3_LONGITUDINAL_REQUEST"])
-
-    if self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3 and cp.vl_all["TSS3_CRUISE_DISPLAY"]["BYTE_0"]:
-      self.tss3_cruise_display = copy.copy(cp.vl["TSS3_CRUISE_DISPLAY"])
-      self.tss3_cruise_display_counter += 1
 
     if self.CP.carFingerprint == CAR.TOYOTA_COROLLA_TSS3:
       return self._update_tss3_corolla(cp)
@@ -109,8 +102,6 @@ class CarState(CarStateBase):
       self.tss3_cruise_button = 4
     else:
       self.tss3_cruise_button = 0
-    if not self.CP.pcmCruise and self.tss3_cruise_button == 4 and previous_button != 4:
-      self.tss3_virtual_main = not self.tss3_virtual_main
     ret.buttonEvents = create_button_events(self.tss3_cruise_button, previous_button, {
       1: ButtonType.cancel,
       2: ButtonType.decelCruise,
@@ -134,21 +125,15 @@ class CarState(CarStateBase):
       ret.rightBlindspot = bool(cp.vl["BSM"]["R_ADJACENT"] or cp.vl["BSM"]["R_APPROACHING"])
 
     lateral = cp.vl["TSS3_LATERAL_REQUEST"]
-    if not self.CP.pcmCruise:
-      # The dead-EPS FRC reports DRCC unavailable even though openpilot replaces
-      # its plaintext longitudinal request. Keep the user's physical MAIN state
-      # and let controlsd own engagement from SET/RES in the normal non-PCM shape.
-      ret.cruiseState.available = self.tss3_virtual_main
-    else:
-      ret.cruiseState.enabled = bool(lateral["CRUISE_OPERATING_LATCH"])
-      ret.cruiseState.standstill = ret.cruiseState.enabled and int(lateral["CRUISE_SUBSTATE_2"]) in (0x66, 0x67)
-      ret.cruiseState.available = bool(cp.vl["TSS3_CRUISE_DISPLAY"]["CRUISE_MAIN_STATE"])
-      set_speed_kph = float(lateral["SET_SPEED"])
-      ret.cruiseState.speed = set_speed_kph * CV.KPH_TO_MS if set_speed_kph > 0 else 0.0
-      cluster_set_speed = float(cp.vl["TSS3_CRUISE_DISPLAY"]["UI_SET_SPEED"])
-      if ret.cruiseState.speed != 0 and cluster_set_speed > 0:
-        is_metric = cp.vl["BODY_CONTROL_STATE_2"]["UNITS"] in (1, 2)
-        ret.cruiseState.speedCluster = cluster_set_speed * (CV.KPH_TO_MS if is_metric else CV.MPH_TO_MS)
+    ret.cruiseState.enabled = bool(lateral["CRUISE_OPERATING_LATCH"])
+    ret.cruiseState.standstill = ret.cruiseState.enabled and int(lateral["CRUISE_SUBSTATE_2"]) in (0x66, 0x67)
+    ret.cruiseState.available = bool(cp.vl["TSS3_CRUISE_DISPLAY"]["CRUISE_MAIN_STATE"])
+    set_speed_kph = float(lateral["SET_SPEED"])
+    ret.cruiseState.speed = set_speed_kph * CV.KPH_TO_MS if set_speed_kph > 0 else 0.0
+    cluster_set_speed = float(cp.vl["TSS3_CRUISE_DISPLAY"]["UI_SET_SPEED"])
+    if ret.cruiseState.speed != 0 and cluster_set_speed > 0:
+      is_metric = cp.vl["BODY_CONTROL_STATE_2"]["UNITS"] in (1, 2)
+      ret.cruiseState.speedCluster = cluster_set_speed * (CV.KPH_TO_MS if is_metric else CV.MPH_TO_MS)
 
     return ret
 

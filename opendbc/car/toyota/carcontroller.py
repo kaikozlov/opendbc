@@ -82,7 +82,6 @@ class CarController(CarControllerBase):
 
     self.tss3_control_sequence = 0
     self.tss3_longitudinal_counter = None
-    self.tss3_cruise_display_counter = 0
 
   def update(self, CC, CS, now_nanos):
     if self.CP.flags & ToyotaFlags.TSS3:
@@ -112,10 +111,8 @@ class CarController(CarControllerBase):
 
       template = CS.tss3_longitudinal_request
       camera_counter = int(template["COUNTER"]) if template is not None else None
-      cruise_engaged = CC.enabled if not self.CP.pcmCruise else CS.out.cruiseState.enabled
-      engaged = (self.CP.openpilotLongitudinalControl and cruise_engaged and
+      engaged = (self.CP.openpilotLongitudinalControl and CS.out.cruiseState.enabled and
                  not CS.out.gasPressed and template is not None)
-      frc_owned = self.CP.openpilotLongitudinalControl and not self.CP.pcmCruise and CS.out.cruiseState.available
       controlling = engaged and CC.longActive and CS.out.vEgo > TSS3_MIN_LONG_OVERRIDE_SPEED
       accel_max = TSS3_CAMRY_ACCEL_MAX if self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3 else TSS3_ACCEL_MAX
       accel = float(np.clip(CC.actuators.accel, TSS3_ACCEL_MIN, accel_max)) if controlling else 0.0
@@ -123,29 +120,14 @@ class CarController(CarControllerBase):
 
       # Be the sole 0x160 emitter while engaged, paced by the camera's live counter.
       # When openpilot is not actively controlling, relay the camera frame exactly.
-      if (engaged or frc_owned) and camera_counter != self.tss3_longitudinal_counter:
-        requested_accel = accel if controlling else 0.0 if frc_owned else None
+      if engaged and camera_counter != self.tss3_longitudinal_counter:
         can_sends.append(toyotacan.create_tss3_accel_command(
-          template, requested_accel,
+          template, accel if controlling else None,
           camry_b12=self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3,
         ))
         self.tss3_longitudinal_counter = camera_counter
-      elif not (engaged or frc_owned):
+      elif not engaged:
         self.tss3_longitudinal_counter = camera_counter
-
-      # With unavailable EPS diagnostics, Toyota permits conventional cruise but
-      # reports DRCC unavailable. Follow each stock display update with the
-      # byte-exact DRCC equivalent so downstream ECUs see the adaptive mode while
-      # openpilot owns the intercepted longitudinal request.
-      display = CS.tss3_cruise_display
-      display_counter = CS.tss3_cruise_display_counter
-      if (self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3 and self.CP.openpilotLongitudinalControl and
-          self.CP.flags & ToyotaFlags.EPS_DIAGNOSTICS_UNAVAILABLE and display is not None and
-          display_counter != self.tss3_cruise_display_counter):
-        state = 0xC0 if CC.enabled else 0xA0 if CS.out.cruiseState.available else 0x80
-        if (msg := toyotacan.create_tss3_drcc_state_command(display, state)) is not None:
-          can_sends.append(msg)
-        self.tss3_cruise_display_counter = display_counter
 
       self.frame += 1
       return output, can_sends
