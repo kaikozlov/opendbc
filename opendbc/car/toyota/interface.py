@@ -36,9 +36,10 @@ class CarInterface(CarInterfaceBase):
       if candidate == CAR.TOYOTA_CAMRY_TSS3:
         ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.toyota)]
         ret.safetyConfigs[0].safetyParam = (EPS_SCALE[candidate] |
-                                             ToyotaSafetyFlags.STOCK_LONGITUDINAL.value |
                                              ToyotaSafetyFlags.F33.value)
         ret.dashcamOnly = False
+        ret.openpilotLongitudinalControl = True
+        ret.autoResumeSng = True
         # The EPS-resident helper owns native B6 signing; openpilot owns only
         # the bounded C7 sideband and therefore needs no host SecOC key.
         ret.secOcRequired = False
@@ -51,10 +52,11 @@ class CarInterface(CarInterfaceBase):
       elif candidate == CAR.TOYOTA_COROLLA_TSS3:
         ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.toyota)]
         ret.safetyConfigs[0].safetyParam = (EPS_SCALE[candidate] |
-                                             ToyotaSafetyFlags.STOCK_LONGITUDINAL.value |
                                              ToyotaSafetyFlags.TSS3_SIGNER.value |
                                              ToyotaSafetyFlags.COROLLA_HF.value)
         ret.dashcamOnly = False
+        ret.openpilotLongitudinalControl = True
+        ret.autoResumeSng = True
         # The RAM-resident helper signs a native EPS-local B6. openpilot sends
         # only the same C7 sideband used by the proven F33 recipe.
         ret.secOcRequired = False

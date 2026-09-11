@@ -1,3 +1,4 @@
+from opendbc.car.crc import CRC16_XMODEM
 from opendbc.car.structs import CarParams
 
 SteerControlType = CarParams.SteerControlType
@@ -61,6 +62,26 @@ def create_accel_command_2(packer, accel):
     "ACCEL_CMD": accel,
   }
   return packer.make_can_msg("ACC_CONTROL_2", 0, values)
+
+
+def create_tss3_accel_command(template: dict[str, float], accel: float | None):
+  """Relay one live FRC 0x160 image, optionally replacing its acceleration request."""
+  data = bytearray(32)
+  data[2] = int(template["COUNTER"])
+  for i in range(3, 32):
+    data[i] = int(template[f"BYTE_{i}"])
+
+  if accel is not None:
+    raw = max(-16384, min(16383, round(accel / 0.001))) & 0x7FFF
+    data[4] = (data[4] & 0x80) | (raw >> 8)
+    data[5] = raw & 0xFF
+
+  # AUTOSAR E2E Profile 5: CRC-16/CCITT, init 0, Data ID 0x444A LE.
+  crc = 0
+  for byte in (*data[2:], 0x4A, 0x44):
+    crc = ((crc << 8) ^ CRC16_XMODEM[((crc >> 8) ^ byte) & 0xFF]) & 0xFFFF
+  data[0:2] = crc.to_bytes(2, "little")
+  return 0x160, bytes(data), 0
 
 
 def create_pcs_commands(packer, accel, active, mass):
