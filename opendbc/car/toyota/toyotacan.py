@@ -64,8 +64,8 @@ def create_accel_command_2(packer, accel):
   return packer.make_can_msg("ACC_CONTROL_2", 0, values)
 
 
-def create_tss3_accel_command(template: dict[str, float], accel: float | None, *, camry_b12: bool = False):
-  """Relay one live FRC 0x160 image, optionally replacing its acceleration request fields."""
+def create_tss3_accel_command(template: dict[str, float], accel: float | None):
+  """Relay one live TSS3 FRC 0x160 image, optionally replacing its B4:B5 quantity."""
   data = bytearray(32)
   data[2] = int(template["COUNTER"])
   for i in range(3, 32):
@@ -75,11 +75,6 @@ def create_tss3_accel_command(template: dict[str, float], accel: float | None, *
     raw = max(-16384, min(16383, round(accel / 0.001))) & 0x7FFF
     data[4] = (data[4] & 0x80) | (raw >> 8)
     data[5] = raw & 0xFF
-    if camry_b12:
-      # Camry's candidate coarse request is inverted signed-7 at 0.1 m/s^2/count.
-      coarse = max(-64, min(63, round(-accel / 0.1)))
-      data[12] = coarse & 0x7F
-
   # AUTOSAR E2E Profile 5: CRC-16/CCITT, init 0, Data ID 0x444A LE.
   crc = 0
   for byte in (*data[2:], 0x4A, 0x44):

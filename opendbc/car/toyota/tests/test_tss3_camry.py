@@ -134,7 +134,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertFalse(state.steerFaultTemporary)
     self.assertFalse(state.steerFaultPermanent)
 
-  def test_controller_emits_c7_and_template_preserving_longitudinal_request(self):
+  def test_controller_emits_c7_and_b45_only_longitudinal_probe(self):
     ci = CarInterface(self.CP)
     update_state(ci, moving=True)
     output, sends = ci.apply(control(5.0, accel=1.2, long_active=True), 2_000_000_000)
@@ -149,8 +149,9 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertEqual(long_bus, 0)
     expected = bytearray(CAMRY_LONG)
     expected[4:6] = bytes.fromhex("84b0")
-    expected[12] = 0x74
     self.assertEqual(long_data, long_with_counter(expected, CAMRY_LONG[2] + 19))
+    self.assertEqual(long_data[12], CAMRY_LONG[12])
+    self.assertAlmostEqual(output.accel, 1.2)
 
     state = update_state(ci, counter_offset=20)
     self.assertLess(state.vEgo, 0.45)
@@ -158,15 +159,6 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     _, long_data, _ = next(msg for msg in sends if msg[0] == 0x160)
     self.assertEqual(long_data, long_with_counter(CAMRY_LONG, CAMRY_LONG[2] + 39))
     self.assertEqual(output.accel, 0.0)
-
-  def test_camry_coarse_request_uses_bounded_inverse_tenths(self):
-    ci = CarInterface(self.CP)
-    update_state(ci, moving=True)
-    output, sends = ci.apply(control(0.0, accel=1.5, long_active=True), 2_000_000_000)
-    _, data, _ = next(msg for msg in sends if msg[0] == 0x160)
-    self.assertAlmostEqual(output.accel, 1.3)
-    self.assertEqual(data[4:6], bytes.fromhex("8514"))
-    self.assertEqual(data[12], 0x73)
 
   def test_inactive_c7_tracks_measured_angle_with_neutral_sequence(self):
     ci = CarInterface(self.CP)
@@ -205,7 +197,6 @@ class TestToyotaCamryTSS3Safety(unittest.TestCase):
     raw = round(accel / 0.001) & 0x7FFF
     data[4] = (data[4] & 0x80) | (raw >> 8)
     data[5] = raw & 0xFF
-    data[12] = round(-accel / 0.1) & 0x7F
     return libsafety_py.make_CANPacket(0x160, bus, bytes(data))
 
   def test_tss3_longitudinal_bounds_and_dynamic_forwarding(self):
@@ -214,9 +205,6 @@ class TestToyotaCamryTSS3Safety(unittest.TestCase):
     self.assertFalse(self.safety.safety_tx_hook(self.long_request(2.1)))
     self.assertFalse(self.safety.safety_tx_hook(self.long_request(-3.6)))
     self.assertFalse(self.safety.safety_tx_hook(self.long_request(0.0, bus=1)))
-    unsafe_coarse = bytearray(self.long_request(0.0).data)
-    unsafe_coarse[12] = (-30) & 0x7F
-    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x160, 0, bytes(unsafe_coarse))))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x160), -1)
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x230), 0)
     gas = bytearray(CAMRY_COMMON[0x116])
