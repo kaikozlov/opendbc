@@ -5,8 +5,8 @@ from opendbc.car.toyota.values import CAR
 Ecu = CarParams.Ecu
 
 FW_VERSIONS = {
-  # Exact 2026 Camry Hybrid F33 identity. EPS F181 is the required
-  # discriminator; FRC and ABS identities are corroborating.
+  # Exact 2026 Camry Hybrid F33 identity. ABS F181 is sufficient when the EPS
+  # diagnostic endpoint is unavailable; EPS and FRC corroborate it.
   CAR.TOYOTA_CAMRY_TSS3: {
     (Ecu.eps, 0x7A1, None): [
       b'\x028965F3307000\x00\x00\x00\x008A3113303100\x00\x00\x00\x00',
