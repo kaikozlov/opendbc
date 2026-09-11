@@ -159,10 +159,11 @@ CM_ BO_ 182 "Exact H/F protected lateral receiver PDU. Receiver-side fields are 
 CM_ SG_ 182 TARGET_LATERAL_ID "Techstream Target Lateral ID; exact H accepts 1=PCS, 4=LDA, 10=Hands Off LTA, 11=LTA/LCA, 19=PDA. 0 means no request.";
 CM_ SG_ 182 TARGET_STEERING_ANGLE "Controller-equivalent scale is exactly 1024/17870 deg/count.";
 CM_ SG_ 182 SEQUENCE "Exact H receiver treats this as a modulo-64 sequence counter with effective gap cap 8.";
-CM_ BO_ 352 "TSS3 FRC Profile-5 PDU. The Corolla contributor implementation substitutes signed-15 B4:B5 while preserving the live camera context. The Camry experiment intentionally tests the same single-field recipe without asserting cross-calibration semantics.";
+CM_ BO_ 352 "TSS3 FRC Profile-5 PDU. Corolla substitutes signed-15 B4:B5 while preserving the live camera context. Camry additionally substitutes the inverse signed-7 B12 candidate.";
 CM_ SG_ 352 CRC "Little-endian CRC-16/CCITT over bytes 2..31 followed by Data ID 0x444A in low-byte/high-byte order; initial value 0.";
 CM_ SG_ 352 BYTE_4 "Bit 7 is preserved context; the Corolla contributor implementation treats bits 6..0 as the high seven bits of a signed-15 quantity at 0.001 m/s2/count.";
 CM_ SG_ 352 BYTE_5 "The Corolla contributor implementation treats this as the low eight bits of the signed-15 B4:B5 quantity.";
+CM_ SG_ 352 BYTE_12 "On Camry, bits 6..0 are the candidate inverse signed-7 request at 0.1 m/s2/count; synthetic causality remains live-unvalidated.";
 CM_ SG_ 295 GEAR "Only raw 3=D has been dynamically validated on the tracked TSS3 Corolla capture; remaining enum values are Toyota prior art pending target transitions.";
 CM_ SG_ 374 CRUISE_ACTIVE "Wire location/checksum are Toyota prior art and observed on moving TSS3 Corolla captures; an active cruise transition has not yet been captured.";
 
