@@ -277,6 +277,10 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
       int desired_accel = ((msg->data[4] & 0x7FU) << 8U) | msg->data[5];
       desired_accel = to_signed(desired_accel, 15);
       tx = !longitudinal_accel_checks(desired_accel, TOYOTA_LONG_LIMITS);
+      if (!toyota_corolla_hf) {
+        int camry_coarse_accel = to_signed(msg->data[12] & 0x7FU, 7) * -100;
+        tx = tx && !longitudinal_accel_checks(camry_coarse_accel, TOYOTA_LONG_LIMITS);
+      }
     }
     return tx;
   }
