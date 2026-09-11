@@ -10,7 +10,7 @@ from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.toyota import toyotacan
 from opendbc.car.toyota.tss3 import (TSS3B6CompanionFields, TSS3B6Template,
                                      TSS3_B6_TARGET_LATERAL_ID_INACTIVE, TSS3_B6_TARGET_LATERAL_ID_LTA_LCA,
-                                     build_b6_application, build_b6_inline_signer_frame, target_angle_deg_to_raw)
+                                     build_b6_application, build_f33_signer_control, target_angle_deg_to_raw)
 from opendbc.car.toyota.values import CAR, CarControllerParams, ToyotaFlags
 from opendbc.can import CANPacker
 
@@ -85,6 +85,7 @@ class CarController(CarControllerBase):
     )
     self.tss3_inactive_companions = TSS3B6CompanionFields()
     self.tss3_sequence = 0
+    self.tss3_control_sequence = 0
     self.tss3_last_hud = None
     self.tss3_last_hud_frame = -100
 
@@ -137,10 +138,11 @@ class CarController(CarControllerBase):
           template=self.tss3_template,
           companions=self.tss3_active_companions if lat_active else self.tss3_inactive_companions,
         )
-        # The exact-F33 EPS-resident inline signer owns SecOC freshness and MAC.
-        # A zero four-byte trailer is the unambiguous marker it signs after
-        # CanIf admission and before the untouched stock SecOC verifier.
-        can_sends.append(build_b6_inline_signer_frame(application))
+        if lat_active:
+          self.tss3_control_sequence = self.tss3_control_sequence % 0xFF + 1
+        else:
+          self.tss3_control_sequence = 0
+        can_sends.append(build_f33_signer_control(application, self.tss3_control_sequence))
 
         self.tss3_sequence = (self.tss3_sequence + 1) & 0x3F
         output.steeringAngleDeg = self.last_angle

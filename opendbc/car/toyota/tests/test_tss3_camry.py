@@ -359,22 +359,21 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
         self.assertEqual(cs.steeringPressed, pressed)
         self.assertEqual(cs.vehicleSensorsInvalid, invalid)
 
-  def test_controller_sends_clean_b6_like_a_normal_angle_port(self):
+  def test_controller_sends_inline_signer_control(self):
     ci = CarInterface(self.CP)
     update_with_frame_set(ci, CAMRY_COMMON | {0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]})
     output, sends = ci.apply(control(5.0), 2_000_000_000)
-    b6 = [m for m in sends if m[0] == 0x0B6]
-    self.assertEqual(len(b6), 1)
-    addr, dat, bus = b6[0]
-    self.assertEqual((addr, bus, len(dat)), (0x0B6, 0, 32))
-    self.assertEqual(dat[3] & 0x3F, 11)
-    self.assertEqual(dat[6] & 0x04, 0)
-    self.assertEqual(dat[8:10], b"\x64\x64")
-    # B28..B31 are the exact marker consumed by the EPS-resident signer. The
-    # host owns application semantics only; EPS owns SecOC freshness and MAC.
-    self.assertEqual(dat[28:32], bytes(4))
+    controls = [m for m in sends if m[0] == 0x1FDC0002]
+    self.assertEqual(len(controls), 1)
+    addr, dat, bus = controls[0]
+    self.assertEqual((addr, bus, len(dat)), (0x1FDC0002, 0, 8))
+    self.assertEqual(dat[:2], b"\x00\xC7")
+    self.assertEqual(dat[2], 1)
+    self.assertEqual(dat[3], 0)
+    self.assertEqual(dat[6:], bytes(2))
     self.assertAlmostEqual(output.steeringAngleDeg,
                            int.from_bytes(dat[4:6], "big", signed=True) * (1024 / 17870), delta=0.03)
+    self.assertFalse(any(addr == 0x0B6 for addr, _, _ in sends))
     self.assertFalse(any(addr == 0x08A for addr, _, _ in sends))
 
   def test_controller_replaces_stock_hud_without_hands_off_nag(self):
@@ -455,51 +454,38 @@ class TestToyotaCamryTSS3Platform(unittest.TestCase):
     hud = next(dat for addr, dat, bus in sends if addr == 0x412 and bus == 0)
     self.assertEqual(hud, bytes.fromhex("140c004401ee9307"))
 
-  def test_controller_inactive_b6_tracks_measured_angle(self):
+  def test_controller_inactive_signer_control_tracks_measured_angle(self):
     ci = CarInterface(self.CP)
     cs = update_with_frame_set(ci, CAMRY_COMMON | {0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]})
     _, sends = ci.apply(control(20.0, lat_active=False), 2_000_000_000)
-    dat = next(dat for addr, dat, bus in sends if addr == 0x0B6 and bus == 0)
-    self.assertEqual(dat[3] & 0x3F, 0)
-    self.assertEqual(dat[6] & 0x04, 0x04)
-    self.assertEqual(dat[8:10], b"\x00\x00")
+    dat = next(dat for addr, dat, bus in sends if addr == 0x1FDC0002 and bus == 0)
+    self.assertEqual(dat[:4], b"\x00\xC7\x00\x00")
+    self.assertEqual(dat[6:], bytes(2))
     commanded_deg = int.from_bytes(dat[4:6], "big", signed=True) * (1024 / 17870)
     self.assertAlmostEqual(commanded_deg, cs.steeringAngleDeg, delta=0.12)
 
-  def test_b6_sequence_progresses_while_inline_signer_trailer_stays_zero(self):
+  def test_inline_signer_control_sequence_progresses_and_skips_zero(self):
     ci = CarInterface(self.CP)
     update_with_frame_set(ci, CAMRY_COMMON | {0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]})
     _, sends = ci.apply(control(1.0), 2_000_000_000)
-    first = next(dat for addr, dat, bus in sends if addr == 0x0B6 and bus == 0)
-    ci.apply(control(1.0), 2_010_000_000)
-    _, sends = ci.apply(control(1.0), 2_020_000_000)
-    second = next(dat for addr, dat, bus in sends if addr == 0x0B6 and bus == 0)
+    first = next(dat for addr, dat, bus in sends if addr == 0x1FDC0002 and bus == 0)
+    for i in range(1, 256):
+      ci.apply(control(1.0), 2_000_000_000 + i * 10_000_000)
+      _, sends = ci.apply(control(1.0), 2_000_000_000 + (i * 10_000_000) + 1)
+    wrapped = next(dat for addr, dat, bus in sends if addr == 0x1FDC0002 and bus == 0)
 
-    self.assertEqual((second[7] - first[7]) & 0x3F, 1)
-    self.assertEqual(first[28:32], bytes(4))
-    self.assertEqual(second[28:32], bytes(4))
+    self.assertEqual(first[2], 1)
+    self.assertEqual(wrapped[2], 1)
 
-  def test_b6_inline_signer_marker_is_independent_of_host_sync_epoch(self):
-    ci = CarInterface(self.CP)
-    base = CAMRY_COMMON | {0x127: CAMRY_GEAR[structs.CarState.GearShifter.drive]}
-    update_with_frame_set(ci, base)
-    _, sends = ci.apply(control(1.0), 2_000_000_000)
-    first = next(dat for addr, dat, bus in sends if addr == 0x0B6 and bus == 0)
+    ci.apply(control(1.0, lat_active=False), 5_000_000_000)
+    _, sends = ci.apply(control(1.0, lat_active=False), 5_010_000_000)
+    inactive = next(dat for addr, dat, bus in sends if addr == 0x1FDC0002 and bus == 0)
+    self.assertEqual(inactive[2], 0)
 
-    sync = bytearray(CAMRY_COMMON[0x00F])
-    reset = (sync[2] << 12) | (sync[3] << 4) | (sync[4] >> 4)
-    reset = (reset + 1) & 0xFFFFF
-    sync[2] = (reset >> 12) & 0xFF
-    sync[3] = (reset >> 4) & 0xFF
-    sync[4] = (sync[4] & 0x0F) | ((reset & 0x0F) << 4)
-    update_with_frame_set(ci, base | {0x00F: bytes(sync)}, repeats=1)
-    ci.apply(control(1.0), 2_010_000_000)
-    _, sends = ci.apply(control(1.0), 2_020_000_000)
-    after_reset = next(dat for addr, dat, bus in sends if addr == 0x0B6 and bus == 0)
-
-    self.assertEqual(first[28:32], bytes(4))
-    self.assertEqual(after_reset[28:32], bytes(4))
-    self.assertEqual((after_reset[7] - first[7]) & 0x3F, 1)
+    ci.apply(control(1.0), 5_020_000_000)
+    _, sends = ci.apply(control(1.0), 5_030_000_000)
+    reactivated = next(dat for addr, dat, bus in sends if addr == 0x1FDC0002 and bus == 0)
+    self.assertEqual(reactivated[2], 1)
 
   def test_controller_brake_cancel_clones_stock_101(self):
     ci = CarInterface(self.CP)
@@ -532,11 +518,11 @@ class TestToyotaCamryTSS3PandaSafety(unittest.TestCase):
   def test_08a_is_not_a_camry_tx_object(self):
     self.assertFalse(self.s.safety_tx_hook(libsafety_py.make_CANPacket(0x08A, 0, CAMRY_COMMON[0x08A])))
 
-  def next_b6(self, angle=1.0, active=True):
+  def next_signer_control(self, angle=1.0, active=True):
     _, sends = self.ci.apply(control(angle, active), 2_000_000_000)
-    if not any(addr == 0x0B6 for addr, _, _ in sends):
+    if not any(addr == 0x1FDC0002 for addr, _, _ in sends):
       _, sends = self.ci.apply(control(angle, active), 2_010_000_000)
-    return bytearray(next(dat for addr, dat, bus in sends if addr == 0x0B6 and bus == 0))
+    return bytearray(next(dat for addr, dat, bus in sends if addr == 0x1FDC0002 and bus == 0))
 
   def reset_safety(self, controls=True):
     self.s.init_tests()
@@ -549,32 +535,31 @@ class TestToyotaCamryTSS3PandaSafety(unittest.TestCase):
       a8 = bytes(off)
     self.s.safety_rx_hook(libsafety_py.make_CANPacket(0x08A, 2, a8))
 
-  def test_normal_angle_safety_accepts_controller_b6(self):
-    dat = self.next_b6()
-    self.assertTrue(self.s.safety_tx_hook(libsafety_py.make_CANPacket(0x0B6, 0, bytes(dat))))
+  def test_normal_angle_safety_accepts_controller_signer_control(self):
+    dat = self.next_signer_control()
+    self.assertTrue(self.s.safety_tx_hook(libsafety_py.make_CANPacket(0x1FDC0002, 0, bytes(dat))))
 
-  def test_b6_safety_rejects_wrong_mode_overangle_and_controls_off(self):
-    dat = self.next_b6()
-    bad_mode = bytearray(dat)
-    bad_mode[3] = (bad_mode[3] & 0xC0) | 4
-    self.assertFalse(self.s.safety_tx_hook(libsafety_py.make_CANPacket(0x0B6, 0, bytes(bad_mode))))
+  def test_signer_control_safety_rejects_bad_header_overangle_and_controls_off(self):
+    dat = self.next_signer_control()
+    bad_header = bytearray(dat)
+    bad_header[1] ^= 1
+    self.assertFalse(self.s.safety_tx_hook(libsafety_py.make_CANPacket(0x1FDC0002, 0, bytes(bad_header))))
 
     self.reset_safety()
-    overangle = bytearray(self.next_b6())
+    overangle = bytearray(self.next_signer_control())
     overangle[4:6] = (1746).to_bytes(2, "big", signed=True)
-    self.assertFalse(self.s.safety_tx_hook(libsafety_py.make_CANPacket(0x0B6, 0, bytes(overangle))))
+    self.assertFalse(self.s.safety_tx_hook(libsafety_py.make_CANPacket(0x1FDC0002, 0, bytes(overangle))))
 
     self.reset_safety(controls=False)
     self.assertFalse(self.s.get_controls_allowed())
-    dat = self.next_b6()
-    self.assertFalse(self.s.safety_tx_hook(libsafety_py.make_CANPacket(0x0B6, 0, bytes(dat))))
+    dat = self.next_signer_control()
+    self.assertFalse(self.s.safety_tx_hook(libsafety_py.make_CANPacket(0x1FDC0002, 0, bytes(dat))))
 
-  def test_b6_safety_does_not_promote_companion_fields_to_policy(self):
-    dat = self.next_b6()
-    dat[8] = 0
-    dat[9] = 0
-    dat[6] ^= 0x04
-    self.assertTrue(self.s.safety_tx_hook(libsafety_py.make_CANPacket(0x0B6, 0, bytes(dat))))
+  def test_signer_control_safety_rejects_nonzero_reserved_bytes(self):
+    for index in (3, 6, 7):
+      dat = self.next_signer_control()
+      dat[index] = 1
+      self.assertFalse(self.s.safety_tx_hook(libsafety_py.make_CANPacket(0x1FDC0002, 0, bytes(dat))))
 
   def test_stock_acc_owns_controls_allowed(self):
     off = bytearray(CAMRY_COMMON[0x08A])
@@ -607,7 +592,8 @@ class TestToyotaCamryTSS3PandaSafety(unittest.TestCase):
 
   def test_relay_forwards_stock_08a_and_replaces_camera_owned_messages(self):
     self.assertEqual(self.s.safety_fwd_hook(2, 0x08A), 0)
-    self.assertEqual(self.s.safety_fwd_hook(2, 0x0B6), -1)
+    self.assertEqual(self.s.safety_fwd_hook(2, 0x0B6), 0)
+    self.assertEqual(self.s.safety_fwd_hook(2, 0x1FDC0002), -1)
     self.assertEqual(self.s.safety_fwd_hook(2, 0x412), -1)
 
     hud = bytes.fromhex("1400004401ee9307")

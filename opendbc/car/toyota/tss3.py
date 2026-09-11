@@ -15,6 +15,8 @@ TSS3_B6_TARGET_LATERAL_ID_INACTIVE = 0
 TSS3_B6_TARGET_LATERAL_ID_LTA_LCA = 11
 TSS3_B6_TARGET_ANGLE_SCALE_DEG = 1024 / 17870
 TSS3_B6_SEQUENCE_MODULUS = 64
+TSS3_F33_SIGNER_CONTROL_ADDR = 0x1FDC0002
+TSS3_F33_SIGNER_CONTROL_MAGIC = b"\x00\xC7"
 
 
 @dataclass(frozen=True)
@@ -127,17 +129,24 @@ def build_b6_application(*, target_lateral_id: int, target_angle_raw: int, seque
   return TSS3B6Application(bytes(data), target_lateral_id, target_angle_raw, sequence)
 
 
-def build_b6_inline_signer_frame(application: TSS3B6Application) -> tuple[int, bytes, int]:
-  """Emit the exact marker consumed by the F33 EPS-resident inline signer.
-
-  B0..B27 are the ordinary B6 application payload. The four-byte secured
-  trailer is deliberately zero: the EPS resident owns full SecOC freshness and
-  replaces B28..B31 with FV4||CMAC-MSB28 after CanIf admission and before the
-  stock SecOC verifier.
-  """
+def build_f33_signer_control(application: TSS3B6Application, control_sequence: int) -> tuple[int, bytes, int]:
+  """Emit the bounded sideband consumed by the exact-F33 EPS-resident signer."""
   if len(application.data) != TSS3_B6_APPLICATION_LEN:
     raise ValueError(f"B6 application must be {TSS3_B6_APPLICATION_LEN} bytes")
-  return TSS3_B6_ADDR, application.data + bytes(4), 0
+  if application.target_lateral_id == TSS3_B6_TARGET_LATERAL_ID_INACTIVE:
+    # Sequence zero is the resident's neutral token. Keep carrying the measured
+    # steering angle so Panda can apply its normal inactive-angle proximity
+    # check; the resident ignores the target whenever the sequence is zero.
+    data = (TSS3_F33_SIGNER_CONTROL_MAGIC + b"\x00\x00" +
+            application.target_angle_raw.to_bytes(2, "big", signed=True) + bytes(2))
+    return TSS3_F33_SIGNER_CONTROL_ADDR, data, 0
+  if application.target_lateral_id != TSS3_B6_TARGET_LATERAL_ID_LTA_LCA:
+    raise ValueError("inline signer supports only inactive or LTA/LCA control")
+  if not 1 <= control_sequence <= 0xFF:
+    raise ValueError("active inline-signer control sequence must be 1..255")
+  data = (TSS3_F33_SIGNER_CONTROL_MAGIC + bytes((control_sequence, 0)) +
+          application.target_angle_raw.to_bytes(2, "big", signed=True) + bytes(2))
+  return TSS3_F33_SIGNER_CONTROL_ADDR, data, 0
 
 
 def build_b6_secoc_frame(key: bytes, application: TSS3B6Application, freshness: TSS3Freshness) -> tuple[int, bytes, int]:

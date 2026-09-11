@@ -64,8 +64,6 @@ static int toyota_dbc_eps_torque_factor = 100;   // conversion factor for STEER_
 
 static bool toyota_tss3 = false;
 
-#define TOYOTA_TSS3_TARGET_LATERAL_ID_LTA_LCA 11U
-
 
 static uint32_t toyota_compute_checksum(const CANPacket_t *msg) {
   int len = GET_LEN(msg);
@@ -260,7 +258,7 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
     const bool brake_cancel = GET_BIT(msg, 3U);
     const bool checksum_valid = msg->data[7] == toyota_compute_checksum(msg);
     tx = brake_cancel && checksum_valid;
-  } else if (toyota_tss3 && (msg->addr == 0x0B6U)) {
+  } else if (toyota_tss3 && (msg->addr == 0x1FDC0002U)) {
     static const AngleSteeringLimits TOYOTA_TSS3_ANGLE_STEERING_LIMITS = {
       .max_angle = 1745,
       .angle_deg_to_can = 17.451171875F,
@@ -274,12 +272,13 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
       },
     };
 
-    const uint8_t target_lateral_id = msg->data[3] & 0x3FU;
+    const bool header_valid = (msg->data[0] == 0U) && (msg->data[1] == 0xC7U) &&
+                              (msg->data[3] == 0U) && (msg->data[6] == 0U) && (msg->data[7] == 0U);
     int target_angle = (msg->data[4] << 8U) | msg->data[5];
     target_angle = to_signed(target_angle, 16);
-    const bool steer_control_enabled = target_lateral_id == TOYOTA_TSS3_TARGET_LATERAL_ID_LTA_LCA;
+    const bool steer_control_enabled = msg->data[2] != 0U;
 
-    if ((target_lateral_id != 0U) && !steer_control_enabled) {
+    if (!header_valid) {
       tx = false;
     }
     if (steer_angle_cmd_checks(target_angle, steer_control_enabled, TOYOTA_TSS3_ANGLE_STEERING_LIMITS)) {
@@ -465,7 +464,7 @@ static safety_config toyota_init(uint16_t param) {
   safety_config ret;
   if (toyota_tss3) {
     static const CanMsg toyota_tss3_tx_msgs[] = {
-      {0x0B6, 0, 32, .check_relay = true},
+      {0x1FDC0002, 0, 8, .check_relay = true},
       {0x412, 0, 8, .check_relay = true},
       {0x101, 2, 8, .check_relay = false},
     };
