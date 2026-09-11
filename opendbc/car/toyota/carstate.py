@@ -350,7 +350,7 @@ class CarState(CarStateBase):
     if CP.flags & ToyotaFlags.TSS3:
       common_messages = [
         ("STEER_ANGLE_SENSOR", 100),
-        ("TSS3_EPS_TELEMETRY", 100),
+        ("TSS3_EPS_TELEMETRY", float('nan') if CP.flags & ToyotaFlags.EPS_DIAGNOSTICS_UNAVAILABLE else 100),
         ("WHEEL_SPEEDS", 100),
         ("BRAKE_MODULE", 50),
         ("GAS_PEDAL", 40),

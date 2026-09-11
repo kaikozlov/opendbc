@@ -75,6 +75,7 @@ class ToyotaFlags(IntFlag):
   HYBRID = 1
   HAS_BSM = 2  # blind spot monitoring
   DISABLE_RADAR = 4
+  EPS_DIAGNOSTICS_UNAVAILABLE = 8192
 
   # Static flags
   TSS2 = 8
