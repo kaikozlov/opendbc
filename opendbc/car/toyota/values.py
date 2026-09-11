@@ -34,6 +34,14 @@ class CarControllerParams:
     ([5, 25], [0.36, 0.26]),
   )
 
+  # Exact F33 accepts roughly +/-100 degrees at the native B6 angle scale.
+  # The controller and Panda both apply the standard Toyota angle-rate shape.
+  TSS3_ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(
+    1745 * (1024 / 17870),
+    ([5, 25], [0.3, 0.15]),
+    ([5, 25], [0.36, 0.26]),
+  )
+
   MAX_LTA_DRIVER_TORQUE_ALLOWANCE = 150  # slightly above steering pressed allows some resistance when changing lanes
 
   def __init__(self, CP):
@@ -57,6 +65,7 @@ class ToyotaSafetyFlags(IntFlag):
   STOCK_LONGITUDINAL = (2 << 8)
   LTA = (4 << 8)
   SECOC = (8 << 8)
+  F33 = (16 << 8)
 
 
 class ToyotaFlags(IntFlag):
@@ -74,6 +83,8 @@ class ToyotaFlags(IntFlag):
   # these cars can utilize 2.0 m/s^2
   RAISED_ACCEL_LIMIT = 1024
   SECOC = 2048
+  # Network/state generation, independent of actuator authentication.
+  TSS3 = 4096
 
   # deprecated flags
   # these cars are speculated to allow stop and go when the DSU is unplugged
@@ -126,6 +137,21 @@ class ToyotaSecOCPlatformConfig(PlatformConfig):
       self.dbc_dict = {Bus.pt: 'toyota_secoc_pt_generated'}
 
 
+@dataclass
+class ToyotaTSS3CarDocs(ToyotaCarDocs):
+  support_type: SupportType = SupportType.CUSTOM
+  support_link: str | None = None
+  car_parts: CarParts = field(default_factory=CarParts.common([CarHarness.toyota_b]))
+
+
+@dataclass
+class ToyotaTSS3PlatformConfig(PlatformConfig):
+  dbc_dict: dict = field(default_factory=lambda: {Bus.pt: 'toyota_tss3_pt_generated'})
+
+  def init(self):
+    self.flags |= ToyotaFlags.TSS3
+
+
 class CAR(Platforms):
   # Toyota
   TOYOTA_ALPHARD_TSS2 = ToyotaTSS2PlatformConfig(
@@ -174,6 +200,11 @@ class CAR(Platforms):
       ToyotaCarDocs("Toyota Camry Hybrid 2021-24"),
     ],
     TOYOTA_CAMRY.specs,
+  )
+  TOYOTA_CAMRY_TSS3 = ToyotaTSS3PlatformConfig(
+    [ToyotaTSS3CarDocs("Toyota Camry Hybrid 2026")],
+    TOYOTA_CAMRY.specs,
+    flags=ToyotaFlags.HYBRID | ToyotaFlags.SECOC,
   )
   TOYOTA_CHR = PlatformConfig(
     [
@@ -496,6 +527,8 @@ TOYOTA_PLATFORM_BY_VEHICLE: dict[tuple[str, int], CAR] = {
   ("NA", 12606): CAR.TOYOTA_CAMRY_TSS2,
   ("NA", 12607): CAR.TOYOTA_CAMRY_TSS2,
   ("NA", 12608): CAR.TOYOTA_CAMRY_TSS2,
+  # Exact generation-20 Camry HV identity used by the maintainer vehicle.
+  ("NA", 12862): CAR.TOYOTA_CAMRY_TSS3,
 }
 
 
@@ -579,7 +612,10 @@ FW_QUERY_CONFIG = FwQueryConfig(
   ],
   non_essential_ecus={
     # FIXME: On some models, abs can sometimes be missing
-    Ecu.abs: [CAR.TOYOTA_RAV4, CAR.TOYOTA_COROLLA, CAR.TOYOTA_HIGHLANDER, CAR.TOYOTA_SIENNA, CAR.LEXUS_IS, CAR.TOYOTA_ALPHARD_TSS2],
+    Ecu.abs: [CAR.TOYOTA_RAV4, CAR.TOYOTA_COROLLA, CAR.TOYOTA_HIGHLANDER, CAR.TOYOTA_SIENNA, CAR.LEXUS_IS, CAR.TOYOTA_ALPHARD_TSS2,
+              CAR.TOYOTA_CAMRY_TSS3],
+    # The exact EPS identity is required; these two are corroborating.
+    Ecu.fwdCamera: [CAR.TOYOTA_CAMRY_TSS3],
     # On some models, the engine can show on two different addresses
     Ecu.engine: [CAR.TOYOTA_HIGHLANDER, CAR.TOYOTA_CAMRY, CAR.TOYOTA_COROLLA_TSS2, CAR.TOYOTA_CHR, CAR.TOYOTA_CHR_TSS2, CAR.LEXUS_IS,
                  CAR.LEXUS_IS_TSS2, CAR.LEXUS_RC, CAR.LEXUS_NX, CAR.LEXUS_NX_TSS2, CAR.LEXUS_RX, CAR.LEXUS_RX_TSS2],
@@ -618,6 +654,9 @@ FW_QUERY_CONFIG = FwQueryConfig(
 )
 
 STEER_THRESHOLD = 100
+
+# Physical steering-wheel torque threshold for exact F33 driver intervention.
+TSS3_STEER_DRIVER_TORQUE_THRESHOLD = 0.6
 
 # These cars have non-standard EPS torque scale factors. All others are 73
 EPS_SCALE = defaultdict(lambda: 73,
