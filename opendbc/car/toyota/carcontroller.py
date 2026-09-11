@@ -27,6 +27,7 @@ MAX_PITCH_COMPENSATION = 1.5  # m/s^2
 TSS3_MIN_LONG_OVERRIDE_SPEED = 0.45  # m/s; stock owns its standstill mechanism below this
 TSS3_ACCEL_MIN = -1.5  # m/s^2; validated openpilot command range in the Corolla PoC
 TSS3_ACCEL_MAX = 1.5
+TSS3_CAMRY_ACCEL_MAX = 1.3  # B12=-13, within the retained stock Camry envelope
 
 # LKA limits
 # EPS faults if you apply torque while the steering rate is above 100 deg/s for too long
@@ -113,13 +114,17 @@ class CarController(CarControllerBase):
       engaged = (self.CP.openpilotLongitudinalControl and CS.out.cruiseState.enabled and
                  not CS.out.gasPressed and template is not None)
       controlling = engaged and CC.longActive and CS.out.vEgo > TSS3_MIN_LONG_OVERRIDE_SPEED
-      accel = float(np.clip(CC.actuators.accel, TSS3_ACCEL_MIN, TSS3_ACCEL_MAX)) if controlling else 0.0
+      accel_max = TSS3_CAMRY_ACCEL_MAX if self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3 else TSS3_ACCEL_MAX
+      accel = float(np.clip(CC.actuators.accel, TSS3_ACCEL_MIN, accel_max)) if controlling else 0.0
       output.accel = accel
 
       # Be the sole 0x160 emitter while engaged, paced by the camera's live counter.
       # When openpilot is not actively controlling, relay the camera frame exactly.
       if engaged and camera_counter != self.tss3_longitudinal_counter:
-        can_sends.append(toyotacan.create_tss3_accel_command(template, accel if controlling else None))
+        can_sends.append(toyotacan.create_tss3_accel_command(
+          template, accel if controlling else None,
+          camry_b12=self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3,
+        ))
         self.tss3_longitudinal_counter = camera_counter
       elif not engaged:
         self.tss3_longitudinal_counter = camera_counter
