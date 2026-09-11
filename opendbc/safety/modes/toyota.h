@@ -262,14 +262,21 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
       },
     };
 
-    tx = (msg->bus == 1U) && (msg->addr == 0x1FDC0002U);
-    if (tx) {
+    const bool signer_control = (msg->bus == 1U) && (msg->addr == 0x1FDC0002U);
+    const bool long_control = !toyota_stock_longitudinal && (msg->bus == 0U) && (msg->addr == 0x160U);
+    tx = signer_control || long_control;
+    if (signer_control) {
       const bool header_valid = (msg->data[0] == 0U) && (msg->data[1] == 0xC7U) &&
                                 (msg->data[3] == 0U) && (msg->data[6] == 0U) && (msg->data[7] == 0U);
       int target_angle = (msg->data[4] << 8U) | msg->data[5];
       target_angle = to_signed(target_angle, 16);
       const bool steer_control_enabled = msg->data[2] != 0U;
       tx = header_valid && !steer_angle_cmd_checks(target_angle, steer_control_enabled, TOYOTA_TSS3_ANGLE_STEERING_LIMITS);
+    }
+    if (long_control) {
+      int desired_accel = ((msg->data[4] & 0x7FU) << 8U) | msg->data[5];
+      desired_accel = to_signed(desired_accel, 15);
+      tx = !longitudinal_accel_checks(desired_accel, TOYOTA_LONG_LIMITS);
     }
     return tx;
   }
@@ -412,6 +419,11 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
   return tx;
 }
 
+static bool toyota_fwd_hook(int bus_num, int addr) {
+  return toyota_tss3_signer && !toyota_stock_longitudinal && (bus_num == 2) &&
+         (addr == 0x160) && get_longitudinal_allowed();
+}
+
 static safety_config toyota_init(uint16_t param) {
   static const CanMsg TOYOTA_TX_MSGS[] = {
     TOYOTA_COMMON_TX_MSGS
@@ -453,10 +465,18 @@ static safety_config toyota_init(uint16_t param) {
 
   safety_config ret;
   if (toyota_tss3_signer) {
-    static const CanMsg toyota_tss3_signer_tx_msgs[] = {
+    static const CanMsg toyota_tss3_signer_stock_long_tx_msgs[] = {
       {0x1FDC0002, 1, 8, .check_relay = false},
     };
-    SET_TX_MSGS(toyota_tss3_signer_tx_msgs, ret);
+    static const CanMsg toyota_tss3_signer_long_tx_msgs[] = {
+      {0x1FDC0002, 1, 8, .check_relay = false},
+      {0x160, 0, 32, .check_relay = true, .disable_static_blocking = true},
+    };
+    if (toyota_stock_longitudinal) {
+      SET_TX_MSGS(toyota_tss3_signer_stock_long_tx_msgs, ret);
+    } else {
+      SET_TX_MSGS(toyota_tss3_signer_long_tx_msgs, ret);
+    }
     if (toyota_corolla_hf) {
       static RxCheck toyota_corolla_hf_rx_checks[] = {
         {.msg = {{0x025, 1, 32, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
@@ -527,6 +547,7 @@ const safety_hooks toyota_hooks = {
   .init = toyota_init,
   .rx = toyota_rx_hook,
   .tx = toyota_tx_hook,
+  .fwd = toyota_fwd_hook,
   .get_checksum = toyota_get_checksum,
   .compute_checksum = toyota_compute_checksum,
   .get_quality_flag_valid = toyota_get_quality_flag_valid,

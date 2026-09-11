@@ -44,6 +44,39 @@ BO_ 138 TSS3_LATERAL_REQUEST: 32 XXX
  SG_ CRUISE_SUBSTATE_2 : 63|8@0+ (1,0) [0|255] "" XXX
  SG_ SET_SPEED : 87|8@0+ (1,0) [0|255] "km/h" XXX
 
+BO_ 352 TSS3_LONGITUDINAL_REQUEST: 32 XXX
+ SG_ CRC : 0|16@1+ (1,0) [0|65535] "" XXX
+ SG_ COUNTER : 16|8@1+ (1,0) [0|255] "" XXX
+ SG_ BYTE_3 : 24|8@1+ (1,0) [0|255] "" XXX
+ SG_ BYTE_4 : 32|8@1+ (1,0) [0|255] "" XXX
+ SG_ BYTE_5 : 40|8@1+ (1,0) [0|255] "" XXX
+ SG_ BYTE_6 : 48|8@1+ (1,0) [0|255] "" XXX
+ SG_ BYTE_7 : 56|8@1+ (1,0) [0|255] "" XXX
+ SG_ BYTE_8 : 64|8@1+ (1,0) [0|255] "" XXX
+ SG_ BYTE_9 : 72|8@1+ (1,0) [0|255] "" XXX
+ SG_ BYTE_10 : 80|8@1+ (1,0) [0|255] "" XXX
+ SG_ BYTE_11 : 88|8@1+ (1,0) [0|255] "" XXX
+ SG_ BYTE_12 : 96|8@1+ (1,0) [0|255] "" XXX
+ SG_ BYTE_13 : 104|8@1+ (1,0) [0|255] "" XXX
+ SG_ BYTE_14 : 112|8@1+ (1,0) [0|255] "" XXX
+ SG_ BYTE_15 : 120|8@1+ (1,0) [0|255] "" XXX
+ SG_ BYTE_16 : 128|8@1+ (1,0) [0|255] "" XXX
+ SG_ BYTE_17 : 136|8@1+ (1,0) [0|255] "" XXX
+ SG_ BYTE_18 : 144|8@1+ (1,0) [0|255] "" XXX
+ SG_ BYTE_19 : 152|8@1+ (1,0) [0|255] "" XXX
+ SG_ BYTE_20 : 160|8@1+ (1,0) [0|255] "" XXX
+ SG_ BYTE_21 : 168|8@1+ (1,0) [0|255] "" XXX
+ SG_ BYTE_22 : 176|8@1+ (1,0) [0|255] "" XXX
+ SG_ BYTE_23 : 184|8@1+ (1,0) [0|255] "" XXX
+ SG_ BYTE_24 : 192|8@1+ (1,0) [0|255] "" XXX
+ SG_ BYTE_25 : 200|8@1+ (1,0) [0|255] "" XXX
+ SG_ BYTE_26 : 208|8@1+ (1,0) [0|255] "" XXX
+ SG_ BYTE_27 : 216|8@1+ (1,0) [0|255] "" XXX
+ SG_ BYTE_28 : 224|8@1+ (1,0) [0|255] "" XXX
+ SG_ BYTE_29 : 232|8@1+ (1,0) [0|255] "" XXX
+ SG_ BYTE_30 : 240|8@1+ (1,0) [0|255] "" XXX
+ SG_ BYTE_31 : 248|8@1+ (1,0) [0|255] "" XXX
+
 BO_ 170 WHEEL_SPEEDS: 8 XXX
  SG_ WHEEL_SPEED_FR_FAULT : 7|1@0+ (1,0) [0|1] "" XXX
  SG_ WHEEL_SPEED_FR : 6|15@0+ (0.01,-67.67) [-67.67|260] "km/h" XXX
@@ -126,6 +159,10 @@ CM_ BO_ 182 "Exact H/F protected lateral receiver PDU. Receiver-side fields are 
 CM_ SG_ 182 TARGET_LATERAL_ID "Techstream Target Lateral ID; exact H accepts 1=PCS, 4=LDA, 10=Hands Off LTA, 11=LTA/LCA, 19=PDA. 0 means no request.";
 CM_ SG_ 182 TARGET_STEERING_ANGLE "Controller-equivalent scale is exactly 1024/17870 deg/count.";
 CM_ SG_ 182 SEQUENCE "Exact H receiver treats this as a modulo-64 sequence counter with effective gap cap 8.";
+CM_ BO_ 352 "TSS3 FRC longitudinal request. Openpilot replaces each live camera-side frame one-for-one, preserving its counter and context while changing only the signed-15 acceleration in B4:B5 and recomputing AUTOSAR E2E Profile 5.";
+CM_ SG_ 352 CRC "Little-endian CRC-16/CCITT over bytes 2..31 followed by Data ID 0x444A in low-byte/high-byte order; initial value 0.";
+CM_ SG_ 352 BYTE_4 "Bit 7 is preserved context; bits 6..0 are the high seven bits of the signed-15 acceleration request at 0.001 m/s2/count.";
+CM_ SG_ 352 BYTE_5 "Low eight bits of the signed-15 acceleration request at 0.001 m/s2/count.";
 CM_ SG_ 295 GEAR "Only raw 3=D has been dynamically validated on the tracked TSS3 Corolla capture; remaining enum values are Toyota prior art pending target transitions.";
 CM_ SG_ 374 CRUISE_ACTIVE "Wire location/checksum are Toyota prior art and observed on moving TSS3 Corolla captures; an active cruise transition has not yet been captured.";
 
