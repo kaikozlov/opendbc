@@ -180,12 +180,13 @@ class CarState(CarStateBase):
     ret.steerFaultTemporary = False
     ret.steerFaultPermanent = False
 
-    cruise = cp.vl["PCM_CRUISE"]
-    ret.cruiseState.enabled = bool(cruise["CRUISE_ACTIVE"])
-    # The two retained drives do not exercise an independent main-switch bit.
-    # A tester can engage only after stock ACC itself reports active.
+    lateral = cp.vl["TSS3_LATERAL_REQUEST"]
+    ret.cruiseState.enabled = bool(lateral["COROLLA_ACC_ENGAGED"])
+    # Albino's live longitudinal implementation used this native 0x08A state
+    # for both host and Panda gating. No independent main or standstill field
+    # is qualified yet, so control follows stock ACC's actual engaged state.
     ret.cruiseState.available = ret.cruiseState.enabled
-    ret.cruiseState.standstill = ret.cruiseState.enabled and int(cruise["CRUISE_STATE"]) == 7
+    ret.cruiseState.standstill = False
 
     if self.CP.enableBsm:
       ret.leftBlindspot = bool(cp.vl["BSM"]["L_ADJACENT"] or cp.vl["BSM"]["L_APPROACHING"])
@@ -363,7 +364,7 @@ class CarState(CarStateBase):
       ]
       pt_messages = common_messages + ([
         ("SECOC_SYNCHRONIZATION", 10),
-        ("PCM_CRUISE", 30),
+        ("TSS3_LATERAL_REQUEST", 40),
       ] if CP.carFingerprint == CAR.TOYOTA_COROLLA_TSS3 else [
         ("TSS3_CRUISE_SWITCH", 30),
         ("BODY_CONTROL_STATE_2", 3),

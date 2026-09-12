@@ -125,8 +125,8 @@ static void toyota_rx_hook(const CANPacket_t *msg) {
       if (!toyota_corolla_hf && (msg->addr == 0x8AU)) {
         pcm_cruise_check(GET_BIT(msg, 27U));
       }
-      if (toyota_corolla_hf && (msg->addr == 0x176U)) {
-        pcm_cruise_check(GET_BIT(msg, 5U));
+      if (toyota_corolla_hf && (msg->addr == 0x8AU)) {
+        pcm_cruise_check(GET_BIT(msg, 180U));
       }
     }
   } else if (msg->bus == 0U) {
@@ -487,7 +487,7 @@ static safety_config toyota_init(uint16_t param) {
         {.msg = {{0x0AA, 1, 8, 100U, .ignore_checksum = true, .ignore_counter = true}, {0}, {0}}},
         {.msg = {{0x116, 1, 8, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
         {.msg = {{0x101, 1, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
-        {.msg = {{0x176, 1, 8, 30U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
+        {.msg = {{0x08A, 1, 32, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
       };
       SET_RX_CHECKS(toyota_corolla_hf_rx_checks, ret);
     } else {
