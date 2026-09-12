@@ -17,6 +17,7 @@ SPAN_FRAMES = {
   0x00F: bytes.fromhex("162d0040d8a0a606"),
   0x025: bytes.fromhex("0ff800005fff0092000000000000000000000000000000000000000091f9fcc0"),
   0x030: bytes.fromhex("0a000000220450b80b002000380006d4020c00000038033b00000000706253c1"),
+  0x08A: bytes.fromhex("000000008000001203260003267fff007fffff3600000000000039009064215b"),
   0x0AA: bytes.fromhex("1abd1a6f1aba1a6f"),
   0x101: bytes.fromhex("8800003a000000cc"),
   0x116: bytes.fromhex("000200007a353eaa"),
@@ -26,6 +27,7 @@ SPAN_FRAMES = {
   0x620: bytes.fromhex("0000000080000000"),
 }
 COROLLA_LONG = bytes.fromhex("44905f82800040034defa3007eaff080023fff100a8fffe40000000000000000")
+SPAN_ACC_ACTIVE = bytes.fromhex("000000008004475d00520000527fff007fff00390000100000003000749773c5")
 
 
 def long_with_counter(template: bytes, counter: int) -> bytes:
@@ -73,13 +75,11 @@ def update_control_state(ci, moving: bool = True, counter_offset: int = 0):
   for i in range(20):
     packets = state_packets(COROLLA_LONG[2] + counter_offset + i)
     wheel_speeds = bytes.fromhex("1c001c001c001c00" if moving else "1a6f1a6f1a6f1a6f")
-    active = bytearray(SPAN_FRAMES[0x176])
-    active[0] |= 0x20
     gas = bytearray(SPAN_FRAMES[0x116])
     gas[1] = 0
     packets = [CanData(msg.address,
                        wheel_speeds if msg.address == 0x0AA else with_toyota_checksum(0x116, gas) if msg.address == 0x116 else
-                       with_toyota_checksum(0x176, active) if msg.address == 0x176 else msg.dat,
+                       SPAN_ACC_ACTIVE if msg.address == 0x08A else msg.dat,
                        msg.src)
                for msg in packets]
     state = ci.update([(1_000_000_000 + i * 10_000_000, packets)])
@@ -193,14 +193,12 @@ class TestToyotaCorollaTSS3Safety(unittest.TestCase):
              ToyotaSafetyFlags.TSS3_SIGNER | ToyotaSafetyFlags.COROLLA_HF)
     self.assertEqual(self.safety.set_safety_hooks(structs.CarParams.SafetyModel.toyota, param), 0)
     self.safety.init_tests()
-    active = bytearray(SPAN_FRAMES[0x176])
-    active[0] |= 0x20
     neutral = dict(SPAN_FRAMES)
     neutral[0x116] = bytes(8)
     neutral[0x101] = bytes(8)
     for address in (0x025, 0x030, 0x0AA, 0x116, 0x101):
       self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(address, 1, neutral[address])))
-    self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x176, 1, bytes(active))))
+    self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x08A, 1, SPAN_ACC_ACTIVE)))
     self.assertTrue(self.safety.get_controls_allowed())
 
   @staticmethod
@@ -229,9 +227,14 @@ class TestToyotaCorollaTSS3Safety(unittest.TestCase):
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x160), 0)
 
   def test_native_cruise_gate_revokes_control(self):
-    disabled = bytearray(SPAN_FRAMES[0x176])
-    disabled[0] &= ~0x20
-    self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x176, 1, bytes(disabled))))
+    disabled = bytearray(SPAN_ACC_ACTIVE)
+    disabled[22] &= ~0x10
+    self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x08A, 1, bytes(disabled))))
+    self.assertFalse(self.safety.get_controls_allowed())
+
+    legacy_active = bytearray(SPAN_FRAMES[0x176])
+    legacy_active[0] |= 0x20
+    self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x176, 1, bytes(legacy_active))))
     self.assertFalse(self.safety.get_controls_allowed())
 
 
