@@ -3,6 +3,7 @@ import unittest
 
 from opendbc.can import CANPacker, CANParser
 from opendbc.car import Bus, CanData, structs
+from opendbc.car.fw_versions import match_fw_to_car_exact
 from opendbc.car.toyota.fingerprints import FW_VERSIONS
 from opendbc.car.toyota.interface import CarInterface
 from opendbc.car.toyota.values import CAR, DBC, EPS_SCALE, FW_QUERY_CONFIG, TOYOTA_PLATFORM_BY_VEHICLE, ToyotaFlags, ToyotaSafetyFlags
@@ -123,6 +124,11 @@ class TestToyotaCorollaTSS3(unittest.TestCase):
       self.assertEqual(TOYOTA_PLATFORM_BY_VEHICLE[("NA", vehicle_type)], CAR.TOYOTA_COROLLA_TSS3)
     self.assertTrue(any(request.bus == 1 and request.whitelist_ecus == [Ecu.eps, Ecu.abs] and not request.obd_multiplexing
                         for request in FW_QUERY_CONFIG.requests))
+
+  def test_each_retained_eps_identity_exactly_fingerprints_corolla_tss3(self):
+    for version in FW_VERSIONS[CAR.TOYOTA_COROLLA_TSS3][(Ecu.eps, 0x7A1, None)]:
+      self.assertEqual(match_fw_to_car_exact({(0x7A1, None): {version}}, match_brand="toyota", log=False),
+                       {str(CAR.TOYOTA_COROLLA_TSS3)})
 
   def test_alpha_long_gating(self):
     cp = CarInterface.get_params(CAR.TOYOTA_COROLLA_TSS3, fingerprint(), [], False, False, False)
