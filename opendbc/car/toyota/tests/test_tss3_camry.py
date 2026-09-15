@@ -106,6 +106,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertFalse(self.CP.radarUnavailable)
     self.assertEqual(DBC[CAR.TOYOTA_CAMRY_TSS3][Bus.radar], "toyota_tss3_pt_generated")
     self.assertAlmostEqual(self.CP.steerRatio, 15.3, places=3)
+    self.assertAlmostEqual(self.CP.tireStiffnessFactor, 1.0, places=3)
     self.assertAlmostEqual(self.CP.steerActuatorDelay, 0.18, places=3)
     self.assertEqual(self.CP.steerControlType, structs.CarParams.SteerControlType.angle)
     self.assertEqual(self.CP.safetyConfigs[0].safetyModel, structs.CarParams.SafetyModel.toyota)
