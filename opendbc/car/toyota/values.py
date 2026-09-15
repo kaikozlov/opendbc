@@ -75,7 +75,6 @@ class ToyotaFlags(IntFlag):
   HYBRID = 1
   HAS_BSM = 2  # blind spot monitoring
   DISABLE_RADAR = 4
-  EPS_DIAGNOSTICS_UNAVAILABLE = 8192
 
   # Static flags
   TSS2 = 8
@@ -644,10 +643,7 @@ FW_QUERY_CONFIG = FwQueryConfig(
   non_essential_ecus={
     # FIXME: On some models, abs can sometimes be missing
     Ecu.abs: [CAR.TOYOTA_RAV4, CAR.TOYOTA_COROLLA, CAR.TOYOTA_HIGHLANDER, CAR.TOYOTA_SIENNA, CAR.LEXUS_IS, CAR.TOYOTA_ALPHARD_TSS2,
-              CAR.TOYOTA_COROLLA_TSS3],
-    # The Camry's exact ABS identity is sufficient when its EPS diagnostic
-    # endpoint is unavailable. Corolla still requires its exact EPS identity.
-    Ecu.eps: [CAR.TOYOTA_CAMRY_TSS3],
+              CAR.TOYOTA_CAMRY_TSS3, CAR.TOYOTA_COROLLA_TSS3],
     Ecu.fwdCamera: [CAR.TOYOTA_CAMRY_TSS3, CAR.TOYOTA_COROLLA_TSS3],
     # On some models, the engine can show on two different addresses
     Ecu.engine: [CAR.TOYOTA_HIGHLANDER, CAR.TOYOTA_CAMRY, CAR.TOYOTA_COROLLA_TSS2, CAR.TOYOTA_CHR, CAR.TOYOTA_CHR_TSS2, CAR.LEXUS_IS,

@@ -87,6 +87,53 @@ def create_tss3_accel_command(template: dict[str, float], accel: float | None, *
   return 0x160, bytes(data), 0
 
 
+def create_tss3_brake_cancel_command(packer, stock_brake):
+  """Clone live 0x101 state and assert only the source-real brake-cancel bit."""
+  values = {
+    "SET_ME_1": stock_brake["SET_ME_1"],
+    "BRAKE_PRESSED": 1,
+    "BRAKE_BYTE_1": stock_brake["BRAKE_BYTE_1"],
+    "BRAKE_BYTE_3": stock_brake["BRAKE_BYTE_3"],
+  }
+  return packer.make_can_msg("BRAKE_MODULE", 2, values)
+
+
+def create_tss3_hud_command(stock_hud, left_line: bool, right_line: bool, lat_active: bool, steer_alert: bool):
+  """Clone the live FRC HUD frame and render only the recovered openpilot HUD subset."""
+  data = bytearray(int(stock_hud[f"BYTE_{i}"]) for i in range(8))
+
+  # The ordinary road-state 0x412 alphabet is recovered on the maintainer
+  # Camry: inactive recognized/missing lanes are nibble 1/2, active recognized
+  # lanes are nibble 4, with B0 low mode 2->4 and B4 2->1 under lateral control.
+  # Preserve startup/noncanonical frames rather than assigning unknown states.
+  if data[0] not in (0x12, 0x14) or data[4] not in (1, 2):
+    return 0x412, bytes(data), 0
+
+  visible_line = 4 if lat_active else 1
+  if left_line == right_line:
+    # Symmetric visibility is orientation-free.
+    high_state = low_state = visible_line if left_line else 2
+  else:
+    # Existing road data does not yet prove which B3 nibble is left versus
+    # right. Preserve the stock per-side orientation for asymmetric requests.
+    def normalize_stock_lane(state: int) -> int:
+      return visible_line if state in (1, 4) else state
+
+    high_state = normalize_stock_lane(data[3] >> 4)
+    low_state = normalize_stock_lane(data[3] & 0x0F)
+
+  data[0] = (data[0] & ~0x06) | (0x04 if lat_active else 0x02)
+  data[3] = (high_state << 4) | low_state
+  data[4] = 1 if lat_active else 2
+
+  # B1[3:2] is the source-real hands-off visual warning. Replace it with
+  # openpilot DM's steer-required visual. B2[6] is a later Toyota escalation
+  # stage; no TSS3 audible/chime contract is recovered, so keep it suppressed.
+  data[1] = (data[1] & ~0x0C) | (0x0C if steer_alert else 0)
+  data[2] &= ~0x40
+  return 0x412, bytes(data), 0
+
+
 def create_pcs_commands(packer, accel, active, mass):
   values1 = {
     "COUNTER": 0,

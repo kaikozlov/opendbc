@@ -58,6 +58,8 @@ class CarState(CarStateBase):
     self.gvc = 0.0
     self.secoc_synchronization = None
     self.tss3_longitudinal_request = None
+    self.tss3_brake_module = None
+    self.tss3_lkas_hud = {}
 
   def _update_tss3(self, cp: CANParser, cp_cam: CANParser) -> structs.CarState:
     if cp_cam.vl_all["TSS3_LONGITUDINAL_REQUEST"]["COUNTER"]:
@@ -67,8 +69,11 @@ class CarState(CarStateBase):
       return self._update_tss3_corolla(cp)
 
     ret = structs.CarState()
+    self.tss3_brake_module = copy.copy(cp.vl["BRAKE_MODULE"])
+    if cp_cam.vl_all["TSS3_LKAS_HUD"]["BYTE_0"]:
+      self.tss3_lkas_hud = copy.copy(cp_cam.vl["TSS3_LKAS_HUD"])
 
-    ret.brakePressed = cp.vl["BRAKE_MODULE"]["BRAKE_PRESSED"] != 0
+    ret.brakePressed = self.tss3_brake_module["BRAKE_PRESSED"] != 0
     ret.gasPressed = cp.vl["GAS_PEDAL"]["GAS_PEDAL_USER"] > 0
     self.parse_wheel_speeds(ret,
       cp.vl["WHEEL_SPEEDS"]["WHEEL_SPEED_FL"],
@@ -366,7 +371,7 @@ class CarState(CarStateBase):
     if CP.flags & ToyotaFlags.TSS3:
       common_messages = [
         ("STEER_ANGLE_SENSOR", 100),
-        ("TSS3_EPS_TELEMETRY", float('nan') if CP.flags & ToyotaFlags.EPS_DIAGNOSTICS_UNAVAILABLE else 100),
+        ("TSS3_EPS_TELEMETRY", 100),
         ("WHEEL_SPEEDS", 100),
         ("BRAKE_MODULE", 50),
         ("GAS_PEDAL", 40),
@@ -391,9 +396,12 @@ class CarState(CarStateBase):
         pt_messages.append(("BSM", 1))
       # Stock Toyota-B exposes EPS/Brake state on unsplit bus 1. The FRC 0x160
       # source is read separately from the camera side of the bus-0/bus-2 relay.
+      cam_messages = [("TSS3_LONGITUDINAL_REQUEST", 40)]
+      if CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:
+        cam_messages.append(("TSS3_LKAS_HUD", 1))
       return {
         Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, 1),
-        Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], [("TSS3_LONGITUDINAL_REQUEST", 40)], 2),
+        Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], cam_messages, 2),
       }
 
     pt_messages = [
