@@ -5,6 +5,7 @@ from opendbc.car.fw_versions import match_fw_to_car_exact
 from opendbc.car.fw_query_definitions import PlatformResolverContext
 from opendbc.car.toyota.fingerprints import FW_VERSIONS
 from opendbc.car.toyota.interface import CarInterface
+from opendbc.car.toyota.radar_interface import RadarInterface
 from opendbc.car.toyota.values import CAR, DBC, EPS_SCALE, ToyotaFlags, ToyotaSafetyFlags, resolve_platform
 from opendbc.safety.tests.libsafety import libsafety_py
 
@@ -31,6 +32,14 @@ CAMRY_COMMON = {
 }
 CAMRY_LONG = bytes.fromhex("e2420d82800040034deffb000008008000bfff100a5fffd40000000000000000")
 CAMRY_HUD = bytes.fromhex("140c404401ee9307")
+CAMRY_RADAR = {
+  0x180: bytes.fromhex("2fbd1016074a010003ff0a0e08062001ff5e0879f7eff5ff400160004000ff100901ff7005ff650291fae000ffff069df96004ff0a085405afffffff00000000"),
+  0x181: bytes.fromhex("228f1016fff8000000fffffff8000000fffffff8000000fffffff8000000fffffff8000000fffffff8000000fffffff8000000fffffff8000000ffff00000000"),
+  0x182: bytes.fromhex("71da1016fff8000000fffffff8000000fffffff8000000fffffff8000000fffffff8000000fffffff8000000fffffff8000000fffffff8000000ffff00000000"),
+  0x183: bytes.fromhex("44fa1016080000000001420000000000010200bffcff000902018000000083000800000000010200000000048b40080001ff00094200000000040b4200000000"),
+  0x184: bytes.fromhex("c3621016000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
+  0x185: bytes.fromhex("f2511016000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
+}
 
 
 def long_with_counter(template: bytes, counter: int) -> bytes:
@@ -94,6 +103,8 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertTrue(self.CP.openpilotLongitudinalControl)
     self.assertTrue(self.CP.alphaLongitudinalAvailable)
     self.assertFalse(self.CP.autoResumeSng)
+    self.assertFalse(self.CP.radarUnavailable)
+    self.assertEqual(DBC[CAR.TOYOTA_CAMRY_TSS3][Bus.radar], "toyota_tss3_pt_generated")
     self.assertEqual(self.CP.steerControlType, structs.CarParams.SteerControlType.angle)
     self.assertEqual(self.CP.safetyConfigs[0].safetyModel, structs.CarParams.SafetyModel.toyota)
     self.assertTrue(self.CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.F33)
@@ -114,6 +125,33 @@ class TestToyotaCamryTSS3(unittest.TestCase):
       bytes.fromhex("023839363546333330373030300000000038413331313333303331303000000000")])
     context = PlatformResolverContext(vin_rx_addr=0x7E8, vin_rx_bus=1)
     self.assertEqual(resolve_platform({}, "JTDAA12K0T0123456", {}, context), {str(CAR.TOYOTA_CAMRY_TSS3)})
+
+  def test_tss3_radar_points_from_retained_object_bank(self):
+    ri = RadarInterface(self.CP)
+    packets = [CanData(address, data, 1) for address, data in CAMRY_RADAR.items()]
+    rr = ri.update([(1_000_000_000, packets)])
+    self.assertIsNotNone(rr)
+    points = {point.trackId: point for point in rr.points}
+    self.assertEqual(set(points), set(range(8)))
+    self.assertAlmostEqual(points[0].dRel, 18.66, places=2)
+    self.assertAlmostEqual(points[0].yRel, -0.8, places=2)
+    self.assertAlmostEqual(points[2].dRel, 21.69, places=2)
+    self.assertAlmostEqual(points[2].yRel, 6.5, places=2)
+    self.assertAlmostEqual(points[2].vRel, -0.2, places=2)
+
+    empty = {}
+    sentinel = bytes.fromhex("fff8000000ffff") * 8
+    for address in range(0x180, 0x183):
+      data = bytearray(CAMRY_RADAR[address])
+      data[4:60] = sentinel
+      empty[address] = bytes(data)
+    for address in range(0x183, 0x186):
+      data = bytearray(CAMRY_RADAR[address])
+      data[4:60] = bytes(56)
+      empty[address] = bytes(data)
+    rr = ri.update([(1_050_000_000, [CanData(address, data, 1) for address, data in empty.items()])])
+    self.assertIsNotNone(rr)
+    self.assertEqual(len(rr.points), 0)
 
   def test_exact_eps_identity_fingerprints_camry_tss3(self):
     for version in FW_VERSIONS[CAR.TOYOTA_CAMRY_TSS3][(Ecu.eps, 0x7A1, None)]:
