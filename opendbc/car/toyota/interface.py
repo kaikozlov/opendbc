@@ -35,7 +35,7 @@ class CarInterface(CarInterfaceBase):
 
     if ret.flags & ToyotaFlags.TSS3:
       ret.steerControlType = SteerControlType.angle
-      ret.radarUnavailable = True
+      ret.radarUnavailable = Bus.radar not in DBC[candidate]
       ret.openpilotLongitudinalControl = False
       ret.autoResumeSng = False
       ret.minEnableSpeed = -1.

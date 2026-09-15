@@ -206,6 +206,7 @@ class CAR(Platforms):
   TOYOTA_CAMRY_TSS3 = ToyotaTSS3PlatformConfig(
     [ToyotaTSS3CarDocs("Toyota Camry Hybrid 2026")],
     TOYOTA_CAMRY.specs,
+    dbc_dict={Bus.pt: 'toyota_tss3_pt_generated', Bus.radar: 'toyota_tss3_pt_generated'},
     flags=ToyotaFlags.HYBRID | ToyotaFlags.SECOC,
   )
   TOYOTA_CHR = PlatformConfig(
