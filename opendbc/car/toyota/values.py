@@ -251,7 +251,9 @@ class CAR(Platforms):
       ToyotaTSS3CarDocs("Toyota Corolla 2023-25"),
       ToyotaTSS3CarDocs("Toyota Corolla Hybrid 2023-25"),
     ],
-    TOYOTA_COROLLA_TSS2.specs,
+    # TSS3 here is the E210 sedan only; the older aggregate also covered Corolla
+    # Cross/Lexus UX and therefore carried a shorter representative wheelbase.
+    CarSpecs(mass=3060. * CV.LB_TO_KG, wheelbase=2.70, steerRatio=13.9, tireStiffnessFactor=0.444),
     flags=ToyotaFlags.SECOC,
   )
   TOYOTA_HIGHLANDER = PlatformConfig(

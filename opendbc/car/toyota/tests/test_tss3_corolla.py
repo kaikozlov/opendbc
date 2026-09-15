@@ -23,11 +23,19 @@ SPAN_FRAMES = {
   0x116: bytes.fromhex("000200007a353eaa"),
   0x127: bytes.fromhex("001000000738d857"),
   0x176: bytes.fromhex("8800000000000007"),
+  0x251: bytes.fromhex("a00000488068a080"),
   0x614: bytes.fromhex("000036300000ef04"),
   0x620: bytes.fromhex("0000000080000000"),
 }
 COROLLA_LONG = bytes.fromhex("44905f82800040034defa3007eaff080023fff100a8fffe40000000000000000")
 SPAN_ACC_ACTIVE = bytes.fromhex("000000008004475d00520000527fff007fff00390000100000003000749773c5")
+# Direct 0x3BF frames from Albino's retained 2023 public Corolla route. The route
+# transitions P -> R -> D while these one-hot values change 0x80 -> 0x40 -> 0x10.
+ALBINO_GEAR = {
+  "P": bytes.fromhex("8000010074d0de47"),
+  "R": bytes.fromhex("400001006f306582"),
+  "D": bytes.fromhex("100001005fc18f5f"),
+}
 
 
 def long_with_counter(template: bytes, counter: int) -> bytes:
@@ -42,14 +50,24 @@ def long_with_counter(template: bytes, counter: int) -> bytes:
   return bytes(data)
 
 
-def fingerprint():
+def fingerprint(hybrid: bool = True):
   fp = {i: {} for i in range(8)}
-  fp[1] = {address: len(data) for address, data in SPAN_FRAMES.items()}
+  frames = dict(SPAN_FRAMES)
+  if not hybrid:
+    frames.pop(0x127)
+    frames[0x3BF] = ALBINO_GEAR["D"]
+  fp[1] = {address: len(data) for address, data in frames.items()}
   return fp
 
 
-def state_packets(counter=COROLLA_LONG[2]):
+def state_packets(counter=COROLLA_LONG[2], *, hybrid: bool = True, gear: bytes | None = None):
   frames = dict(SPAN_FRAMES)
+  if hybrid:
+    if gear is not None:
+      frames[0x127] = gear
+  else:
+    frames.pop(0x127)
+    frames[0x3BF] = ALBINO_GEAR["D"] if gear is None else gear
   # These state carriers are part of the common Toyota-B DBC. The retained
   # Span excerpt above is the evidence source for Corolla-specific decoding.
   frames.update({0x3B7: bytes(8), 0x51E: b"\x80" + bytes(7), 0x622: bytes(8)})
@@ -70,8 +88,11 @@ def update_state(ci):
   return state
 
 
-def update_control_state(ci, moving: bool = True, counter_offset: int = 0):
+def update_control_state(ci, moving: bool = True, counter_offset: int = 0, *,
+                         acc_frame: bytes = SPAN_ACC_ACTIVE, set_speed_mph: int = 0):
   state = None
+  display = bytearray(SPAN_FRAMES[0x251])
+  display[2] = set_speed_mph
   for i in range(20):
     packets = state_packets(COROLLA_LONG[2] + counter_offset + i)
     wheel_speeds = bytes.fromhex("1c001c001c001c00" if moving else "1a6f1a6f1a6f1a6f")
@@ -79,7 +100,7 @@ def update_control_state(ci, moving: bool = True, counter_offset: int = 0):
     gas[1] = 0
     packets = [CanData(msg.address,
                        wheel_speeds if msg.address == 0x0AA else with_toyota_checksum(0x116, gas) if msg.address == 0x116 else
-                       SPAN_ACC_ACTIVE if msg.address == 0x08A else msg.dat,
+                       acc_frame if msg.address == 0x08A else bytes(display) if msg.address == 0x251 else msg.dat,
                        msg.src)
                for msg in packets]
     state = ci.update([(1_000_000_000 + i * 10_000_000, packets)])
@@ -103,12 +124,16 @@ class TestToyotaCorollaTSS3(unittest.TestCase):
   def test_platform_contract_and_identities(self):
     self.assertTrue(self.CP.flags & ToyotaFlags.TSS3)
     self.assertTrue(self.CP.flags & ToyotaFlags.SECOC)
+    self.assertTrue(self.CP.flags & ToyotaFlags.HYBRID)
     self.assertFalse(self.CP.flags & ToyotaFlags.TSS2)
+    self.assertAlmostEqual(self.CP.wheelbase, 2.70)
     self.assertFalse(self.CP.dashcamOnly)
     self.assertFalse(self.CP.secOcRequired)
     self.assertTrue(self.CP.openpilotLongitudinalControl)
     self.assertTrue(self.CP.alphaLongitudinalAvailable)
-    self.assertTrue(self.CP.autoResumeSng)
+    self.assertFalse(self.CP.autoResumeSng)
+    self.assertAlmostEqual(self.CP.minEnableSpeed, 19 * 0.44704, places=6)
+    self.assertAlmostEqual(self.CP.longitudinalActuatorDelay, 0.05)
     self.assertEqual(self.CP.steerControlType, structs.CarParams.SteerControlType.angle)
     self.assertEqual(self.CP.safetyConfigs[0].safetyModel, structs.CarParams.SafetyModel.toyota)
     self.assertTrue(self.CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.TSS3_SIGNER)
@@ -149,7 +174,53 @@ class TestToyotaCorollaTSS3(unittest.TestCase):
     self.assertAlmostEqual(state.steeringRateDeg, -1.0)
     self.assertAlmostEqual(state.steeringTorque, 1.06, places=6)
     self.assertFalse(state.vehicleSensorsInvalid)
+    self.assertTrue(state.cruiseState.available)
     self.assertFalse(state.cruiseState.enabled)
+    self.assertFalse(state.cruiseState.standstill)
+
+  def test_tss3_gear_carriers(self):
+    ice_cp = CarInterface.get_params(CAR.TOYOTA_COROLLA_TSS3, fingerprint(hybrid=False), [], False, False, False)
+    self.assertFalse(ice_cp.flags & ToyotaFlags.HYBRID)
+    ice_ci = CarInterface(ice_cp)
+    self.assertIn("TSS3_GEAR_PACKET", ice_ci.can_parsers[Bus.pt].vl)
+    self.assertNotIn("GEAR_PACKET_HYBRID", ice_ci.can_parsers[Bus.pt].vl)
+
+    expected = {
+      "P": structs.CarState.GearShifter.park,
+      "R": structs.CarState.GearShifter.reverse,
+      "D": structs.CarState.GearShifter.drive,
+    }
+    for name, want in expected.items():
+      state = None
+      for i in range(20):
+        state = ice_ci.update([(1_000_000_000 + i * 10_000_000,
+                                state_packets(COROLLA_LONG[2] + i, hybrid=False, gear=ALBINO_GEAR[name]))])
+      self.assertEqual(state.gearShifter, want)
+
+    # N was not exercised in the retained route, but the fourth one-hot value
+    # completes P/R/N/D and is independently corroborated by Toyota GTS+ shift ordering.
+    neutral = bytearray(ALBINO_GEAR["D"])
+    neutral[0] = 0x20
+    state = None
+    for i in range(20):
+      state = ice_ci.update([(2_000_000_000 + i * 10_000_000,
+                              state_packets(COROLLA_LONG[2] + 20 + i, hybrid=False, gear=bytes(neutral)))])
+    self.assertEqual(state.gearShifter, structs.CarState.GearShifter.neutral)
+
+  def test_native_acc_state_standstill_and_set_speed(self):
+    ci = CarInterface(self.CP)
+    state = update_control_state(ci, set_speed_mph=25)
+    self.assertTrue(state.cruiseState.available)
+    self.assertTrue(state.cruiseState.enabled)
+    self.assertFalse(state.cruiseState.standstill)
+    self.assertAlmostEqual(state.cruiseState.speed, 25 * 0.44704, places=6)
+    self.assertAlmostEqual(state.cruiseState.speedCluster, state.cruiseState.speed)
+
+    hold = bytearray(SPAN_ACC_ACTIVE)
+    hold[7] = 0x67  # contributor-observed engaged standstill/hold state
+    state = update_control_state(ci, moving=False, counter_offset=20, acc_frame=bytes(hold), set_speed_mph=25)
+    self.assertTrue(state.cruiseState.enabled)
+    self.assertTrue(state.cruiseState.standstill)
 
   def test_receiver_fields_and_controller_sideband(self):
     packer = CANPacker("toyota_tss3_pt_generated")

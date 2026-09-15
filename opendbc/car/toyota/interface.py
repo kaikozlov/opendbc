@@ -25,6 +25,14 @@ class CarInterface(CarInterfaceBase):
   def _get_params(ret: structs.CarParams, candidate, fingerprint, car_fw, alpha_long, is_release, docs) -> structs.CarParams:
     ret.brand = "toyota"
 
+    # TSS3 Corolla powertrains share one openpilot platform and the same EPS application.
+    # The retained 2023 route has no 0x127, while Span's 2025 HV carries the
+    # generation-native 0x127 hybrid gear packet at ~60 Hz. Keep the normal HYBRID
+    # flag meaningful even though TSS3 returns before the legacy Toyota detection.
+    found_ecus = {fw.ecu for fw in car_fw}
+    if candidate == CAR.TOYOTA_COROLLA_TSS3 and (Ecu.hybrid in found_ecus or 0x127 in fingerprint.get(1, {})):
+      ret.flags |= ToyotaFlags.HYBRID.value
+
     if ret.flags & ToyotaFlags.TSS3:
       ret.steerControlType = SteerControlType.angle
       ret.radarUnavailable = True
@@ -63,6 +71,10 @@ class CarInterface(CarInterfaceBase):
         ret.secOcRequired = False
         ret.minSteerSpeed = 0.
         ret.steerAtStandstill = True
+        # Corolla TSS3 can follow stock ACC through a stop, but the retained
+        # contributor drives require the driver to establish/resume cruise below
+        # Toyota's 19 mph set-speed floor. Keep the native no-entry threshold.
+        ret.minEnableSpeed = MIN_ACC_SPEED
         ret.enableBsm = 0x3F6 in fingerprint[1]
         ret.steerActuatorDelay = 0.18
         ret.steerLimitTimer = 0.8
@@ -73,7 +85,11 @@ class CarInterface(CarInterfaceBase):
       if not ret.dashcamOnly:
         ret.alphaLongitudinalAvailable = True
         ret.openpilotLongitudinalControl = alpha_long
-        ret.autoResumeSng = ret.openpilotLongitudinalControl
+        ret.autoResumeSng = ret.openpilotLongitudinalControl and candidate != CAR.TOYOTA_COROLLA_TSS3
+        # Preserve Toyota's normal hybrid actuator-delay treatment even though
+        # the TSS3 path returns before the legacy interface common tail.
+        if ret.flags & ToyotaFlags.HYBRID.value:
+          ret.longitudinalActuatorDelay = 0.05
         if not ret.openpilotLongitudinalControl:
           ret.safetyConfigs[0].safetyParam |= ToyotaSafetyFlags.STOCK_LONGITUDINAL.value
 

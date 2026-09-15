@@ -30,7 +30,13 @@ class CarState(CarStateBase):
     self.cluster_speed_hyst_gap = CV.KPH_TO_MS / 2.
     self.cluster_min_speed = CV.KPH_TO_MS / 2.
 
-    if CP.flags & ToyotaFlags.SECOC.value:
+    if CP.flags & ToyotaFlags.TSS3:
+      # TSS3 Corolla variants share the platform/EPS API but not the best available
+      # gear carrier. The HV keeps Toyota's high-rate 0x127 ordinal packet; the
+      # retained 2023 route uses the generation-native one-hot 0x3BF packet.
+      self.tss3_gear_packet = "GEAR_PACKET_HYBRID" if CP.flags & ToyotaFlags.HYBRID else "TSS3_GEAR_PACKET"
+      self.shifter_values = can_define.dv[self.tss3_gear_packet]["GEAR"]
+    elif CP.flags & ToyotaFlags.SECOC.value:
       self.shifter_values = can_define.dv["GEAR_PACKET_HYBRID"]["GEAR"]
     else:
       self.shifter_values = can_define.dv["GEAR_PACKET"]["GEAR"]
@@ -78,7 +84,7 @@ class CarState(CarStateBase):
     ret.steeringAngleDeg = cp.vl["STEER_ANGLE_SENSOR"]["STEER_ANGLE"] + cp.vl["STEER_ANGLE_SENSOR"]["STEER_FRACTION"]
     ret.steeringRateDeg = cp.vl["STEER_ANGLE_SENSOR"]["STEER_RATE"]
     ret.carNotReady = cp.vl["TSS3_READY_STATUS"]["READY_STATUS"] == 0
-    ret.gearShifter = self.parse_gear_shifter(self.shifter_values.get(int(cp.vl["GEAR_PACKET_HYBRID"]["GEAR"]), None))
+    ret.gearShifter = self.parse_gear_shifter(self.shifter_values.get(int(cp.vl[self.tss3_gear_packet]["GEAR"]), None))
 
     ret.leftBlinker = cp.vl["BLINKERS_STATE"]["TURN_SIGNALS"] == 1
     ret.rightBlinker = cp.vl["BLINKERS_STATE"]["TURN_SIGNALS"] == 2
@@ -126,7 +132,7 @@ class CarState(CarStateBase):
 
     lateral = cp.vl["TSS3_LATERAL_REQUEST"]
     ret.cruiseState.enabled = bool(lateral["CRUISE_OPERATING_LATCH"])
-    ret.cruiseState.standstill = ret.cruiseState.enabled and int(lateral["CRUISE_SUBSTATE_2"]) in (0x66, 0x67)
+    ret.cruiseState.standstill = ret.cruiseState.enabled and int(lateral["ACC_STATE"]) in (0x66, 0x67)
     ret.cruiseState.available = bool(cp.vl["TSS3_CRUISE_DISPLAY"]["CRUISE_MAIN_STATE"])
     set_speed_kph = float(lateral["SET_SPEED"])
     ret.cruiseState.speed = set_speed_kph * CV.KPH_TO_MS if set_speed_kph > 0 else 0.0
@@ -157,7 +163,7 @@ class CarState(CarStateBase):
     ret.steeringAngleDeg = cp.vl["STEER_ANGLE_SENSOR"]["STEER_ANGLE"] + cp.vl["STEER_ANGLE_SENSOR"]["STEER_FRACTION"]
     ret.steeringRateDeg = cp.vl["STEER_ANGLE_SENSOR"]["STEER_RATE"]
     ret.carNotReady = cp.vl["TSS3_READY_STATUS"]["READY_STATUS"] == 0
-    ret.gearShifter = self.parse_gear_shifter(self.shifter_values.get(int(cp.vl["GEAR_PACKET_HYBRID"]["GEAR"]), None))
+    ret.gearShifter = self.parse_gear_shifter(self.shifter_values.get(int(cp.vl[self.tss3_gear_packet]["GEAR"]), None))
 
     ret.leftBlinker = cp.vl["BLINKERS_STATE"]["TURN_SIGNALS"] == 1
     ret.rightBlinker = cp.vl["BLINKERS_STATE"]["TURN_SIGNALS"] == 2
@@ -181,12 +187,21 @@ class CarState(CarStateBase):
     ret.steerFaultPermanent = False
 
     lateral = cp.vl["TSS3_LATERAL_REQUEST"]
+    acc_state = int(lateral["ACC_STATE"])
     ret.cruiseState.enabled = bool(lateral["COROLLA_ACC_ENGAGED"])
-    # Albino's live longitudinal implementation used this native 0x08A state
-    # for both host and Panda gating. No independent main or standstill field
-    # is qualified yet, so control follows stock ACC's actual engaged state.
-    ret.cruiseState.available = ret.cruiseState.enabled
-    ret.cruiseState.standstill = False
+    # 0x8A is the native Corolla ACC state source used by the validated
+    # longitudinal implementation. Retained/live values use nonzero ACC_STATE
+    # whenever the system is present (0x12 idle, 0x47/0x5D engaged, 0x67 hold).
+    ret.cruiseState.available = acc_state != 0
+    ret.cruiseState.standstill = ret.cruiseState.enabled and bool(acc_state & 0x20)
+
+    # The contributor's live capture establishes 0x251 byte 2 as the retained
+    # dash set speed in mph. It remains populated while disengaged, matching
+    # openpilot's PCM-cruise expectation.
+    set_speed_mph = float(cp.vl["TSS3_CRUISE_DISPLAY"]["UI_SET_SPEED"])
+    if set_speed_mph > 0:
+      ret.cruiseState.speed = set_speed_mph * CV.MPH_TO_MS
+      ret.cruiseState.speedCluster = ret.cruiseState.speed
 
     if self.CP.enableBsm:
       ret.leftBlindspot = bool(cp.vl["BSM"]["L_ADJACENT"] or cp.vl["BSM"]["L_APPROACHING"])
@@ -355,7 +370,7 @@ class CarState(CarStateBase):
         ("WHEEL_SPEEDS", 100),
         ("BRAKE_MODULE", 50),
         ("GAS_PEDAL", 40),
-        ("GEAR_PACKET_HYBRID", 50),
+        ("GEAR_PACKET_HYBRID", 50) if CP.flags & ToyotaFlags.HYBRID else ("TSS3_GEAR_PACKET", 1),
         ("TSS3_READY_STATUS", 1),
         ("ESP_CONTROL", 3),
         ("BLINKERS_STATE", 1),
@@ -365,6 +380,7 @@ class CarState(CarStateBase):
       pt_messages = common_messages + ([
         ("SECOC_SYNCHRONIZATION", 10),
         ("TSS3_LATERAL_REQUEST", 40),
+        ("TSS3_CRUISE_DISPLAY", 1),
       ] if CP.carFingerprint == CAR.TOYOTA_COROLLA_TSS3 else [
         ("TSS3_CRUISE_SWITCH", 30),
         ("BODY_CONTROL_STATE_2", 3),
