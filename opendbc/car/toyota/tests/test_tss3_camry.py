@@ -1,13 +1,11 @@
 import unittest
 
 from opendbc.car import Bus, CanData, structs
-from opendbc.car.fw_versions import match_fw_to_car
+from opendbc.car.fw_versions import match_fw_to_car_exact
 from opendbc.car.fw_query_definitions import PlatformResolverContext
-from opendbc.car.toyota.carstate import CarState
 from opendbc.car.toyota.fingerprints import FW_VERSIONS
 from opendbc.car.toyota.interface import CarInterface
 from opendbc.car.toyota.values import CAR, DBC, EPS_SCALE, ToyotaFlags, ToyotaSafetyFlags, resolve_platform
-from opendbc.car.vin import VIN_UNKNOWN
 from opendbc.safety.tests.libsafety import libsafety_py
 
 
@@ -32,6 +30,7 @@ CAMRY_COMMON = {
   0x622: bytes.fromhex("0000000000730000"),
 }
 CAMRY_LONG = bytes.fromhex("e2420d82800040034deffb000008008000bfff100a5fffd40000000000000000")
+CAMRY_HUD = bytes.fromhex("140c404401ee9307")
 
 
 def long_with_counter(template: bytes, counter: int) -> bytes:
@@ -52,7 +51,7 @@ def fingerprint() -> dict[int, dict[int, int]]:
   return fp
 
 
-def update_state(ci: CarInterface, moving: bool = False, counter_offset: int = 0):
+def update_state(ci: CarInterface, moving: bool = False, counter_offset: int = 0, hud: bytes | None = None):
   state = None
   for i in range(20):
     frames = dict(CAMRY_COMMON)
@@ -60,17 +59,25 @@ def update_state(ci: CarInterface, moving: bool = False, counter_offset: int = 0
       frames[0x0AA] = bytes.fromhex("1c001c001c001c00")
     packets = ([CanData(address, data, 1) for address, data in frames.items()] +
                [CanData(0x160, long_with_counter(CAMRY_LONG, CAMRY_LONG[2] + counter_offset + i), 2)])
+    if hud is not None:
+      packets.append(CanData(0x412, hud, 2))
     state = ci.update([(1_000_000_000 + i * 10_000_000, packets)])
   return state
 
 
-def control(angle: float, active: bool = True, accel: float = 0.0, long_active: bool = False):
+def control(angle: float, active: bool = True, accel: float = 0.0, long_active: bool = False,
+            cancel: bool = False, left_lane: bool = False, right_lane: bool = False, steer_alert: bool = False):
   cc = structs.CarControl()
   cc.enabled = True
   cc.latActive = active
   cc.longActive = long_active
+  cc.cruiseControl.cancel = cancel
   cc.actuators.steeringAngleDeg = angle
   cc.actuators.accel = accel
+  cc.hudControl.leftLaneVisible = left_lane
+  cc.hudControl.rightLaneVisible = right_lane
+  if steer_alert:
+    cc.hudControl.visualAlert = structs.CarControl.HUDControl.VisualAlert.steerRequired
   return cc.as_reader()
 
 
@@ -86,7 +93,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertFalse(self.CP.secOcRequired)
     self.assertTrue(self.CP.openpilotLongitudinalControl)
     self.assertTrue(self.CP.alphaLongitudinalAvailable)
-    self.assertTrue(self.CP.autoResumeSng)
+    self.assertFalse(self.CP.autoResumeSng)
     self.assertEqual(self.CP.steerControlType, structs.CarParams.SteerControlType.angle)
     self.assertEqual(self.CP.safetyConfigs[0].safetyModel, structs.CarParams.SafetyModel.toyota)
     self.assertTrue(self.CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.F33)
@@ -108,20 +115,16 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     context = PlatformResolverContext(vin_rx_addr=0x7E8, vin_rx_bus=1)
     self.assertEqual(resolve_platform({}, "JTDAA12K0T0123456", {}, context), {str(CAR.TOYOTA_CAMRY_TSS3)})
 
-  def test_exact_abs_identity_resolves_with_dead_eps_diagnostics(self):
-    version = FW_VERSIONS[CAR.TOYOTA_CAMRY_TSS3][(Ecu.abs, 0x7B0, None)][0]
-    car_fw = [structs.CarParams.CarFw(ecu=Ecu.abs, fwVersion=version, brand="toyota", address=0x7B0)]
-    exact, matches = match_fw_to_car(car_fw, VIN_UNKNOWN, allow_fuzzy=False)
-    self.assertTrue(exact)
-    self.assertEqual(matches, {str(CAR.TOYOTA_CAMRY_TSS3)})
+  def test_exact_eps_identity_fingerprints_camry_tss3(self):
+    for version in FW_VERSIONS[CAR.TOYOTA_CAMRY_TSS3][(Ecu.eps, 0x7A1, None)]:
+      self.assertEqual(match_fw_to_car_exact({(0x7A1, None): {version}}, match_brand="toyota", log=False),
+                       {str(CAR.TOYOTA_CAMRY_TSS3)})
 
-    cp = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint(), car_fw, False, False, False)
-    self.assertTrue(cp.flags & ToyotaFlags.EPS_DIAGNOSTICS_UNAVAILABLE)
-    self.assertFalse(cp.openpilotLongitudinalControl)
-    self.assertEqual(cp.minSteerSpeed, 1000.)
-    self.assertFalse(cp.steerAtStandstill)
-    parsers = CarState.get_can_parsers(cp)
-    self.assertTrue(parsers[Bus.pt].message_states[0x030].ignore_alive)
+    # Production control is not downgraded based on a transient diagnostic
+    # response failure. The exact EPS identity is part of fingerprinting, while
+    # runtime capability comes from source-real CAN state.
+    self.assertEqual(self.CP.minSteerSpeed, 0.)
+    self.assertTrue(self.CP.steerAtStandstill)
 
   def test_stock_toyota_b_state_is_entirely_on_bus_one(self):
     ci = CarInterface(self.CP)
@@ -178,6 +181,51 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     angle = int.from_bytes(data[4:6], "big", signed=True) * (1024 / 17870)
     self.assertAlmostEqual(angle, state.steeringAngleDeg, delta=0.12)
 
+  def test_controller_owns_camry_hud_at_native_cadence(self):
+    ci = CarInterface(self.CP)
+    update_state(ci, hud=CAMRY_HUD)
+
+    # Replace Toyota's wheel-nudge visual with openpilot's lane/DM state.
+    _, sends = ci.apply(control(1.0, left_lane=True, right_lane=True), 2_000_000_000)
+    hud = next(data for address, data, bus in sends if address == 0x412 and bus == 0)
+    self.assertEqual(hud, bytes.fromhex("1400004401ee9307"))
+
+    # Stable state follows the measured ~1 Hz source heartbeat; changed state
+    # may publish at the recovered <=10 Hz event rate.
+    for i in range(1, 100):
+      _, sends = ci.apply(control(1.0, left_lane=True, right_lane=True), 2_000_000_000 + i * 10_000_000)
+      self.assertFalse(any(address == 0x412 for address, _, _ in sends))
+    _, sends = ci.apply(control(1.0, left_lane=True, right_lane=True), 3_000_000_000)
+    self.assertTrue(any(address == 0x412 for address, _, _ in sends))
+
+    for i in range(1, 10):
+      ci.apply(control(1.0, left_lane=True, right_lane=True, steer_alert=True), 3_000_000_000 + i * 10_000_000)
+    _, sends = ci.apply(control(1.0, left_lane=True, right_lane=True, steer_alert=True), 3_100_000_000)
+    hud = next(data for address, data, bus in sends if address == 0x412 and bus == 0)
+    self.assertEqual(hud, bytes.fromhex("140c004401ee9307"))
+
+  def test_controller_preserves_noncanonical_hud_and_asymmetric_orientation(self):
+    ci = CarInterface(self.CP)
+    asymmetric = bytes.fromhex("1200001202ee9307")
+    update_state(ci, hud=asymmetric)
+    _, sends = ci.apply(control(1.0, left_lane=False, right_lane=True), 2_000_000_000)
+    hud = next(data for address, data, bus in sends if address == 0x412 and bus == 0)
+    self.assertEqual(hud, bytes.fromhex("1400004201ee9307"))
+
+    ci = CarInterface(self.CP)
+    noncanonical = bytes.fromhex("1000042102ee9307")
+    update_state(ci, hud=noncanonical)
+    _, sends = ci.apply(control(1.0, False, left_lane=True, steer_alert=True), 2_000_000_000)
+    hud = next(data for address, data, bus in sends if address == 0x412 and bus == 0)
+    self.assertEqual(hud, noncanonical)
+
+  def test_controller_brake_cancel_clones_stock_101(self):
+    ci = CarInterface(self.CP)
+    update_state(ci)
+    _, sends = ci.apply(control(1.0, cancel=True), 2_000_000_000)
+    cancel = next(msg for msg in sends if msg[0] == 0x101)
+    self.assertEqual(cancel, (0x101, bytes.fromhex("8800000100000093"), 2))
+
 
 class TestToyotaCamryTSS3Safety(unittest.TestCase):
   def setUp(self):
@@ -209,10 +257,10 @@ class TestToyotaCamryTSS3Safety(unittest.TestCase):
     return libsafety_py.make_CANPacket(0x160, bus, bytes(data))
 
   def test_tss3_longitudinal_bounds_and_dynamic_forwarding(self):
-    self.assertTrue(self.safety.safety_tx_hook(self.long_request(2.0)))
-    self.assertTrue(self.safety.safety_tx_hook(self.long_request(-3.5)))
-    self.assertFalse(self.safety.safety_tx_hook(self.long_request(2.1)))
-    self.assertFalse(self.safety.safety_tx_hook(self.long_request(-3.6)))
+    self.assertTrue(self.safety.safety_tx_hook(self.long_request(1.3)))
+    self.assertTrue(self.safety.safety_tx_hook(self.long_request(-1.5)))
+    self.assertFalse(self.safety.safety_tx_hook(self.long_request(1.4)))
+    self.assertFalse(self.safety.safety_tx_hook(self.long_request(-1.6)))
     self.assertFalse(self.safety.safety_tx_hook(self.long_request(0.0, bus=1)))
     unsafe_coarse = bytearray(self.long_request(0.0).data)
     unsafe_coarse[12] = (-30) & 0x7F
@@ -238,6 +286,31 @@ class TestToyotaCamryTSS3Safety(unittest.TestCase):
     self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x08A, 1, bytes(disabled))))
     self.assertFalse(self.safety.get_controls_allowed())
     self.assertFalse(self.safety.safety_tx_hook(self.c7()))
+
+  def test_brake_cancel_safety_allows_only_stock_shaped_checked_frame(self):
+    good = bytes.fromhex("8800000600000098")
+    self.assertTrue(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x101, 2, good)))
+
+    brake_off = bytearray(good)
+    brake_off[0] &= ~0x08
+    brake_off[7] = (8 + 1 + 1 + sum(brake_off[:7])) & 0xFF
+    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x101, 2, bytes(brake_off))))
+
+    bad_shape = bytearray(good)
+    bad_shape[4] = 1
+    bad_shape[7] = (8 + 1 + 1 + sum(bad_shape[:7])) & 0xFF
+    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x101, 2, bytes(bad_shape))))
+
+    bad_checksum = bytearray(good)
+    bad_checksum[7] ^= 1
+    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x101, 2, bytes(bad_checksum))))
+    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x101, 0, good)))
+
+  def test_camry_hud_is_a_camera_owned_replacement(self):
+    clean_hud = bytes.fromhex("1400004401ee9307")
+    self.assertTrue(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x412, 0, clean_hud)))
+    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x412, 2, clean_hud)))
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x412), -1)
 
 
 if __name__ == "__main__":

@@ -82,6 +82,8 @@ class CarController(CarControllerBase):
 
     self.tss3_control_sequence = 0
     self.tss3_longitudinal_counter = None
+    self.tss3_last_hud = None
+    self.tss3_last_hud_frame = -100
 
   def update(self, CC, CS, now_nanos):
     if self.CP.flags & ToyotaFlags.TSS3:
@@ -91,7 +93,27 @@ class CarController(CarControllerBase):
 
       output = CC.actuators.as_builder()
       can_sends = []
+
+      if self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3 and CS.tss3_lkas_hud:
+        steer_alert = CC.hudControl.visualAlert == VisualAlert.steerRequired
+        hud_msg = toyotacan.create_tss3_hud_command(
+          CS.tss3_lkas_hud, CC.hudControl.leftLaneVisible, CC.hudControl.rightLaneVisible, CC.latActive, steer_alert,
+        )
+        # Same-car road data shows a ~1 Hz source heartbeat with event-driven
+        # updates no faster than ~10 Hz. Own the camera message in that shape.
+        hud_changed = hud_msg != self.tss3_last_hud
+        heartbeat_due = self.frame - self.tss3_last_hud_frame >= 100
+        event_due = hud_changed and self.frame - self.tss3_last_hud_frame >= 10
+        if heartbeat_due or event_due:
+          can_sends.append(hud_msg)
+          self.tss3_last_hud = hud_msg
+          self.tss3_last_hud_frame = self.frame
+
       if self.frame % 2 == 0:
+        if (self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3 and CC.cruiseControl.cancel and
+            CS.tss3_brake_module is not None):
+          can_sends.append(toyotacan.create_tss3_brake_cancel_command(self.packer, CS.tss3_brake_module))
+
         desired_angle = CC.actuators.steeringAngleDeg + CS.out.steeringAngleOffsetDeg
         self.last_angle = apply_std_steer_angle_limits(
           desired_angle, self.last_angle, CS.out.vEgoRaw,

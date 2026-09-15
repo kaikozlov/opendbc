@@ -262,9 +262,21 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
       },
     };
 
+    const LongitudinalLimits TOYOTA_TSS3_CAMRY_LONG_LIMITS = {
+      .max_accel = 1300,
+      .min_accel = -1500,
+    };
+    const LongitudinalLimits TOYOTA_TSS3_COROLLA_LONG_LIMITS = {
+      .max_accel = 1500,
+      .min_accel = -1500,
+    };
+    const LongitudinalLimits tss3_long_limits = toyota_corolla_hf ? TOYOTA_TSS3_COROLLA_LONG_LIMITS : TOYOTA_TSS3_CAMRY_LONG_LIMITS;
+
     const bool signer_control = (msg->bus == 1U) && (msg->addr == 0x1FDC0002U);
     const bool long_control = !toyota_stock_longitudinal && (msg->bus == 0U) && (msg->addr == 0x160U);
-    tx = signer_control || long_control;
+    const bool camry_hud = !toyota_corolla_hf && (msg->bus == 0U) && (msg->addr == 0x412U);
+    const bool camry_cancel = !toyota_corolla_hf && (msg->bus == 2U) && (msg->addr == 0x101U);
+    tx = signer_control || long_control || camry_hud || camry_cancel;
     if (signer_control) {
       const bool header_valid = (msg->data[0] == 0U) && (msg->data[1] == 0xC7U) &&
                                 (msg->data[3] == 0U) && (msg->data[6] == 0U) && (msg->data[7] == 0U);
@@ -276,11 +288,18 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
     if (long_control) {
       int desired_accel = ((msg->data[4] & 0x7FU) << 8U) | msg->data[5];
       desired_accel = to_signed(desired_accel, 15);
-      tx = !longitudinal_accel_checks(desired_accel, TOYOTA_LONG_LIMITS);
+      tx = !longitudinal_accel_checks(desired_accel, tss3_long_limits);
       if (!toyota_corolla_hf) {
         int camry_coarse_accel = to_signed(msg->data[12] & 0x7FU, 7) * -100;
-        tx = tx && !longitudinal_accel_checks(camry_coarse_accel, TOYOTA_LONG_LIMITS);
+        tx = tx && !longitudinal_accel_checks(camry_coarse_accel, tss3_long_limits);
       }
+    }
+    if (camry_cancel) {
+      const bool brake_cancel = GET_BIT(msg, 3U);
+      const bool stock_shape = (msg->data[0] == 0x88U) && (msg->data[2] == 0U) &&
+                               (msg->data[4] == 0U) && (msg->data[5] == 0U) && (msg->data[6] == 0U);
+      const bool checksum_valid = msg->data[7] == toyota_compute_checksum(msg);
+      tx = brake_cancel && stock_shape && checksum_valid;
     }
     return tx;
   }
@@ -469,17 +488,34 @@ static safety_config toyota_init(uint16_t param) {
 
   safety_config ret;
   if (toyota_tss3_signer) {
-    static const CanMsg toyota_tss3_signer_stock_long_tx_msgs[] = {
+    static const CanMsg toyota_tss3_camry_stock_long_tx_msgs[] = {
+      {0x1FDC0002, 1, 8, .check_relay = false},
+      {0x412, 0, 8, .check_relay = true},
+      {0x101, 2, 8, .check_relay = false},
+    };
+    static const CanMsg toyota_tss3_camry_long_tx_msgs[] = {
+      {0x1FDC0002, 1, 8, .check_relay = false},
+      {0x412, 0, 8, .check_relay = true},
+      {0x101, 2, 8, .check_relay = false},
+      {0x160, 0, 32, .check_relay = true, .disable_static_blocking = true},
+    };
+    static const CanMsg toyota_tss3_corolla_stock_long_tx_msgs[] = {
       {0x1FDC0002, 1, 8, .check_relay = false},
     };
-    static const CanMsg toyota_tss3_signer_long_tx_msgs[] = {
+    static const CanMsg toyota_tss3_corolla_long_tx_msgs[] = {
       {0x1FDC0002, 1, 8, .check_relay = false},
       {0x160, 0, 32, .check_relay = true, .disable_static_blocking = true},
     };
-    if (toyota_stock_longitudinal) {
-      SET_TX_MSGS(toyota_tss3_signer_stock_long_tx_msgs, ret);
+    if (toyota_corolla_hf) {
+      if (toyota_stock_longitudinal) {
+        SET_TX_MSGS(toyota_tss3_corolla_stock_long_tx_msgs, ret);
+      } else {
+        SET_TX_MSGS(toyota_tss3_corolla_long_tx_msgs, ret);
+      }
+    } else if (toyota_stock_longitudinal) {
+      SET_TX_MSGS(toyota_tss3_camry_stock_long_tx_msgs, ret);
     } else {
-      SET_TX_MSGS(toyota_tss3_signer_long_tx_msgs, ret);
+      SET_TX_MSGS(toyota_tss3_camry_long_tx_msgs, ret);
     }
     if (toyota_corolla_hf) {
       static RxCheck toyota_corolla_hf_rx_checks[] = {
