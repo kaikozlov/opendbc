@@ -248,8 +248,8 @@ class CAR(Platforms):
   )
   TOYOTA_COROLLA_TSS3 = ToyotaTSS3PlatformConfig(
     [
-      ToyotaTSS3CarDocs("Toyota Corolla 2023-25"),
-      ToyotaTSS3CarDocs("Toyota Corolla Hybrid 2023-25"),
+      ToyotaTSS3CarDocs("Toyota Corolla 2023-25", min_enable_speed=MIN_ACC_SPEED),
+      ToyotaTSS3CarDocs("Toyota Corolla Hybrid 2023-25", min_enable_speed=MIN_ACC_SPEED),
     ],
     # TSS3 here is the E210 sedan only; the older aggregate also covered Corolla
     # Cross/Lexus UX and therefore carried a shorter representative wheelbase.
