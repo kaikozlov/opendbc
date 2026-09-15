@@ -166,12 +166,12 @@ CM_ SG_ 182 TARGET_STEERING_ANGLE "Controller-equivalent scale is exactly 1024/1
 CM_ SG_ 182 SEQUENCE "Exact H receiver treats this as a modulo-64 sequence counter with effective gap cap 8.";
 CM_ BO_ 352 "TSS3 FRC Profile-5 PDU. Corolla substitutes signed-15 B4:B5 while preserving the live camera context. Camry additionally substitutes the inverse signed-7 B12 candidate.";
 CM_ SG_ 352 CRC "Little-endian CRC-16/CCITT over bytes 2..31 followed by Data ID 0x444A in low-byte/high-byte order; initial value 0.";
-CM_ SG_ 352 BYTE_4 "Bit 7 is preserved context; the Corolla contributor implementation treats bits 6..0 as the high seven bits of a signed-15 quantity at 0.001 m/s2/count.";
-CM_ SG_ 352 BYTE_5 "The Corolla contributor implementation treats this as the low eight bits of the signed-15 B4:B5 quantity.";
+CM_ SG_ 352 BYTE_4 "Bit 7 is preserved context; the retained Corolla on-car longitudinal port validates bits 6..0 as the high seven bits of a signed-15 acceleration request at 0.001 m/s2/count.";
+CM_ SG_ 352 BYTE_5 "Low eight bits of the retained Corolla on-car validated signed-15 B4:B5 acceleration request.";
 CM_ SG_ 352 BYTE_12 "On Camry, bits 6..0 are the candidate inverse signed-7 request at 0.1 m/s2/count; synthetic causality remains live-unvalidated.";
 CM_ SG_ 295 GEAR "Span 2025 Corolla HV directly carries raw 3 while in D; P/R/N/B preserve Toyota hybrid ordinal semantics corroborated by GTS+ P5/P6 Shift Position ordering.";
 CM_ SG_ 959 GEAR "Albino 2023 Corolla public route directly observes P=0x80, R=0x40 and D=0x10; Span 2025 Corolla HV independently carries D=0x10. N=0x20 completes the one-hot domain and matches Toyota P5/P6 ordering.";
-CM_ SG_ 374 CRUISE_ACTIVE "Wire location/checksum are Toyota prior art and observed on moving TSS3 Corolla captures; an active cruise transition has not yet been captured.";
+CM_ SG_ 374 CRUISE_ACTIVE "Legacy field retained for decoding only. Both moving TSS3 Corolla captures keep the old CRUISE_ACTIVE/STATE values inactive; generation-native engagement is 0x08A B22 bit0x10 instead.";
 
 VAL_ 182 TARGET_LATERAL_ID 27 "Remote Parking" 25 "AP" 19 "PDA" 11 "LTA/LCA" 10 "Hands Off LTA" 4 "LDA" 1 "PCS" 0 "No Request";
 
