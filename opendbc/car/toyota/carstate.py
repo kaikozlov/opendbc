@@ -57,14 +57,10 @@ class CarState(CarStateBase):
     self.lkas_hud = {}
     self.gvc = 0.0
     self.secoc_synchronization = None
-    self.tss3_longitudinal_request = None
     self.tss3_brake_module = None
     self.tss3_lkas_hud = {}
 
-  def _update_tss3(self, cp: CANParser, cp_cam: CANParser) -> structs.CarState:
-    if cp_cam.vl_all["TSS3_LONGITUDINAL_REQUEST"]["COUNTER"]:
-      self.tss3_longitudinal_request = copy.copy(cp_cam.vl["TSS3_LONGITUDINAL_REQUEST"])
-
+  def _update_tss3(self, cp: CANParser) -> structs.CarState:
     if self.CP.carFingerprint == CAR.TOYOTA_COROLLA_TSS3:
       return self._update_tss3_corolla(cp)
 
@@ -228,7 +224,7 @@ class CarState(CarStateBase):
     cp = can_parsers[Bus.pt]
     cp_cam = can_parsers[Bus.cam]
     if self.CP.flags & ToyotaFlags.TSS3:
-      return self._update_tss3(cp, cp_cam)
+      return self._update_tss3(cp)
 
     ret = structs.CarState()
     cp_acc = cp_cam if (self.CP.flags & ToyotaFlags.TSS2) and not (self.CP.flags & ToyotaFlags.RADAR_ACC) else cp
@@ -404,16 +400,13 @@ class CarState(CarStateBase):
       ])
       if CP.enableBsm:
         pt_messages.append(("BSM", 1))
-      # Stock Toyota-B exposes EPS/Brake state on unsplit bus 1. The FRC 0x160
-      # source is read separately from the camera side of the bus-0/bus-2 relay.
-      cam_messages = [("TSS3_LONGITUDINAL_REQUEST", 40)]
       if CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:
         # The stock-harness capture puts 0x412 on unsplit bus 1, not
         # the intercepted ADAS link. Read it without claiming replacement.
         pt_messages.append(("TSS3_LKAS_HUD", 1))
       return {
         Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, 1),
-        Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], cam_messages, 2),
+        Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], [], 2),
       }
 
     pt_messages = [

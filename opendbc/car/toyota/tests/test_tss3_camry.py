@@ -45,18 +45,6 @@ CAMRY_RADAR = {
 }
 
 
-def long_with_counter(template: bytes, counter: int) -> bytes:
-  data = bytearray(template)
-  data[2] = counter & 0xFF
-  crc = 0
-  for byte in (*data[2:], 0x4A, 0x44):
-    crc ^= byte << 8
-    for _ in range(8):
-      crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
-  data[:2] = crc.to_bytes(2, "little")
-  return bytes(data)
-
-
 def fingerprint() -> dict[int, dict[int, int]]:
   fp = {i: {} for i in range(8)}
   fp[1] = {address: len(data) for address, data in CAMRY_COMMON.items()}
@@ -80,11 +68,10 @@ def update_state(ci: CarInterface, moving: bool = False, counter_offset: int = 0
       frames[0x030] = bytes(eps)
     if moving:
       frames[0x0AA] = bytes.fromhex("1c001c001c001c00")
-    packets = ([CanData(address, data, 1) for address, data in frames.items()] +
-               [CanData(0x160, long_with_counter(CAMRY_LONG, CAMRY_LONG[2] + counter_offset + i), 2)])
+    packets = [CanData(address, data, 1) for address, data in frames.items()]
     if hud is not None:
       packets.append(CanData(0x412, hud, 1))
-    state = ci.update([(1_000_000_000 + i * 10_000_000, packets)])
+    state = ci.update([(1_000_000_000 + (counter_offset + i) * 10_000_000, packets)])
   return state
 
 
@@ -219,6 +206,13 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertAlmostEqual(result["LATERAL_RESULT_PINION_ANGLE"], 0.013 * 1.000121519, places=6)
     self.assertAlmostEqual(result["LONGITUDINAL_RESULT_ACCEL"], -0.094, places=6)
 
+    state_parser = CANParser("toyota_tss3_pt_generated", [("TSS3_FRC_STATE_160", 0)], 2)
+    state_parser.update([(1_020_000_000, [CanData(0x160, CAMRY_LONG, 2)])])
+    frc_state = state_parser.vl["TSS3_FRC_STATE_160"]
+    self.assertEqual(frc_state["COUNTER"], CAMRY_LONG[2])
+    self.assertEqual(frc_state["BYTE_4"], CAMRY_LONG[4])
+    self.assertEqual(frc_state["BYTE_5"], CAMRY_LONG[5])
+
   def test_stock_toyota_b_state_is_entirely_on_bus_one(self):
     ci = CarInterface(self.CP)
     self.assertEqual(ci.can_parsers[Bus.pt].bus, 1)
@@ -345,7 +339,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
 class TestToyotaCamryTSS3Safety(unittest.TestCase):
   def setUp(self):
     self.safety = libsafety_py.libsafety
-    param = EPS_SCALE[CAR.TOYOTA_CAMRY_TSS3] | ToyotaSafetyFlags.F33
+    param = EPS_SCALE[CAR.TOYOTA_CAMRY_TSS3] | ToyotaSafetyFlags.F33 | ToyotaSafetyFlags.STOCK_LONGITUDINAL
     self.assertEqual(self.safety.set_safety_hooks(structs.CarParams.SafetyModel.toyota, param), 0)
     self.safety.init_tests()
     for address in (0x025, 0x0AA, 0x116, 0x101, 0x08A):
@@ -362,33 +356,11 @@ class TestToyotaCamryTSS3Safety(unittest.TestCase):
     self.assertFalse(self.safety.safety_tx_hook(self.c7(bus=0)))
     self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x08A, 1, CAMRY_COMMON[0x08A])))
 
-  @staticmethod
-  def long_request(accel: float, bus: int = 0):
-    data = bytearray(CAMRY_LONG)
-    raw = round(accel / 0.001) & 0x7FFF
-    data[4] = (data[4] & 0x80) | (raw >> 8)
-    data[5] = raw & 0xFF
-    data[12] = round(-accel / 0.1) & 0x7F
-    data[:2] = toyota_e2e_p05_checksum(0x160, data).to_bytes(2, "little")
-    return libsafety_py.make_CANPacket(0x160, bus, bytes(data))
-
-  def test_tss3_longitudinal_bounds_and_dynamic_forwarding(self):
-    self.assertTrue(self.safety.safety_tx_hook(self.long_request(1.3)))
-    self.assertTrue(self.safety.safety_tx_hook(self.long_request(-1.5)))
-    self.assertFalse(self.safety.safety_tx_hook(self.long_request(1.4)))
-    self.assertFalse(self.safety.safety_tx_hook(self.long_request(-1.6)))
-    self.assertFalse(self.safety.safety_tx_hook(self.long_request(0.0, bus=1)))
-    unsafe_coarse = bytearray(self.long_request(0.0).data[0:32])
-    unsafe_coarse[12] = (-30) & 0x7F
-    unsafe_coarse[:2] = toyota_e2e_p05_checksum(0x160, unsafe_coarse).to_bytes(2, "little")
-    self.assertEqual(len(unsafe_coarse), 32)
-    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x160, 0, bytes(unsafe_coarse))))
-    self.assertEqual(self.safety.safety_fwd_hook(2, 0x160), -1)
-    self.assertEqual(self.safety.safety_fwd_hook(2, 0x230), 0)
-    gas = bytearray(CAMRY_COMMON[0x116])
-    gas[1] = 1
-    self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x116, 1, bytes(gas))))
+  def test_0x160_is_not_host_replaceable(self):
+    for bus in range(3):
+      self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x160, bus, CAMRY_LONG)))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x160), 0)
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x230), 0)
 
   def test_rejects_bad_header_reserved_bytes_and_overangle(self):
     for index in (0, 1, 3, 6, 7):
@@ -404,28 +376,6 @@ class TestToyotaCamryTSS3Safety(unittest.TestCase):
     self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x08A, 1, bytes(disabled))))
     self.assertFalse(self.safety.get_controls_allowed())
     self.assertFalse(self.safety.safety_tx_hook(self.c7()))
-
-  def test_byte_exact_stock_handoff_is_not_clipped_to_host_limits(self):
-    # Native August-27 drive A, segment 4, 308202253232 ns: the measured
-    # B4:B5 quantity is -1.532, outside the bounded host request envelope.
-    stock = bytes.fromhex("8e78bf82fa04400537281b000da81280022f80c0000fffc40000000000000000")
-    tx = libsafety_py.make_CANPacket(0x160, 0, stock)
-    self.assertFalse(self.safety.safety_tx_hook(tx))
-    self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x160, 2, stock)))
-    self.assertTrue(self.safety.safety_tx_hook(tx))
-    changed = bytearray(stock)
-    changed[13] ^= 1
-    changed[:2] = toyota_e2e_p05_checksum(0x160, changed).to_bytes(2, "little")
-    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x160, 0, changed)))
-    corrupt = bytearray(stock)
-    corrupt[0] ^= 1
-    self.assertFalse(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x160, 2, corrupt)))
-    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x160, 0, corrupt)))
-
-  def test_corrupt_host_longitudinal_packet_is_rejected(self):
-    packet = self.long_request(0.5)
-    packet[0].data[0] ^= 1
-    self.assertFalse(self.safety.safety_tx_hook(packet))
 
   def test_unsplit_hud_and_brake_are_not_host_replaceable(self):
     for address, data in ((0x101, bytes.fromhex("8800000600000098")),

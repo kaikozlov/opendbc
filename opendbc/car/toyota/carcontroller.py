@@ -24,11 +24,6 @@ ACCEL_WINDDOWN_LIMIT = -4.0 * DT_CTRL * 3  # m/s^2 / frame
 ACCEL_PID_UNWIND = 0.03 * DT_CTRL * 3  # m/s^2 / frame
 
 MAX_PITCH_COMPENSATION = 1.5  # m/s^2
-TSS3_MIN_LONG_OVERRIDE_SPEED = 0.45  # m/s; stock owns its standstill mechanism below this
-TSS3_ACCEL_MIN = -1.5  # m/s^2; validated openpilot command range in the Corolla PoC
-TSS3_ACCEL_MAX = 1.5
-TSS3_CAMRY_ACCEL_MAX = 1.3  # B12=-13, within the retained stock Camry envelope
-
 # LKA limits
 # EPS faults if you apply torque while the steering rate is above 100 deg/s for too long
 MAX_STEER_RATE = 100  # deg/s
@@ -81,7 +76,6 @@ class CarController(CarControllerBase):
     self.secoc_prev_reset_counter = 0
 
     self.tss3_control_sequence = 0
-    self.tss3_longitudinal_counter = None
 
   def update(self, CC, CS, now_nanos):
     if self.CP.flags & ToyotaFlags.TSS3:
@@ -112,24 +106,9 @@ class CarController(CarControllerBase):
         ))
         output.steeringAngleDeg = self.last_angle
 
-      template = CS.tss3_longitudinal_request
-      camera_counter = int(template["COUNTER"]) if template is not None else None
-      engaged = (self.CP.openpilotLongitudinalControl and CS.out.cruiseState.enabled and
-                 not CS.out.gasPressed and template is not None)
-      controlling = engaged and CC.longActive and CS.out.vEgo > TSS3_MIN_LONG_OVERRIDE_SPEED
-      accel = float(np.clip(CC.actuators.accel, self.params.ACCEL_MIN, self.params.ACCEL_MAX)) if controlling else 0.0
-      output.accel = accel
-
-      # Be the sole 0x160 emitter while engaged, paced by the camera's live counter.
-      # When openpilot is not actively controlling, relay the camera frame exactly.
-      if engaged and camera_counter != self.tss3_longitudinal_counter:
-        can_sends.append(toyotacan.create_tss3_accel_command(
-          template, accel if controlling else None,
-          camry_b12=self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3,
-        ))
-        self.tss3_longitudinal_counter = camera_counter
-      elif not engaged:
-        self.tss3_longitudinal_counter = camera_counter
+      # Longitudinal remains Toyota-owned until openpilot can replace the
+      # shared 0x08A request plane with source-real ownership.
+      output.accel = 0.0
 
       self.frame += 1
       return output, can_sends
