@@ -305,6 +305,18 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertEqual(output.accel, 0.0)
     self.assertFalse(any(address == 0x160 for address, _, _ in sends))
 
+  def test_controller_emits_c7_at_native_100hz(self):
+    ci = CarInterface(self.CP)
+    update_state(ci, moving=True)
+    sequences = []
+    for i in range(4):
+      _, sends = ci.apply(control(5.0), 2_000_000_000 + i * 10_000_000)
+      self.assertEqual(len(sends), 1)
+      address, data, bus = sends[0]
+      self.assertEqual((address, bus), (0x777, 1))
+      sequences.append(data[3])
+    self.assertEqual(sequences, [1, 2, 3, 4])
+
   def test_inactive_c7_tracks_measured_angle_with_neutral_sequence(self):
     ci = CarInterface(self.CP)
     state = update_state(ci)
@@ -333,7 +345,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
       _, sends = ci.apply(control(1.0, active=active), 2_000_000_000)
       frames.append(next(data for address, data, _ in sends if address == 0x777))
       ci.apply(control(1.0, active=active), 2_010_000_000)
-    self.assertEqual([frame[3] for frame in frames], [1, 0, 2])
+    self.assertEqual([frame[3] for frame in frames], [1, 0, 3])
 
 
 class TestToyotaCamryTSS3Safety(unittest.TestCase):

@@ -35,11 +35,12 @@ class CarControllerParams:
   )
 
   # Exact F33 accepts roughly +/-100 degrees at the native B6 angle scale.
-  # The controller and Panda both apply the standard Toyota angle-rate shape.
+  # TSS3 control runs at openpilot's native 100 Hz, so per-command angle deltas
+  # are half the 50 Hz Toyota LTA values while preserving the same deg/s shape.
   TSS3_ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(
     1745 * (1024 / 17870),
-    ([5, 25], [0.3, 0.15]),
-    ([5, 25], [0.36, 0.26]),
+    ([5, 25], [0.15, 0.075]),
+    ([5, 25], [0.18, 0.13]),
   )
 
   MAX_LTA_DRIVER_TORQUE_ALLOWANCE = 150  # slightly above steering pressed allows some resistance when changing lanes

@@ -252,11 +252,11 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
       .angle_deg_to_can = 17.451171875F,
       .angle_rate_up_lookup = {
         {5., 25., 25.},
-        {0.3, 0.15, 0.15}
+        {0.15, 0.075, 0.075}
       },
       .angle_rate_down_lookup = {
         {5., 25., 25.},
-        {0.36, 0.26, 0.26}
+        {0.18, 0.13, 0.13}
       },
     };
 
