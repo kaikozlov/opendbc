@@ -65,7 +65,7 @@ BO_ 138 TSS3_CONTROL_REQUEST: 32 XXX
  SG_ LATERAL_DAMPING_GAIN : 207|8@0+ (0.01,0) [0|2.55] "" XXX
  SG_ REQUEST_SEQUENCE : 213|6@0+ (1,0) [0|63] "" XXX
 
-BO_ 352 TSS3_LONGITUDINAL_REQUEST: 32 XXX
+BO_ 352 TSS3_FRC_STATE_160: 32 XXX
  SG_ CHECKSUM : 0|16@1+ (1,0) [0|65535] "" XXX
  SG_ COUNTER : 16|8@1+ (1,0) [0|255] "" XXX
  SG_ BYTE_3 : 24|8@1+ (1,0) [0|255] "" XXX
@@ -392,11 +392,11 @@ CM_ BO_ 182 "Exact H/F protected final steering-controller target/instruction PD
 CM_ SG_ 182 TARGET_LATERAL_ID "Techstream Target Lateral ID; exact H accepts 1=PCS, 4=LDA, 10=Hands Off LTA, 11=LTA/LCA, 19=PDA. 0 means no request.";
 CM_ SG_ 182 TARGET_STEERING_ANGLE "Controller-equivalent scale is exactly 1024/17870 deg/count.";
 CM_ SG_ 182 SEQUENCE "Exact H receiver treats this as a modulo-64 sequence counter with effective gap cap 8.";
-CM_ BO_ 352 "TSS3 FRC Profile-5 PDU. Corolla has independent on-car request validation. Camry retains this PDU as state/evidence only; its old B4:B5/B12 demand interpretation is withdrawn.";
-CM_ SG_ 352 CRC "Little-endian CRC-16/CCITT over bytes 2..31 followed by Data ID 0x444A in low-byte/high-byte order; initial value 0.";
-CM_ SG_ 352 BYTE_4 "Bit 7 is preserved context; the retained Corolla on-car longitudinal port validates bits 6..0 as the high seven bits of a signed-15 acceleration request at 0.001 m/s2/count.";
-CM_ SG_ 352 BYTE_5 "Low eight bits of the retained Corolla on-car validated signed-15 B4:B5 acceleration request.";
-CM_ SG_ 352 BYTE_12 "Corolla platform semantics are retained separately. Camry does not use this field as an acceleration command.";
+CM_ BO_ 352 "FRC-origin TSS3 Profile-5 PDU retained as read-only state/evidence. Current evidence does not qualify 0x160 as openpilot longitudinal command ingress; the shared TSS3 control-request plane is 0x08A.";
+CM_ SG_ 352 CHECKSUM "Little-endian CRC-16/CCITT over bytes 2..31 followed by Data ID 0x0160 in low-byte/high-byte order, initial value 0xFFFF. The older init=0/Data-ID=0x444A expression is wire-equivalent at this fixed PDU length.";
+CM_ SG_ 352 BYTE_4 "Observed state byte. The previous B4:B5 acceleration-request interpretation is not an actuator contract and must not be used for TSS3 longitudinal output.";
+CM_ SG_ 352 BYTE_5 "Observed state byte paired with B4 in prior motion-correlation work; no writable longitudinal-command semantic is assigned.";
+CM_ SG_ 352 BYTE_12 "Observed state byte; the previous acceleration-command interpretation is withdrawn.";
 CM_ SG_ 295 GEAR "Span 2025 Corolla HV directly carries raw 3 while in D; P/R/N/B preserve Toyota hybrid ordinal semantics corroborated by GTS+ P5/P6 Shift Position ordering.";
 CM_ SG_ 959 GEAR "Albino 2023 Corolla public route directly observes P=0x80, R=0x40 and D=0x10; Span 2025 Corolla HV independently carries D=0x10. N=0x20 completes the one-hot domain and matches Toyota P5/P6 ordering.";
 CM_ SG_ 374 CRUISE_ACTIVE "Legacy field retained for decoding only. Both moving TSS3 Corolla captures keep the old CRUISE_ACTIVE/STATE values inactive; generation-native engagement is 0x08A B22 bit0x10 instead.";

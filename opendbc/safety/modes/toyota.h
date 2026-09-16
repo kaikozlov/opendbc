@@ -63,32 +63,8 @@ static bool toyota_lta = false;
 static bool toyota_tss3_signer = false;
 static bool toyota_corolla_hf = false;
 static int toyota_dbc_eps_torque_factor = 100;   // conversion factor for STEER_TORQUE_EPS in %: see dbc file
-static uint8_t toyota_tss3_stock_long[32];
-static bool toyota_tss3_stock_long_valid = false;
-
-static uint16_t toyota_tss3_p05_checksum(const CANPacket_t *msg) {
-  uint16_t crc = 0xFFFFU;
-  for (uint8_t i = 2U; i < 34U; i++) {
-    // Skip the two CRC bytes, then append the implicit Data ID 0x0160 LE.
-    uint8_t value = (i < 32U) ? msg->data[i] : ((i == 32U) ? 0x60U : 0x01U);
-    crc ^= (uint16_t)value << 8U;
-    for (uint8_t bit = 0U; bit < 8U; bit++) {
-      crc = (uint16_t)((crc << 1U) ^ (((crc & 0x8000U) != 0U) ? 0x1021U : 0U));
-    }
-  }
-  return crc;
-}
-
-static bool toyota_tss3_p05_valid(const CANPacket_t *msg) {
-  return (GET_LEN(msg) == 32U) &&
-         (toyota_tss3_p05_checksum(msg) == (uint16_t)(msg->data[0] | (msg->data[1] << 8U)));
-}
-
 
 static uint32_t toyota_compute_checksum(const CANPacket_t *msg) {
-  if (toyota_tss3_signer && (msg->addr == 0x160U) && (GET_LEN(msg) == 32U)) {
-    return toyota_tss3_p05_checksum(msg);
-  }
   int len = GET_LEN(msg);
   uint8_t checksum = (uint8_t)(msg->addr) + (uint8_t)((unsigned int)(msg->addr) >> 8U) + (uint8_t)(len);
   for (int i = 0; i < (len - 1); i++) {
@@ -98,9 +74,6 @@ static uint32_t toyota_compute_checksum(const CANPacket_t *msg) {
 }
 
 static uint32_t toyota_get_checksum(const CANPacket_t *msg) {
-  if (toyota_tss3_signer && (msg->addr == 0x160U) && (GET_LEN(msg) == 32U)) {
-    return msg->data[0] | (msg->data[1] << 8U);
-  }
   int checksum_byte = GET_LEN(msg) - 1U;
   return (uint8_t)(msg->data[checksum_byte]);
 }
@@ -125,14 +98,6 @@ static bool toyota_get_quality_flag_valid(const CANPacket_t *msg) {
 
 static void toyota_rx_hook(const CANPacket_t *msg) {
   if (toyota_tss3_signer) {
-    if ((msg->bus == 2U) && (msg->addr == 0x160U)) {
-      toyota_tss3_stock_long_valid = toyota_tss3_p05_valid(msg);
-      if (toyota_tss3_stock_long_valid) {
-        for (uint8_t i = 0U; i < 32U; i++) {
-          toyota_tss3_stock_long[i] = msg->data[i];
-        }
-      }
-    }
     // Stock Toyota-B exposes the TSS3 EPS/Brake network on unsplit bus 1.
     if (msg->bus == 1U) {
       if (msg->addr == 0x25U) {
@@ -297,19 +262,8 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
       },
     };
 
-    const LongitudinalLimits TOYOTA_TSS3_CAMRY_LONG_LIMITS = {
-      .max_accel = 1300,
-      .min_accel = -1500,
-    };
-    const LongitudinalLimits TOYOTA_TSS3_COROLLA_LONG_LIMITS = {
-      .max_accel = 1500,
-      .min_accel = -1500,
-    };
-    const LongitudinalLimits tss3_long_limits = toyota_corolla_hf ? TOYOTA_TSS3_COROLLA_LONG_LIMITS : TOYOTA_TSS3_CAMRY_LONG_LIMITS;
-
     const bool signer_control = (msg->bus == 1U) && (msg->addr == 0x1FDC0002U);
-    const bool long_control = !toyota_stock_longitudinal && (msg->bus == 0U) && (msg->addr == 0x160U);
-    tx = signer_control || long_control;
+    tx = signer_control;
     if (signer_control) {
       const bool header_valid = (msg->data[0] == 0U) && (msg->data[1] == 0xC7U) &&
                                 (msg->data[3] == 0U) && (msg->data[6] == 0U) && (msg->data[7] == 0U);
@@ -319,24 +273,6 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
       tx = header_valid && !safety_max_limit_check(target_angle, TOYOTA_TSS3_ANGLE_STEERING_LIMITS.max_angle,
                                                   -TOYOTA_TSS3_ANGLE_STEERING_LIMITS.max_angle) &&
                           !steer_angle_cmd_checks(target_angle, steer_control_enabled, TOYOTA_TSS3_ANGLE_STEERING_LIMITS);
-    }
-    if (long_control) {
-      int desired_accel = ((msg->data[4] & 0x7FU) << 8U) | msg->data[5];
-      desired_accel = to_signed(desired_accel, 15);
-      tx = !longitudinal_accel_checks(desired_accel, tss3_long_limits);
-      if (!toyota_corolla_hf) {
-        int camry_coarse_accel = to_signed(msg->data[12] & 0x7FU, 7) * -100;
-        tx = tx && !longitudinal_accel_checks(camry_coarse_accel, tss3_long_limits);
-      }
-      // Below the takeover speed the controller returns this exact native
-      // frame, rather than imposing openpilot's bounds on Toyota's own request.
-      // Only a byte-exact latest RX copy gets this exemption; altered requests
-      // still have to satisfy the normal acceleration checks above.
-      bool stock_passthrough = toyota_tss3_stock_long_valid && get_longitudinal_allowed();
-      for (uint8_t i = 0U; i < 32U; i++) {
-        stock_passthrough = stock_passthrough && (msg->data[i] == toyota_tss3_stock_long[i]);
-      }
-      tx = toyota_tss3_p05_valid(msg) && (tx || stock_passthrough);
     }
     return tx;
   }
@@ -480,8 +416,9 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
 }
 
 static bool toyota_fwd_hook(int bus_num, int addr) {
-  return toyota_tss3_signer && !toyota_stock_longitudinal && (bus_num == 2) &&
-         (addr == 0x160) && get_longitudinal_allowed();
+  (void)bus_num;
+  (void)addr;
+  return false;
 }
 
 static safety_config toyota_init(uint16_t param) {
@@ -521,36 +458,14 @@ static safety_config toyota_init(uint16_t param) {
   toyota_lta = GET_FLAG(param, TOYOTA_PARAM_LTA);
   toyota_tss3_signer = GET_FLAG(param, TOYOTA_PARAM_TSS3_SIGNER);
   toyota_corolla_hf = GET_FLAG(param, TOYOTA_PARAM_COROLLA_HF);
-  toyota_tss3_stock_long_valid = false;
   toyota_dbc_eps_torque_factor = param & TOYOTA_EPS_FACTOR;
 
   safety_config ret;
   if (toyota_tss3_signer) {
-    static const CanMsg toyota_tss3_camry_stock_long_tx_msgs[] = {
+    static const CanMsg toyota_tss3_tx_msgs[] = {
       {0x1FDC0002, 1, 8, .check_relay = false},
     };
-    static const CanMsg toyota_tss3_camry_long_tx_msgs[] = {
-      {0x1FDC0002, 1, 8, .check_relay = false},
-      {0x160, 0, 32, .check_relay = true, .disable_static_blocking = true},
-    };
-    static const CanMsg toyota_tss3_corolla_stock_long_tx_msgs[] = {
-      {0x1FDC0002, 1, 8, .check_relay = false},
-    };
-    static const CanMsg toyota_tss3_corolla_long_tx_msgs[] = {
-      {0x1FDC0002, 1, 8, .check_relay = false},
-      {0x160, 0, 32, .check_relay = true, .disable_static_blocking = true},
-    };
-    if (toyota_corolla_hf) {
-      if (toyota_stock_longitudinal) {
-        SET_TX_MSGS(toyota_tss3_corolla_stock_long_tx_msgs, ret);
-      } else {
-        SET_TX_MSGS(toyota_tss3_corolla_long_tx_msgs, ret);
-      }
-    } else if (toyota_stock_longitudinal) {
-      SET_TX_MSGS(toyota_tss3_camry_stock_long_tx_msgs, ret);
-    } else {
-      SET_TX_MSGS(toyota_tss3_camry_long_tx_msgs, ret);
-    }
+    SET_TX_MSGS(toyota_tss3_tx_msgs, ret);
     if (toyota_corolla_hf) {
       static RxCheck toyota_corolla_hf_rx_checks[] = {
         {.msg = {{0x025, 1, 32, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
@@ -558,7 +473,6 @@ static safety_config toyota_init(uint16_t param) {
         {.msg = {{0x116, 1, 8, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
         {.msg = {{0x101, 1, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
         {.msg = {{0x08A, 1, 32, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
-        {.msg = {{0x160, 2, 32, 40U, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
       };
       SET_RX_CHECKS(toyota_corolla_hf_rx_checks, ret);
     } else {
@@ -568,7 +482,6 @@ static safety_config toyota_init(uint16_t param) {
         {.msg = {{0x116, 1, 8, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
         {.msg = {{0x101, 1, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
         {.msg = {{0x08A, 1, 32, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
-        {.msg = {{0x160, 2, 32, 40U, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
       };
       SET_RX_CHECKS(toyota_f33_rx_checks, ret);
     }

@@ -80,22 +80,15 @@ class CarInterface(CarInterfaceBase):
         ret.dashcamOnly = True
 
       if not ret.dashcamOnly:
-        # Corolla's retained contributor drives validate the TSS3 0x160 request
-        # contract end-to-end. The Camry 0x160 field mapping does not: retained
-        # F33 evidence classifies the implemented B4:B5/B12 fields as state/result
-        # related, so do not advertise an actuator interface from shape alone.
-        ret.alphaLongitudinalAvailable = candidate == CAR.TOYOTA_COROLLA_TSS3
-        ret.openpilotLongitudinalControl = alpha_long and ret.alphaLongitudinalAvailable
-        # Retained Camry drives prove automatic short-stop restart, but not
-        # release from Toyota's delayed long-stop hold. Corolla likewise still
-        # requires driver-established/resumed cruise below its native floor.
+        # 0x08A is the shared TSS3 request-side envelope for lateral and
+        # longitudinal application requests. On stock Toyota-B it is on the
+        # unsplit chassis network, and openpilot does not yet own a qualified
+        # source-suppression/signing path for longitudinal replacement. Keep
+        # Toyota longitudinal authoritative even when Alpha Long is requested.
+        ret.alphaLongitudinalAvailable = False
+        ret.openpilotLongitudinalControl = False
         ret.autoResumeSng = False
-        # Preserve Toyota's normal hybrid actuator-delay treatment even though
-        # the TSS3 path returns before the legacy interface common tail.
-        if ret.flags & ToyotaFlags.HYBRID.value:
-          ret.longitudinalActuatorDelay = 0.05
-        if not ret.openpilotLongitudinalControl:
-          ret.safetyConfigs[0].safetyParam |= ToyotaSafetyFlags.STOCK_LONGITUDINAL.value
+        ret.safetyConfigs[0].safetyParam |= ToyotaSafetyFlags.STOCK_LONGITUDINAL.value
 
       return ret
 

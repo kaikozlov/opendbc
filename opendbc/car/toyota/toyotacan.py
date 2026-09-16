@@ -64,27 +64,6 @@ def create_accel_command_2(packer, accel):
   return packer.make_can_msg("ACC_CONTROL_2", 0, values)
 
 
-def create_tss3_accel_command(template: dict[str, float], accel: float | None, *, camry_b12: bool = False):
-  """Relay one live FRC 0x160 image, optionally replacing its platform request fields."""
-  data = bytearray(32)
-  data[2] = int(template["COUNTER"])
-  for i in range(3, 32):
-    data[i] = int(template[f"BYTE_{i}"])
-
-  if accel is not None:
-    raw = max(-16384, min(16383, round(accel / 0.001))) & 0x7FFF
-    data[4] = (data[4] & 0x80) | (raw >> 8)
-    data[5] = raw & 0xFF
-    if camry_b12:
-      # Camry additionally uses an inverted signed-7 request at 0.1 m/s^2/count.
-      coarse = max(-64, min(63, round(-accel / 0.1)))
-      data[12] = (data[12] & 0x80) | (coarse & 0x7F)
-  # Standard Profile 5. At this fixed length this is wire-equivalent to the
-  # old init=0/DataID=0x444A expression, but also generalizes to the radar PDUs.
-  data[0:2] = toyota_e2e_p05_checksum(0x160, data).to_bytes(2, "little")
-  return 0x160, bytes(data), 0
-
-
 def create_tss3_brake_cancel_command(packer, stock_brake):
   """Clone live 0x101 state and assert only the source-real brake-cancel bit."""
   values = {
