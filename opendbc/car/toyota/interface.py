@@ -80,8 +80,12 @@ class CarInterface(CarInterfaceBase):
         ret.dashcamOnly = True
 
       if not ret.dashcamOnly:
-        ret.alphaLongitudinalAvailable = True
-        ret.openpilotLongitudinalControl = alpha_long
+        # Corolla's retained contributor drives validate the TSS3 0x160 request
+        # contract end-to-end. The Camry 0x160 field mapping does not: retained
+        # F33 evidence classifies the implemented B4:B5/B12 fields as state/result
+        # related, so do not advertise an actuator interface from shape alone.
+        ret.alphaLongitudinalAvailable = candidate == CAR.TOYOTA_COROLLA_TSS3
+        ret.openpilotLongitudinalControl = alpha_long and ret.alphaLongitudinalAvailable
         # Retained Camry drives prove automatic short-stop restart, but not
         # release from Toyota's delayed long-stop hold. Corolla likewise still
         # requires driver-established/resumed cruise below its native floor.
