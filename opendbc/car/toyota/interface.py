@@ -26,11 +26,14 @@ class CarInterface(CarInterfaceBase):
     ret.brand = "toyota"
 
     # TSS3 Corolla powertrains share one openpilot platform and the same EPS application.
-    # The retained 2023 route has no 0x127, while Span's 2025 HV carries the
-    # generation-native 0x127 hybrid gear packet at ~60 Hz. Keep the normal HYBRID
-    # flag meaningful even though TSS3 returns before the legacy Toyota detection.
-    found_ecus = {fw.ecu for fw in car_fw}
-    if candidate == CAR.TOYOTA_COROLLA_TSS3 and (Ecu.hybrid in found_ecus or 0x127 in fingerprint.get(1, {})):
+    # Keep the normal HYBRID flag meaningful even though TSS3 returns before the
+    # legacy Toyota detection. Normalize Cap'n Proto enum values before set
+    # membership: _DynamicEnum hashes differ from their equal integer Ecu values.
+    # GTS independently distinguishes Corolla HV by an added category-466 Brake
+    # Booster; the retained HV route also carries the generation-native 0x127.
+    found_ecus = {fw.ecu.raw for fw in car_fw}
+    if candidate == CAR.TOYOTA_COROLLA_TSS3 and (found_ecus & {Ecu.hybrid, Ecu.electricBrakeBooster} or
+                                                    0x127 in fingerprint.get(1, {})):
       ret.flags |= ToyotaFlags.HYBRID.value
 
     if ret.flags & ToyotaFlags.TSS3:
