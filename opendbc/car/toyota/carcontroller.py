@@ -86,25 +86,24 @@ class CarController(CarControllerBase):
       output = CC.actuators.as_builder()
       can_sends = []
 
-      # 0x412 HUD and 0x101 brake state are native to unsplit bus 1 on the
-      # stock Toyota-B harness. Sending replacements onto the ADAS relay does
-      # not replace either source; no automatic cancel ingress is qualified.
-      if self.frame % 2 == 0:
-        desired_angle = CC.actuators.steeringAngleDeg + CS.out.steeringAngleOffsetDeg
-        self.last_angle = apply_std_steer_angle_limits(
-          desired_angle, self.last_angle, CS.out.vEgoRaw,
-          CS.out.steeringAngleDeg + CS.out.steeringAngleOffsetDeg,
-          CC.latActive, self.params.TSS3_ANGLE_LIMITS,
-        )
+      # Run TSS3 lateral at the native 100 Hz openpilot control cadence. The
+      # TSS3 angle deltas are scaled per 10 ms command so this preserves the
+      # same physical deg/s envelope as the earlier 50 Hz bring-up path.
+      desired_angle = CC.actuators.steeringAngleDeg + CS.out.steeringAngleOffsetDeg
+      self.last_angle = apply_std_steer_angle_limits(
+        desired_angle, self.last_angle, CS.out.vEgoRaw,
+        CS.out.steeringAngleDeg + CS.out.steeringAngleOffsetDeg,
+        CC.latActive, self.params.TSS3_ANGLE_LIMITS,
+      )
 
-        if CC.latActive:
-          self.tss3_control_sequence = self.tss3_control_sequence % 0xFF + 1
-        # Keep the generation across inactive periods. Sequence zero is the
-        # common unified release command; the next active command must change.
-        can_sends.append(build_signer_control(
-          target_angle_deg_to_raw(self.last_angle), self.tss3_control_sequence if CC.latActive else 0,
-        ))
-        output.steeringAngleDeg = self.last_angle
+      if CC.latActive:
+        self.tss3_control_sequence = self.tss3_control_sequence % 0xFF + 1
+      # Keep the generation across inactive periods. Sequence zero is the
+      # common unified release command; the next active command must change.
+      can_sends.append(build_signer_control(
+        target_angle_deg_to_raw(self.last_angle), self.tss3_control_sequence if CC.latActive else 0,
+      ))
+      output.steeringAngleDeg = self.last_angle
 
       # Longitudinal remains Toyota-owned until openpilot can replace the
       # shared 0x08A request plane with source-real ownership.
