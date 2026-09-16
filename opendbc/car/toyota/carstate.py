@@ -70,8 +70,8 @@ class CarState(CarStateBase):
 
     ret = structs.CarState()
     self.tss3_brake_module = copy.copy(cp.vl["BRAKE_MODULE"])
-    if cp_cam.vl_all["TSS3_LKAS_HUD"]["BYTE_0"]:
-      self.tss3_lkas_hud = copy.copy(cp_cam.vl["TSS3_LKAS_HUD"])
+    if cp.vl_all["TSS3_LKAS_HUD"]["BYTE_0"]:
+      self.tss3_lkas_hud = copy.copy(cp.vl["TSS3_LKAS_HUD"])
 
     ret.brakePressed = self.tss3_brake_module["BRAKE_PRESSED"] != 0
     ret.gasPressed = cp.vl["GAS_PEDAL"]["GAS_PEDAL_USER"] > 0
@@ -139,6 +139,9 @@ class CarState(CarStateBase):
     ret.cruiseState.enabled = bool(lateral["CRUISE_OPERATING_LATCH"])
     ret.cruiseState.standstill = ret.cruiseState.enabled and int(lateral["ACC_STATE"]) in (0x66, 0x67)
     ret.cruiseState.available = bool(cp.vl["TSS3_CRUISE_DISPLAY"]["CRUISE_MAIN_STATE"])
+    # Retained Camry conventional-cruise available/active states. Expose this
+    # through the standard CarState field, not a controller-specific veto.
+    ret.cruiseState.nonAdaptive = int(cp.vl["TSS3_CRUISE_DISPLAY"]["MODE_BYTE"]) in (0x88, 0x90)
     set_speed_kph = float(lateral["SET_SPEED"])
     ret.cruiseState.speed = set_speed_kph * CV.KPH_TO_MS if set_speed_kph > 0 else 0.0
     cluster_set_speed = float(cp.vl["TSS3_CRUISE_DISPLAY"]["UI_SET_SPEED"])
@@ -398,7 +401,9 @@ class CarState(CarStateBase):
       # source is read separately from the camera side of the bus-0/bus-2 relay.
       cam_messages = [("TSS3_LONGITUDINAL_REQUEST", 40)]
       if CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:
-        cam_messages.append(("TSS3_LKAS_HUD", 1))
+        # The stock-harness capture puts 0x412 on unsplit bus 1, not
+        # the intercepted ADAS link. Read it without claiming replacement.
+        pt_messages.append(("TSS3_LKAS_HUD", 1))
       return {
         Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, 1),
         Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], cam_messages, 2),

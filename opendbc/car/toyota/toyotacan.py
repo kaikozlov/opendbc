@@ -78,12 +78,10 @@ def create_tss3_accel_command(template: dict[str, float], accel: float | None, *
     if camry_b12:
       # Camry additionally uses an inverted signed-7 request at 0.1 m/s^2/count.
       coarse = max(-64, min(63, round(-accel / 0.1)))
-      data[12] = coarse & 0x7F
-  # AUTOSAR E2E Profile 5: CRC-16/CCITT, init 0, Data ID 0x444A LE.
-  crc = 0
-  for byte in (*data[2:], 0x4A, 0x44):
-    crc = ((crc << 8) ^ CRC16_XMODEM[((crc >> 8) ^ byte) & 0xFF]) & 0xFFFF
-  data[0:2] = crc.to_bytes(2, "little")
+      data[12] = (data[12] & 0x80) | (coarse & 0x7F)
+  # Standard Profile 5. At this fixed length this is wire-equivalent to the
+  # old init=0/DataID=0x444A expression, but also generalizes to the radar PDUs.
+  data[0:2] = toyota_e2e_p05_checksum(0x160, data).to_bytes(2, "little")
   return 0x160, bytes(data), 0
 
 
@@ -235,3 +233,16 @@ def toyota_checksum(address: int, sig, d: bytearray) -> int:
   for i in range(len(d) - 1):
     s += d[i]
   return s & 0xFF
+
+
+def toyota_e2e_p05_checksum(address: int, data: bytes | bytearray) -> int:
+  """Toyota's native E2E P05: init FFFF, CRC LE, implicit DataID=CAN ID."""
+  crc = 0xFFFF
+  for byte in (*data[2:], address & 0xFF, (address >> 8) & 0xFF):
+    crc = ((crc << 8) ^ CRC16_XMODEM[((crc >> 8) ^ byte) & 0xFF]) & 0xFFFF
+  return crc
+
+
+def toyota_tss3_checksum(address: int, sig, data: bytearray) -> int:
+  # The TSS3 DBC contains both 16-bit E2E and inherited 8-bit additive fields.
+  return toyota_e2e_p05_checksum(address, data) if sig.size == 16 else toyota_checksum(address, sig, data)

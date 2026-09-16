@@ -1,0 +1,102 @@
+{
+  "schema": "camry-audit-native-can-fixtures-v1",
+  "sources": [
+    {
+      "boundary": "Historical repin is translated in the test only; not a stock-harness road qualification.",
+      "events": 996,
+      "first_can_log_mono_time": 3056696833421,
+      "fixture": "working_eps_repin.jsonl.gz",
+      "fixture_sha256": "01d6dc2074f3f375c48c68508e8017bf4459944d9da4e7440558b3fa25724c2c",
+      "label": "working_eps_repin",
+      "source": "2026-09-10/0000008d--a9f348691a/rlog-6.zst",
+      "source_sha256": "87ec47f75bf4ab45463cd70dbc0ba79e5aa339f9ec55493629931499c6fb4832",
+      "translation": {
+        "0x101": [
+          0,
+          1
+        ],
+        "0x116": [
+          0,
+          1
+        ],
+        "0x127": [
+          0,
+          1
+        ],
+        "0x160": [
+          1,
+          2
+        ],
+        "0x25": [
+          0,
+          1
+        ],
+        "0x251": [
+          2,
+          1
+        ],
+        "0x30": [
+          0,
+          1
+        ],
+        "0x3b7": [
+          0,
+          1
+        ],
+        "0x3f6": [
+          2,
+          1
+        ],
+        "0x412": [
+          2,
+          1
+        ],
+        "0x51e": [
+          0,
+          1
+        ],
+        "0x610": [
+          0,
+          1
+        ],
+        "0x614": [
+          0,
+          1
+        ],
+        "0x620": [
+          0,
+          1
+        ],
+        "0x622": [
+          0,
+          1
+        ],
+        "0x8a": [
+          2,
+          1
+        ],
+        "0xaa": [
+          0,
+          1
+        ],
+        "0xfe": [
+          0,
+          1
+        ]
+      }
+    },
+    {
+      "boundary": "Original stock-harness buses, with absent EPS; must fail normal parser liveness.",
+      "events": 996,
+      "first_can_log_mono_time": 216105226496,
+      "fixture": "stock_harness_eps_absent.jsonl.gz",
+      "fixture_sha256": "b94738cba892b63af73b22bda299c52e63909d5a9886562d4224170e2d170f97",
+      "label": "stock_harness_eps_absent",
+      "source": "2026-09-11/000000d1--ad906be282/rlog-3.zst",
+      "source_sha256": "18f4af1974cf95c8b397353ac7b5f4b4739db283b5dffaec254a295568cf2781",
+      "translation": {}
+    }
+  ],
+  "warmup_seconds": 5,
+  "window_seconds": 10
+}

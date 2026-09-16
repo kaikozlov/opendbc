@@ -82,8 +82,6 @@ class CarController(CarControllerBase):
 
     self.tss3_control_sequence = 0
     self.tss3_longitudinal_counter = None
-    self.tss3_last_hud = None
-    self.tss3_last_hud_frame = -100
 
   def update(self, CC, CS, now_nanos):
     if self.CP.flags & ToyotaFlags.TSS3:
@@ -94,26 +92,10 @@ class CarController(CarControllerBase):
       output = CC.actuators.as_builder()
       can_sends = []
 
-      if self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3 and CS.tss3_lkas_hud:
-        steer_alert = CC.hudControl.visualAlert == VisualAlert.steerRequired
-        hud_msg = toyotacan.create_tss3_hud_command(
-          CS.tss3_lkas_hud, CC.hudControl.leftLaneVisible, CC.hudControl.rightLaneVisible, CC.latActive, steer_alert,
-        )
-        # Same-car road data shows a ~1 Hz source heartbeat with event-driven
-        # updates no faster than ~10 Hz. Own the camera message in that shape.
-        hud_changed = hud_msg != self.tss3_last_hud
-        heartbeat_due = self.frame - self.tss3_last_hud_frame >= 100
-        event_due = hud_changed and self.frame - self.tss3_last_hud_frame >= 10
-        if heartbeat_due or event_due:
-          can_sends.append(hud_msg)
-          self.tss3_last_hud = hud_msg
-          self.tss3_last_hud_frame = self.frame
-
+      # 0x412 HUD and 0x101 brake state are native to unsplit bus 1 on the
+      # stock Toyota-B harness. Sending replacements onto the ADAS relay does
+      # not replace either source; no automatic cancel ingress is qualified.
       if self.frame % 2 == 0:
-        if (self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3 and CC.cruiseControl.cancel and
-            CS.tss3_brake_module is not None):
-          can_sends.append(toyotacan.create_tss3_brake_cancel_command(self.packer, CS.tss3_brake_module))
-
         desired_angle = CC.actuators.steeringAngleDeg + CS.out.steeringAngleOffsetDeg
         self.last_angle = apply_std_steer_angle_limits(
           desired_angle, self.last_angle, CS.out.vEgoRaw,
@@ -123,11 +105,10 @@ class CarController(CarControllerBase):
 
         if CC.latActive:
           self.tss3_control_sequence = self.tss3_control_sequence % 0xFF + 1
-        else:
-          self.tss3_control_sequence = 0
-
+        # Keep the sequence across inactive periods: the one-use resident
+        # remembers the last accepted nonzero sequence across a zero command.
         can_sends.append(build_signer_control(
-          target_angle_deg_to_raw(self.last_angle), self.tss3_control_sequence,
+          target_angle_deg_to_raw(self.last_angle), self.tss3_control_sequence if CC.latActive else 0,
         ))
         output.steeringAngleDeg = self.last_angle
 
@@ -136,8 +117,7 @@ class CarController(CarControllerBase):
       engaged = (self.CP.openpilotLongitudinalControl and CS.out.cruiseState.enabled and
                  not CS.out.gasPressed and template is not None)
       controlling = engaged and CC.longActive and CS.out.vEgo > TSS3_MIN_LONG_OVERRIDE_SPEED
-      accel_max = TSS3_CAMRY_ACCEL_MAX if self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3 else TSS3_ACCEL_MAX
-      accel = float(np.clip(CC.actuators.accel, TSS3_ACCEL_MIN, accel_max)) if controlling else 0.0
+      accel = float(np.clip(CC.actuators.accel, self.params.ACCEL_MIN, self.params.ACCEL_MAX)) if controlling else 0.0
       output.accel = accel
 
       # Be the sole 0x160 emitter while engaged, paced by the camera's live counter.
