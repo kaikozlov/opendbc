@@ -139,14 +139,16 @@ class CarState(CarStateBase):
       ret.leftBlindspot = bool(cp.vl["BSM"]["L_ADJACENT"] or cp.vl["BSM"]["L_APPROACHING"])
       ret.rightBlindspot = bool(cp.vl["BSM"]["R_ADJACENT"] or cp.vl["BSM"]["R_APPROACHING"])
 
-    lateral = cp.vl["TSS3_LATERAL_REQUEST"]
-    ret.cruiseState.enabled = bool(lateral["CRUISE_OPERATING_LATCH"])
-    ret.cruiseState.standstill = ret.cruiseState.enabled and int(lateral["ACC_STATE"]) in (0x66, 0x67)
+    request = cp.vl["TSS3_CONTROL_REQUEST"]
+    ret.cruiseState.enabled = bool(request["CRUISE_OPERATING_LATCH"])
+    # Source-real B4[5] is an exact delayed-hold discriminator in retained Camry
+    # routes. The parallel request-B state is ID25/allocation2-or-3.
+    ret.cruiseState.standstill = ret.cruiseState.enabled and bool(request["DELAYED_HOLD_STATE"])
     ret.cruiseState.available = bool(cp.vl["TSS3_CRUISE_DISPLAY"]["CRUISE_MAIN_STATE"])
     # Retained Camry conventional-cruise available/active states. Expose this
     # through the standard CarState field, not a controller-specific veto.
     ret.cruiseState.nonAdaptive = int(cp.vl["TSS3_CRUISE_DISPLAY"]["MODE_BYTE"]) in (0x88, 0x90)
-    set_speed_kph = float(lateral["SET_SPEED"])
+    set_speed_kph = float(request["SET_SPEED"])
     ret.cruiseState.speed = set_speed_kph * CV.KPH_TO_MS if set_speed_kph > 0 else 0.0
     cluster_set_speed = float(cp.vl["TSS3_CRUISE_DISPLAY"]["UI_SET_SPEED"])
     if ret.cruiseState.speed != 0 and cluster_set_speed > 0:
@@ -198,14 +200,15 @@ class CarState(CarStateBase):
     ret.steerFaultTemporary = False
     ret.steerFaultPermanent = False
 
-    lateral = cp.vl["TSS3_LATERAL_REQUEST"]
-    acc_state = int(lateral["ACC_STATE"])
-    ret.cruiseState.enabled = bool(lateral["COROLLA_ACC_ENGAGED"])
-    # 0x8A is the native Corolla ACC state source used by the validated
-    # longitudinal implementation. Retained/live values use nonzero ACC_STATE
-    # whenever the system is present (0x12 idle, 0x47/0x5D engaged, 0x67 hold).
-    ret.cruiseState.available = acc_state != 0
-    ret.cruiseState.standstill = ret.cruiseState.enabled and bool(acc_state & 0x20)
+    request = cp.vl["TSS3_CONTROL_REQUEST"]
+    longitudinal_id_b = int(request["LONGITUDINAL_REQUEST_ID_B"])
+    allocation_b = int(request["LONGITUDINAL_ALLOCATION_METHOD_B"])
+    ret.cruiseState.enabled = bool(request["COROLLA_ACC_ENGAGED"])
+    # The former raw-B7 ACC state decomposes into a six-bit request ID plus a
+    # two-bit allocation method. Idle/request states retain a nonzero B ID;
+    # delayed hold is ID25 with allocation method 2/3 (raw 0x66/0x67).
+    ret.cruiseState.available = longitudinal_id_b != 0
+    ret.cruiseState.standstill = ret.cruiseState.enabled and longitudinal_id_b == 25 and allocation_b in (2, 3)
 
     # The contributor's live capture establishes 0x251 byte 2 as the retained
     # dash set speed in mph. It remains populated while disengaged, matching
@@ -391,12 +394,12 @@ class CarState(CarStateBase):
       ]
       pt_messages = common_messages + ([
         ("SECOC_SYNCHRONIZATION", 10),
-        ("TSS3_LATERAL_REQUEST", 40),
+        ("TSS3_CONTROL_REQUEST", 40),
         ("TSS3_CRUISE_DISPLAY", 1),
       ] if CP.carFingerprint == CAR.TOYOTA_COROLLA_TSS3 else [
         ("TSS3_CRUISE_SWITCH", 30),
         ("BODY_CONTROL_STATE_2", 3),
-        ("TSS3_LATERAL_REQUEST", 40),
+        ("TSS3_CONTROL_REQUEST", 40),
         ("TSS3_CRUISE_DISPLAY", 1),
       ])
       if CP.enableBsm:

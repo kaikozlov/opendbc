@@ -217,10 +217,20 @@ class TestToyotaCorollaTSS3(unittest.TestCase):
     self.assertAlmostEqual(state.cruiseState.speedCluster, state.cruiseState.speed)
 
     hold = bytearray(SPAN_ACC_ACTIVE)
-    hold[7] = 0x67  # contributor-observed engaged standstill/hold state
+    hold[7] = 0x67  # request-B ID25 + Brake Only allocation
     state = update_control_state(ci, moving=False, counter_offset=20, acc_frame=bytes(hold), set_speed_mph=25)
     self.assertTrue(state.cruiseState.enabled)
     self.assertTrue(state.cruiseState.standstill)
+
+    hold_override = bytearray(SPAN_ACC_ACTIVE)
+    hold_override[7] = 0x66  # request-B ID25 + Engine and Brake 2
+    state = update_control_state(ci, moving=False, counter_offset=40, acc_frame=bytes(hold_override), set_speed_mph=25)
+    self.assertTrue(state.cruiseState.standstill)
+
+    moving_id25 = bytearray(SPAN_ACC_ACTIVE)
+    moving_id25[7] = 0x65  # same ID25, but allocation method 1 is not the delayed hold state
+    state = update_control_state(ci, moving=True, counter_offset=60, acc_frame=bytes(moving_id25), set_speed_mph=25)
+    self.assertFalse(state.cruiseState.standstill)
 
   def test_receiver_fields_and_controller_sideband(self):
     packer = CANPacker("toyota_tss3_pt_generated")

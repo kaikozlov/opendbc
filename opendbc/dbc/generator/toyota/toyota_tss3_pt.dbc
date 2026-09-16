@@ -41,11 +41,29 @@ BO_ 254 TSS3_CRUISE_SWITCH: 32 XXX
  SG_ CANCEL_BUTTON : 38|1@0+ (1,0) [0|1] "" XXX
  SG_ CANCEL_BUTTON_MIRROR_N : 61|1@0+ (1,0) [0|1] "" XXX
 
-BO_ 138 TSS3_LATERAL_REQUEST: 32 XXX
+BO_ 129 TSS3_CONTROL_RESULT: 32 XXX
+ SG_ LONGITUDINAL_RESULT_ID : 53|6@0+ (1,0) [0|63] "" XXX
+ SG_ REQUEST_LOSS_STATUS : 92|1@0+ (1,0) [0|1] "" XXX
+ SG_ LATERAL_RESULT_ID : 109|6@0+ (1,0) [0|63] "" XXX
+ SG_ LATERAL_RESULT_PINION_ANGLE : 135|16@0- (0.001000121519,0) [-32.772|32.771] "rad" XXX
+ SG_ LONGITUDINAL_RESULT_ACCEL : 167|16@0- (0.001,0) [-32.768|32.767] "m/s^2" XXX
+
+BO_ 138 TSS3_CONTROL_REQUEST: 32 XXX
  SG_ CRUISE_OPERATING_LATCH : 27|1@0+ (1,0) [0|1] "" XXX
+ SG_ DELAYED_HOLD_STATE : 37|1@0+ (1,0) [0|1] "" XXX
  SG_ COROLLA_ACC_ENGAGED : 180|1@0+ (1,0) [0|1] "" XXX
- SG_ ACC_STATE : 63|8@0+ (1,0) [0|255] "" XXX
+ SG_ LONGITUDINAL_REQUEST_ID_A : 55|6@0+ (1,0) [0|63] "" XXX
+ SG_ LONGITUDINAL_ALLOCATION_METHOD_A : 49|2@0+ (1,0) [0|3] "" XXX
+ SG_ LONGITUDINAL_REQUEST_ID_B : 63|6@0+ (1,0) [0|63] "" XXX
+ SG_ LONGITUDINAL_ALLOCATION_METHOD_B : 57|2@0+ (1,0) [0|3] "" XXX
+ SG_ LONGITUDINAL_REQUEST_ACCEL_A : 71|16@0- (0.001,0) [-32.768|32.767] "m/s^2" XXX
  SG_ SET_SPEED : 87|8@0+ (1,0) [0|255] "km/h" XXX
+ SG_ LONGITUDINAL_REQUEST_ACCEL_B : 95|16@0- (0.001,0) [-32.768|32.767] "m/s^2" XXX
+ SG_ LATERAL_REQUEST_PINION_ANGLE : 151|16@0- (0.001000121519,0) [-32.772|32.771] "rad" XXX
+ SG_ TARGET_LATERAL_ID : 173|6@0+ (1,0) [0|63] "" XXX
+ SG_ LATERAL_ASSIST_GAIN : 199|8@0+ (0.01,0) [0|2.55] "" XXX
+ SG_ LATERAL_DAMPING_GAIN : 207|8@0+ (0.01,0) [0|2.55] "" XXX
+ SG_ REQUEST_SEQUENCE : 213|6@0+ (1,0) [0|63] "" XXX
 
 BO_ 352 TSS3_LONGITUDINAL_REQUEST: 32 XXX
  SG_ CHECKSUM : 0|16@1+ (1,0) [0|65535] "" XXX
@@ -350,22 +368,45 @@ CM_ SG_ 48 EPS_FAULT_INHIBIT "Selected live EPS fault/inhibit aggregate. Exact F
 CM_ SG_ 48 DRIVER_TORQUE_INVALID "Target-native driver-torque invalid/inhibit gate.";
 CM_ SG_ 48 EPS_STATUS_B6_BIT1 "Runtime status bit; exact OEM meaning unresolved.";
 CM_ SG_ 48 EPS_STATUS_B6_BIT3 "Runtime status bit; exact OEM meaning unresolved.";
+CM_ BO_ 129 "Brake-owned TSS3 selected/result/reference PDU. Longitudinal result fields are strong recorder-schema candidates; lateral result fields are independently recovered. B11[4] asserts on FRC request loss.";
+CM_ SG_ 129 LONGITUDINAL_RESULT_ID "Strong candidate for recorder 5284 Arbitration result_longitudinal ID; low six bits only. Exact synchronized diagnostic join remains open.";
+CM_ SG_ 129 REQUEST_LOSS_STATUS "Live FRC CommunicationControl suppression makes this bit assert while Brake continues 0x081. OEM name and relation to recorder 57D3 remain unresolved.";
+CM_ SG_ 129 LATERAL_RESULT_ID "Selected/result Target Lateral ID; mirrors fresh upstream 0x08A request identity across the retained road corpus.";
+CM_ SG_ 129 LATERAL_RESULT_PINION_ANGLE "Selected/result pinion reference. Raw count is approximately the recorder 57DE 0.001-rad unit.";
+CM_ SG_ 129 LONGITUDINAL_RESULT_ACCEL "Strong candidate for recorder 57DB Arbitration result Acceleration. Result ID63 nearly passes the 0x08A request through while ID11 diverges under arbitration.";
+CM_ BO_ 138 "Central observed TSS3 FRC-side control-request envelope. Carries the recovered lateral request tuple and an indistinguishable pair of signed16 longitudinal acceleration-request candidates.";
+CM_ SG_ 138 DELAYED_HOLD_STATE "Structural Camry hold-state bit: asserted on 198/198 retained delayed-hold frames and clear in every other 3b/3c 0x08A frame. Exact OEM recorder name remains unknown.";
+CM_ SG_ 138 LONGITUDINAL_REQUEST_ID_A "Strong structural candidate for one 5280/5281 request ID: Toyota Brake 0x10A3/0x10A4 define request ID in bits7:2. Upper-vs-lower A/B assignment remains unresolved.";
+CM_ SG_ 138 LONGITUDINAL_ALLOCATION_METHOD_A "Strong structural candidate for the paired braking/driving-force allocation method in the remaining low two bits; 0..3 matches Toyota's Engine Only / Engine+Brake1 / Engine+Brake2 / Brake Only enum.";
+CM_ SG_ 138 LONGITUDINAL_REQUEST_ID_B "Second strong structural 5280/5281 request-ID candidate in bits7:2. Active Camry cruise uses ID17 while candidate A uses ID11.";
+CM_ SG_ 138 LONGITUDINAL_ALLOCATION_METHOD_B "Second strong structural allocation-method candidate in bits1:0; upper-vs-lower A/B assignment remains unresolved.";
+CM_ SG_ 138 LONGITUDINAL_REQUEST_ACCEL_A "One of the recorder 5280/5281 lower/upper acceleration-request pair; upper-vs-lower assignment is unresolved because both words are equal in both complete Camry drives.";
+CM_ SG_ 138 LONGITUDINAL_REQUEST_ACCEL_B "One of the recorder 5280/5281 lower/upper acceleration-request pair; upper-vs-lower assignment is unresolved because both words are equal in both complete Camry drives.";
+CM_ SG_ 138 LATERAL_REQUEST_PINION_ANGLE "Recovered request pinion reference; controller scale 1024/17870 deg/count is 0.00100012 rad/count, matching recorder 5282 geometry.";
+CM_ SG_ 138 TARGET_LATERAL_ID "Recovered upstream Target Lateral ID request profile.";
+CM_ SG_ 138 LATERAL_ASSIST_GAIN "Strong structural join to recorder 5282 Steering assist gain at 0.01/count.";
+CM_ SG_ 138 LATERAL_DAMPING_GAIN "Bounded structural join to recorder 5282 Damping control gain; zero in both complete Camry drives.";
+CM_ SG_ 138 REQUEST_SEQUENCE "Observed modulo-64 request publication sequence.";
+
 CM_ BO_ 182 "Exact H/F protected lateral receiver PDU. Receiver-side fields are defined for analysis only; openpilot does not transmit this PDU directly.";
 CM_ SG_ 182 TARGET_LATERAL_ID "Techstream Target Lateral ID; exact H accepts 1=PCS, 4=LDA, 10=Hands Off LTA, 11=LTA/LCA, 19=PDA. 0 means no request.";
 CM_ SG_ 182 TARGET_STEERING_ANGLE "Controller-equivalent scale is exactly 1024/17870 deg/count.";
 CM_ SG_ 182 SEQUENCE "Exact H receiver treats this as a modulo-64 sequence counter with effective gap cap 8.";
-CM_ BO_ 352 "TSS3 FRC Profile-5 PDU. Corolla substitutes signed-15 B4:B5 while preserving the live camera context. Camry additionally substitutes the inverse signed-7 B12 candidate.";
+CM_ BO_ 352 "TSS3 FRC Profile-5 PDU. Corolla has independent on-car request validation. Camry retains this PDU as state/evidence only; its old B4:B5/B12 demand interpretation is withdrawn.";
 CM_ SG_ 352 CRC "Little-endian CRC-16/CCITT over bytes 2..31 followed by Data ID 0x444A in low-byte/high-byte order; initial value 0.";
 CM_ SG_ 352 BYTE_4 "Bit 7 is preserved context; the retained Corolla on-car longitudinal port validates bits 6..0 as the high seven bits of a signed-15 acceleration request at 0.001 m/s2/count.";
 CM_ SG_ 352 BYTE_5 "Low eight bits of the retained Corolla on-car validated signed-15 B4:B5 acceleration request.";
-CM_ SG_ 352 BYTE_12 "On Camry, bits 6..0 are the candidate inverse signed-7 request at 0.1 m/s2/count; synthetic causality remains live-unvalidated.";
+CM_ SG_ 352 BYTE_12 "Corolla platform semantics are retained separately. Camry does not use this field as an acceleration command.";
 CM_ SG_ 295 GEAR "Span 2025 Corolla HV directly carries raw 3 while in D; P/R/N/B preserve Toyota hybrid ordinal semantics corroborated by GTS+ P5/P6 Shift Position ordering.";
 CM_ SG_ 959 GEAR "Albino 2023 Corolla public route directly observes P=0x80, R=0x40 and D=0x10; Span 2025 Corolla HV independently carries D=0x10. N=0x20 completes the one-hot domain and matches Toyota P5/P6 ordering.";
 CM_ SG_ 374 CRUISE_ACTIVE "Legacy field retained for decoding only. Both moving TSS3 Corolla captures keep the old CRUISE_ACTIVE/STATE values inactive; generation-native engagement is 0x08A B22 bit0x10 instead.";
 
 VAL_ 182 TARGET_LATERAL_ID 27 "Remote Parking" 25 "AP" 19 "PDA" 11 "LTA/LCA" 10 "Hands Off LTA" 4 "LDA" 1 "PCS" 0 "No Request";
+VAL_ 138 TARGET_LATERAL_ID 27 "Remote Parking" 25 "AP" 19 "PDA" 18 "SDG" 11 "LTA/LCA" 10 "Hands Off LTA" 4 "LDA" 1 "PCS" 0 "No Request";
+VAL_ 129 LATERAL_RESULT_ID 27 "Remote Parking" 25 "AP" 19 "PDA" 18 "SDG" 11 "LTA/LCA" 10 "Hands Off LTA" 4 "LDA" 1 "PCS" 0 "No Request";
+VAL_ 138 LONGITUDINAL_ALLOCATION_METHOD_A 3 "Brake Only" 2 "Engine and Brake 2" 1 "Engine and Brake 1" 0 "Engine Only";
+VAL_ 138 LONGITUDINAL_ALLOCATION_METHOD_B 3 "Brake Only" 2 "Engine and Brake 2" 1 "Engine and Brake 1" 0 "Engine Only";
 
-CM_ SG_ 138 ACC_STATE "Retained Corolla values: 0x12 idle/standby, Span 0x5D engaged; contributor live captures additionally report 0x47 engaged and 0x67 standstill hold. Bit 0x20 is the standstill/hold substate.";
 CM_ SG_ 138 COROLLA_ACC_ENGAGED "Byte22 bit0x10 is the generation-native Corolla ACC engaged gate: 2363 clear / 37 asserted frames in the retained Span drive and used by Albino's validated longitudinal port.";
 CM_ SG_ 593 UI_SET_SPEED "Contributor live capture reports byte2 as the retained dash set speed in mph, factor 1.0; retained public/Span excerpts contain no set-speed adjustment and remain zero.";
 
