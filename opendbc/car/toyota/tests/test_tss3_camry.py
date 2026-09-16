@@ -202,7 +202,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertEqual(request["LONGITUDINAL_ALLOCATION_METHOD_A"], 1)
     self.assertEqual(request["LONGITUDINAL_REQUEST_ID_B"], 17)
     self.assertEqual(request["LONGITUDINAL_ALLOCATION_METHOD_B"], 3)
-    self.assertEqual(request["TARGET_LATERAL_ID"], 0)
+    self.assertEqual(request["LATERAL_REQUEST_ID"], 0)
     self.assertAlmostEqual(request["LATERAL_REQUEST_PINION_ANGLE"], -0.203 * 1.000121519, places=6)
     self.assertAlmostEqual(request["LATERAL_ASSIST_GAIN"], 1.0, places=6)
     self.assertAlmostEqual(request["LATERAL_DAMPING_GAIN"], 0.0, places=6)

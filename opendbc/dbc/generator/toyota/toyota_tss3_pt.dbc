@@ -60,7 +60,7 @@ BO_ 138 TSS3_CONTROL_REQUEST: 32 XXX
  SG_ SET_SPEED : 87|8@0+ (1,0) [0|255] "km/h" XXX
  SG_ LONGITUDINAL_REQUEST_ACCEL_B : 95|16@0- (0.001,0) [-32.768|32.767] "m/s^2" XXX
  SG_ LATERAL_REQUEST_PINION_ANGLE : 151|16@0- (0.001000121519,0) [-32.772|32.771] "rad" XXX
- SG_ TARGET_LATERAL_ID : 173|6@0+ (1,0) [0|63] "" XXX
+ SG_ LATERAL_REQUEST_ID : 173|6@0+ (1,0) [0|63] "" XXX
  SG_ LATERAL_ASSIST_GAIN : 199|8@0+ (0.01,0) [0|2.55] "" XXX
  SG_ LATERAL_DAMPING_GAIN : 207|8@0+ (0.01,0) [0|2.55] "" XXX
  SG_ REQUEST_SEQUENCE : 213|6@0+ (1,0) [0|63] "" XXX
@@ -371,10 +371,10 @@ CM_ SG_ 48 EPS_STATUS_B6_BIT3 "Runtime status bit; exact OEM meaning unresolved.
 CM_ BO_ 129 "Brake-owned TSS3 selected/result/reference PDU. Longitudinal result fields are strong recorder-schema candidates; lateral result fields are independently recovered. B11[4] asserts on FRC request loss.";
 CM_ SG_ 129 LONGITUDINAL_RESULT_ID "Strong candidate for recorder 5284 Arbitration result_longitudinal ID; low six bits only. Exact synchronized diagnostic join remains open.";
 CM_ SG_ 129 REQUEST_LOSS_STATUS "Live FRC CommunicationControl suppression makes this bit assert while Brake continues 0x081. OEM name and relation to recorder 57D3 remain unresolved.";
-CM_ SG_ 129 LATERAL_RESULT_ID "Selected/result Target Lateral ID; mirrors fresh upstream 0x08A request identity across the retained road corpus.";
+CM_ SG_ 129 LATERAL_RESULT_ID "Strong wire join to FFD 5285 Arbitration result_lateral ID; mirrors fresh 0x08A request identity across the retained road corpus.";
 CM_ SG_ 129 LATERAL_RESULT_PINION_ANGLE "Selected/result pinion reference. Raw count is approximately the recorder 57DE 0.001-rad unit.";
 CM_ SG_ 129 LONGITUDINAL_RESULT_ACCEL "Strong candidate for recorder 57DB Arbitration result Acceleration. Result ID63 nearly passes the 0x08A request through while ID11 diverges under arbitration.";
-CM_ BO_ 138 "Central observed TSS3 FRC-side control-request envelope. Carries the recovered lateral request tuple and an indistinguishable pair of signed16 longitudinal acceleration-request candidates.";
+CM_ BO_ 138 "Central observed TSS3 request-side envelope. Carries the recovered FFD-5282 lateral request tuple plus the two longitudinal lower/upper bound-package slots; exact placement before/after internal TSS application selection is unresolved.";
 CM_ SG_ 138 DELAYED_HOLD_STATE "Structural Camry hold-state bit: asserted on 198/198 retained delayed-hold frames and clear in every other 3b/3c 0x08A frame. Exact OEM recorder name remains unknown.";
 CM_ SG_ 138 LONGITUDINAL_REQUEST_ID_A "Strong structural candidate for one 5280/5281 request ID: Toyota Brake 0x10A3/0x10A4 define request ID in bits7:2. Upper-vs-lower A/B assignment remains unresolved.";
 CM_ SG_ 138 LONGITUDINAL_ALLOCATION_METHOD_A "Strong structural candidate for the paired braking/driving-force allocation method in the remaining low two bits; 0..3 matches Toyota's Engine Only / Engine+Brake1 / Engine+Brake2 / Brake Only enum.";
@@ -383,12 +383,12 @@ CM_ SG_ 138 LONGITUDINAL_ALLOCATION_METHOD_B "Second strong structural allocatio
 CM_ SG_ 138 LONGITUDINAL_REQUEST_ACCEL_A "One of the recorder 5280/5281 lower/upper acceleration-request pair; upper-vs-lower assignment is unresolved because both words are equal in both complete Camry drives.";
 CM_ SG_ 138 LONGITUDINAL_REQUEST_ACCEL_B "One of the recorder 5280/5281 lower/upper acceleration-request pair; upper-vs-lower assignment is unresolved because both words are equal in both complete Camry drives.";
 CM_ SG_ 138 LATERAL_REQUEST_PINION_ANGLE "Recovered request pinion reference; controller scale 1024/17870 deg/count is 0.00100012 rad/count, matching recorder 5282 geometry.";
-CM_ SG_ 138 TARGET_LATERAL_ID "Recovered upstream Target Lateral ID request profile.";
+CM_ SG_ 138 LATERAL_REQUEST_ID "TSS request-side lateral application ID; FFD 5282 calls this TSS request - lateral ID.";
 CM_ SG_ 138 LATERAL_ASSIST_GAIN "Strong structural join to recorder 5282 Steering assist gain at 0.01/count.";
 CM_ SG_ 138 LATERAL_DAMPING_GAIN "Bounded structural join to recorder 5282 Damping control gain; zero in both complete Camry drives.";
 CM_ SG_ 138 REQUEST_SEQUENCE "Observed modulo-64 request publication sequence.";
 
-CM_ BO_ 182 "Exact H/F protected lateral receiver PDU. Receiver-side fields are defined for analysis only; openpilot does not transmit this PDU directly.";
+CM_ BO_ 182 "Exact H/F protected final steering-controller target/instruction PDU. Its Target Lateral ID and target steering angle are downstream of the TSS request/result layers; receiver-side fields are defined for analysis.";
 CM_ SG_ 182 TARGET_LATERAL_ID "Techstream Target Lateral ID; exact H accepts 1=PCS, 4=LDA, 10=Hands Off LTA, 11=LTA/LCA, 19=PDA. 0 means no request.";
 CM_ SG_ 182 TARGET_STEERING_ANGLE "Controller-equivalent scale is exactly 1024/17870 deg/count.";
 CM_ SG_ 182 SEQUENCE "Exact H receiver treats this as a modulo-64 sequence counter with effective gap cap 8.";
@@ -402,7 +402,7 @@ CM_ SG_ 959 GEAR "Albino 2023 Corolla public route directly observes P=0x80, R=0
 CM_ SG_ 374 CRUISE_ACTIVE "Legacy field retained for decoding only. Both moving TSS3 Corolla captures keep the old CRUISE_ACTIVE/STATE values inactive; generation-native engagement is 0x08A B22 bit0x10 instead.";
 
 VAL_ 182 TARGET_LATERAL_ID 27 "Remote Parking" 25 "AP" 19 "PDA" 11 "LTA/LCA" 10 "Hands Off LTA" 4 "LDA" 1 "PCS" 0 "No Request";
-VAL_ 138 TARGET_LATERAL_ID 27 "Remote Parking" 25 "AP" 19 "PDA" 18 "SDG" 11 "LTA/LCA" 10 "Hands Off LTA" 4 "LDA" 1 "PCS" 0 "No Request";
+VAL_ 138 LATERAL_REQUEST_ID 27 "Remote Parking" 25 "AP" 19 "PDA" 18 "SDG" 11 "LTA/LCA" 10 "Hands Off LTA" 4 "LDA" 1 "PCS" 0 "No Request";
 VAL_ 129 LATERAL_RESULT_ID 27 "Remote Parking" 25 "AP" 19 "PDA" 18 "SDG" 11 "LTA/LCA" 10 "Hands Off LTA" 4 "LDA" 1 "PCS" 0 "No Request";
 VAL_ 138 LONGITUDINAL_ALLOCATION_METHOD_A 3 "Brake Only" 2 "Engine and Brake 2" 1 "Engine and Brake 1" 0 "Engine Only";
 VAL_ 138 LONGITUDINAL_ALLOCATION_METHOD_B 3 "Brake Only" 2 "Engine and Brake 2" 1 "Engine and Brake 1" 0 "Engine Only";
