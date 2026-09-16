@@ -99,8 +99,8 @@ class CarController(CarControllerBase):
 
         if CC.latActive:
           self.tss3_control_sequence = self.tss3_control_sequence % 0xFF + 1
-        # Keep the sequence across inactive periods: the one-use resident
-        # remembers the last accepted nonzero sequence across a zero command.
+        # Keep the generation across inactive periods. Sequence zero is the
+        # common unified release command; the next active command must change.
         can_sends.append(build_signer_control(
           target_angle_deg_to_raw(self.last_angle), self.tss3_control_sequence if CC.latActive else 0,
         ))

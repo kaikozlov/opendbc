@@ -1,8 +1,8 @@
 """TSS3 EPS-resident signer sideband helpers."""
 
 TSS3_B6_TARGET_ANGLE_SCALE_DEG = 1024 / 17870
-TSS3_SIGNER_CONTROL_ADDR = 0x1FDC0002
-TSS3_SIGNER_CONTROL_MAGIC = b"\x00\xC7"
+TSS3_SIGNER_CONTROL_ADDR = 0x777
+TSS3_SIGNER_CONTROL_MAGIC = b"\x07\xC7\xC7"
 TSS3_SIGNER_BUS = 1
 
 
@@ -21,7 +21,7 @@ def build_signer_control(target_angle_raw: int, control_sequence: int) -> tuple[
   if not 0 <= control_sequence <= 0xFF:
     raise ValueError("signer control sequence must be 0..255")
 
-  data = (TSS3_SIGNER_CONTROL_MAGIC + bytes((control_sequence, 0)) +
+  data = (TSS3_SIGNER_CONTROL_MAGIC + bytes((control_sequence,)) +
           target_angle_raw.to_bytes(2, "big", signed=True) + bytes(2))
   return TSS3_SIGNER_CONTROL_ADDR, data, TSS3_SIGNER_BUS
 
