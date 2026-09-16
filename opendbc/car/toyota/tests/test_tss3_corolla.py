@@ -259,8 +259,8 @@ class TestToyotaCorollaTSS3(unittest.TestCase):
     output, sends = ci.apply(control(5.0, accel=-1.3, long_active=True), 2_000_000_000)
     self.assertEqual(len(sends), 1)
     address, data, bus = sends[0]
-    self.assertEqual((address, bus, len(data)), (0x1FDC0002, 1, 8))
-    self.assertEqual(data[:4], b"\x00\xC7\x01\x00")
+    self.assertEqual((address, bus, len(data)), (0x777, 1, 8))
+    self.assertEqual(data[:4], b"\x07\xC7\xC7\x01")
     self.assertEqual(data[6:], b"\x00\x00")
     self.assertFalse(any(address == 0x160 for address, _, _ in sends))
     self.assertEqual(output.accel, 0.0)
@@ -283,17 +283,21 @@ class TestToyotaCorollaTSS3Safety(unittest.TestCase):
 
   @staticmethod
   def c7(angle_raw=0, sequence=1, bus=1):
-    data = b"\x00\xC7" + bytes((sequence, 0)) + angle_raw.to_bytes(2, "big", signed=True) + b"\x00\x00"
-    return libsafety_py.make_CANPacket(0x1FDC0002, bus, data)
+    data = b"\x07\xC7\xC7" + bytes((sequence,)) + angle_raw.to_bytes(2, "big", signed=True) + b"\x00\x00"
+    return libsafety_py.make_CANPacket(0x777, bus, data)
 
   def test_only_bounded_c7_on_stock_toyota_b(self):
     self.assertTrue(self.safety.safety_tx_hook(self.c7()))
     self.assertFalse(self.safety.safety_tx_hook(self.c7(bus=0)))
+    # 0x777 remains a diagnostic address in stock firmware; Panda grants only
+    # the exact private C7 envelope, never arbitrary functional diagnostics.
+    self.assertFalse(self.safety.safety_tx_hook(
+      libsafety_py.make_CANPacket(0x777, 1, bytes.fromhex("0210030000000000"))))
     self.assertFalse(self.safety.safety_tx_hook(self.c7(1746)))
-    for index in (0, 1, 3, 6, 7):
+    for index in (0, 1, 2, 6, 7):
       data = bytearray(self.c7()[0].data)
       data[index] ^= 1
-      self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x1FDC0002, 1, bytes(data))))
+      self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x777, 1, bytes(data))))
 
   def test_0x160_is_not_host_replaceable(self):
     for bus in range(3):

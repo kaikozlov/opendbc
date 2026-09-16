@@ -260,14 +260,14 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
       },
     };
 
-    const bool signer_control = (msg->bus == 1U) && (msg->addr == 0x1FDC0002U);
+    const bool signer_control = (msg->bus == 1U) && (msg->addr == 0x777U);
     tx = signer_control;
     if (signer_control) {
-      const bool header_valid = (msg->data[0] == 0U) && (msg->data[1] == 0xC7U) &&
-                                (msg->data[3] == 0U) && (msg->data[6] == 0U) && (msg->data[7] == 0U);
+      const bool header_valid = (msg->data[0] == 7U) && (msg->data[1] == 0xC7U) &&
+                                (msg->data[2] == 0xC7U) && (msg->data[6] == 0U) && (msg->data[7] == 0U);
       int target_angle = (msg->data[4] << 8U) | msg->data[5];
       target_angle = to_signed(target_angle, 16);
-      const bool steer_control_enabled = msg->data[2] != 0U;
+      const bool steer_control_enabled = msg->data[3] != 0U;
       tx = header_valid && !safety_max_limit_check(target_angle, TOYOTA_TSS3_ANGLE_STEERING_LIMITS.max_angle,
                                                   -TOYOTA_TSS3_ANGLE_STEERING_LIMITS.max_angle) &&
                           !steer_angle_cmd_checks(target_angle, steer_control_enabled, TOYOTA_TSS3_ANGLE_STEERING_LIMITS);
@@ -459,7 +459,7 @@ static safety_config toyota_init(uint16_t param) {
   safety_config ret;
   if (toyota_tss3_signer) {
     static const CanMsg toyota_tss3_tx_msgs[] = {
-      {0x1FDC0002, 1, 8, .check_relay = false},
+      {0x777, 1, 8, .check_relay = false},
     };
     SET_TX_MSGS(toyota_tss3_tx_msgs, ret);
     if (toyota_corolla_hf) {

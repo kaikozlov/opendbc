@@ -64,7 +64,7 @@ class CarInterface(CarInterfaceBase):
                                              ToyotaSafetyFlags.COROLLA_HF.value)
         ret.dashcamOnly = False
         # The RAM-resident helper signs a native EPS-local B6. openpilot sends
-        # only the same C7 sideband used by the proven F33 recipe.
+        # only the unified functional-0x777 C7 control used across TSS3 targets.
         ret.secOcRequired = False
         ret.minSteerSpeed = 0.
         ret.steerAtStandstill = True

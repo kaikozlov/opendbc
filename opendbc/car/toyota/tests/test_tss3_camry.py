@@ -297,8 +297,8 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     output, sends = ci.apply(control(5.0, accel=1.2, long_active=True), 2_000_000_000)
     self.assertEqual(len(sends), 1)
     address, data, bus = sends[0]
-    self.assertEqual((address, bus, len(data)), (0x1FDC0002, 1, 8))
-    self.assertEqual(data[:4], b"\x00\xC7\x01\x00")
+    self.assertEqual((address, bus, len(data)), (0x777, 1, 8))
+    self.assertEqual(data[:4], b"\x07\xC7\xC7\x01")
     self.assertEqual(data[6:], b"\x00\x00")
     self.assertAlmostEqual(output.steeringAngleDeg,
                            int.from_bytes(data[4:6], "big", signed=True) * (1024 / 17870), delta=0.03)
@@ -309,9 +309,9 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     ci = CarInterface(self.CP)
     state = update_state(ci)
     _, sends = ci.apply(control(20.0, False), 2_000_000_000)
-    _, data, bus = next(msg for msg in sends if msg[0] == 0x1FDC0002)
+    _, data, bus = next(msg for msg in sends if msg[0] == 0x777)
     self.assertEqual(bus, 1)
-    self.assertEqual(data[:4], b"\x00\xC7\x00\x00")
+    self.assertEqual(data[:4], b"\x07\xC7\xC7\x00")
     angle = int.from_bytes(data[4:6], "big", signed=True) * (1024 / 17870)
     self.assertAlmostEqual(angle, state.steeringAngleDeg, delta=0.12)
 
@@ -331,9 +331,9 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     frames = []
     for active in (True, False, True):
       _, sends = ci.apply(control(1.0, active=active), 2_000_000_000)
-      frames.append(next(data for address, data, _ in sends if address == 0x1FDC0002))
+      frames.append(next(data for address, data, _ in sends if address == 0x777))
       ci.apply(control(1.0, active=active), 2_010_000_000)
-    self.assertEqual([frame[2] for frame in frames], [1, 0, 2])
+    self.assertEqual([frame[3] for frame in frames], [1, 0, 2])
 
 
 class TestToyotaCamryTSS3Safety(unittest.TestCase):
@@ -348,12 +348,16 @@ class TestToyotaCamryTSS3Safety(unittest.TestCase):
 
   @staticmethod
   def c7(angle_raw: int = 0, sequence: int = 1, bus: int = 1):
-    data = b"\x00\xC7" + bytes((sequence, 0)) + angle_raw.to_bytes(2, "big", signed=True) + b"\x00\x00"
-    return libsafety_py.make_CANPacket(0x1FDC0002, bus, data)
+    data = b"\x07\xC7\xC7" + bytes((sequence,)) + angle_raw.to_bytes(2, "big", signed=True) + b"\x00\x00"
+    return libsafety_py.make_CANPacket(0x777, bus, data)
 
   def test_accepts_bounded_c7_only_on_unsplit_bus(self):
     self.assertTrue(self.safety.safety_tx_hook(self.c7()))
     self.assertFalse(self.safety.safety_tx_hook(self.c7(bus=0)))
+    # 0x777 remains a diagnostic address in stock firmware; Panda grants only
+    # the exact private C7 envelope, never arbitrary functional diagnostics.
+    self.assertFalse(self.safety.safety_tx_hook(
+      libsafety_py.make_CANPacket(0x777, 1, bytes.fromhex("0210030000000000"))))
     self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x08A, 1, CAMRY_COMMON[0x08A])))
 
   def test_0x160_is_not_host_replaceable(self):
@@ -363,10 +367,10 @@ class TestToyotaCamryTSS3Safety(unittest.TestCase):
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x230), 0)
 
   def test_rejects_bad_header_reserved_bytes_and_overangle(self):
-    for index in (0, 1, 3, 6, 7):
+    for index in (0, 1, 2, 6, 7):
       data = bytearray(self.c7()[0].data)
       data[index] ^= 1
-      self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x1FDC0002, 1, bytes(data))))
+      self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x777, 1, bytes(data))))
 
     self.assertFalse(self.safety.safety_tx_hook(self.c7(1746)))
 
