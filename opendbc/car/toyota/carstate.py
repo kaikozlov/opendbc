@@ -191,9 +191,11 @@ class CarState(CarStateBase):
                           cp.vl["TSS3_EPS_TELEMETRY"]["STEERING_WHEEL_TORQUE_FINE"]) if not driver_torque_invalid else 0.0
     ret.steeringTorqueEps = 0.0
     ret.steeringPressed = abs(ret.steeringTorque) >= TSS3_STEER_DRIVER_TORQUE_THRESHOLD
-    # H/F exposes one immediate fault/inhibit aggregate, but the retained data
-    # does not divide it into openpilot's temporary/permanent classes.
-    ret.steerFaultTemporary = False
+    # Exact H/F closes this bit as the immediate steering fault/inhibit aggregate.
+    # It is sufficient to report current steering unavailability through the normal
+    # openpilot temporary-fault mechanism, but it does not identify a restart-required
+    # or otherwise permanent class.
+    ret.steerFaultTemporary = bool(cp.vl["TSS3_EPS_TELEMETRY"]["EPS_FAULT_INHIBIT"])
     ret.steerFaultPermanent = False
 
     request = cp.vl["TSS3_CONTROL_REQUEST"]

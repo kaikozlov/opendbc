@@ -168,6 +168,23 @@ class TestToyotaCorollaTSS3(unittest.TestCase):
     self.assertFalse(state.cruiseState.enabled)
     self.assertFalse(state.cruiseState.standstill)
 
+  def test_immediate_eps_fault_inhibit_reports_temporary_fault(self):
+    ci = CarInterface(self.CP)
+    state = update_state(ci)
+    self.assertFalse(state.steerFaultTemporary)
+    self.assertFalse(state.steerFaultPermanent)
+
+    faulted = bytearray(SPAN_FRAMES[0x030])
+    faulted[6] |= 0x04  # EPS_FAULT_INHIBIT, B6 bit2
+    state = None
+    for i in range(20):
+      packets = [CanData(msg.address, bytes(faulted) if msg.address == 0x030 else msg.dat, msg.src)
+                 for msg in state_packets()]
+      state = ci.update([(2_000_000_000 + i * 10_000_000, packets)])
+    self.assertTrue(state.canValid)
+    self.assertTrue(state.steerFaultTemporary)
+    self.assertFalse(state.steerFaultPermanent)
+
   def test_hybrid_subtype_detection_uses_diagnostic_architecture(self):
     # Exact EPS F181 is shared across ICE/HV. GTS differentiates the HV install
     # set by category 466 Brake Booster, while the hybrid controller and 0x127
