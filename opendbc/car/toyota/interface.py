@@ -35,7 +35,9 @@ class CarInterface(CarInterfaceBase):
 
     if ret.flags & ToyotaFlags.TSS3:
       ret.steerControlType = SteerControlType.angle
-      ret.radarUnavailable = Bus.radar not in DBC[candidate]
+      # Geometry/velocity and lateral sign have independent retained anchors,
+      # but target validity and reassignment semantics are not qualified for fusion.
+      ret.radarUnavailable = True
       ret.openpilotLongitudinalControl = False
       ret.autoResumeSng = False
       ret.minEnableSpeed = -1.

@@ -26,7 +26,7 @@ def _create_radar_can_parser(CP):
     messages = list(zip(RADAR_A_MSGS + RADAR_B_MSGS, [20] * (msg_a_n + msg_b_n), strict=True))
     messages.append(('STATUS_MSG', 10))
 
-  return CANParser(DBC[CP.carFingerprint][Bus.radar], messages, 1)
+  return CANParser(DBC[CP.carFingerprint][Bus.radar], messages, 0 if CP.flags & ToyotaFlags.TSS3 else 1)
 
 
 class RadarInterface(RadarInterfaceBase):
@@ -54,6 +54,10 @@ class RadarInterface(RadarInterfaceBase):
     if self.rcp is None:
       return super().update(None)
 
+    if self.CP.flags & ToyotaFlags.TSS3:
+      # A truncated FD packet must not be zero-padded into a plausible object.
+      can_strings = [(t, [msg for msg in frames if msg[0] not in self.rcp.addresses or len(msg[1]) == 64])
+                     for t, frames in can_strings]
     vls = self.rcp.update(can_strings)
     self.updated_messages.update(vls)
 
@@ -71,23 +75,34 @@ class RadarInterface(RadarInterfaceBase):
       ret.errors.canError = True
 
     if self.CP.flags & ToyotaFlags.TSS3:
-      # Empty geometry slots use the exact 0xFFF8 longitudinal sentinel
-      # (655.28 m). The three core RadarPoint quantities are source-real:
-      # u16*0.01 m range, s12*0.05 m lateral, and s10*0.1 m/s relative speed.
-      # Toyota's existing radar convention is right-positive on the wire, while
-      # openpilot's car frame is left-positive, hence the yRel sign inversion.
+      # All three geometry/motion pairs belong to the same source cycle. The
+      # byte counters wrap together every 256 cycles; they are not a global ID.
+      messages = self.RADAR_A_MSGS + self.RADAR_B_MSGS
+      complete = set(messages).issubset(updated_messages)
+      cycles = {(self.rcp.vl[msg]['COUNTER'], self.rcp.vl[msg]['CYCLE_BYTE']) for msg in messages}
+      if not complete or len(cycles) != 1 or ret.errors.canError:
+        self.pts.clear()
+        ret.errors.canError = True
+        return ret
+
+      # Independent vision/gyro/wheel-speed anchors, not diagnostic FFD scales:
+      # range word * 0.005 m; signed12 lateral * 0.04 m, already left-positive;
+      # low14 motion word * 0.025 m/s. The top two motion bits are flags.
+      # Object validity and continuous-slot reassignment remain unqualified;
+      # this decoder stays disabled in production CarParams for now.
       for bank, geometry_msg in enumerate(self.RADAR_A_MSGS):
         geometry = self.rcp.vl[geometry_msg]
         motion = self.rcp.vl[geometry_msg + 3]
         for slot in range(8):
           point_id = bank * 8 + slot
           distance = geometry[f'DIST_{slot}']
-          if 0. < distance <= 500.:
+          if 0. < distance < 0xFFF8 * 0.005:
             if point_id not in self.pts:
               self.pts[point_id] = RadarData.RadarPoint()
-              self.pts[point_id].trackId = point_id
+              self.pts[point_id].trackId = self.track_id
+              self.track_id += 1
             self.pts[point_id].dRel = distance
-            self.pts[point_id].yRel = -geometry[f'LAT_{slot}']
+            self.pts[point_id].yRel = geometry[f'LAT_{slot}']
             self.pts[point_id].vRel = motion[f'VREL_{slot}']
           elif point_id in self.pts:
             del self.pts[point_id]

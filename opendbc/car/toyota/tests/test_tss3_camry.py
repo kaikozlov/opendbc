@@ -6,6 +6,7 @@ from opendbc.car.fw_query_definitions import PlatformResolverContext
 from opendbc.car.toyota.fingerprints import FW_VERSIONS
 from opendbc.car.toyota.interface import CarInterface
 from opendbc.car.toyota.radar_interface import RadarInterface
+from opendbc.car.toyota.toyotacan import toyota_e2e_p05_checksum
 from opendbc.car.toyota.values import CAR, DBC, EPS_SCALE, ToyotaFlags, ToyotaSafetyFlags, resolve_platform
 from opendbc.safety.tests.libsafety import libsafety_py
 
@@ -69,7 +70,7 @@ def update_state(ci: CarInterface, moving: bool = False, counter_offset: int = 0
     packets = ([CanData(address, data, 1) for address, data in frames.items()] +
                [CanData(0x160, long_with_counter(CAMRY_LONG, CAMRY_LONG[2] + counter_offset + i), 2)])
     if hud is not None:
-      packets.append(CanData(0x412, hud, 2))
+      packets.append(CanData(0x412, hud, 1))
     state = ci.update([(1_000_000_000 + i * 10_000_000, packets)])
   return state
 
@@ -103,7 +104,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertTrue(self.CP.openpilotLongitudinalControl)
     self.assertTrue(self.CP.alphaLongitudinalAvailable)
     self.assertFalse(self.CP.autoResumeSng)
-    self.assertFalse(self.CP.radarUnavailable)
+    self.assertTrue(self.CP.radarUnavailable)
     self.assertEqual(DBC[CAR.TOYOTA_CAMRY_TSS3][Bus.radar], "toyota_tss3_pt_generated")
     self.assertAlmostEqual(self.CP.steerRatio, 15.3, places=3)
     # paramsd learns a multiplier of CP.tireStiffnessFront/Rear, not a
@@ -132,29 +133,38 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertEqual(resolve_platform({}, "JTDAA12K0T0123456", {}, context), {str(CAR.TOYOTA_CAMRY_TSS3)})
 
   def test_tss3_radar_points_from_retained_object_bank(self):
+    # Exercise the candidate parser explicitly; unqualified tracks are not
+    # enabled for normal radar/vision fusion by the production CarParams.
+    self.CP.radarUnavailable = False
     ri = RadarInterface(self.CP)
-    packets = [CanData(address, data, 1) for address, data in CAMRY_RADAR.items()]
+    packets = [CanData(address, data, 0) for address, data in CAMRY_RADAR.items()]
     rr = ri.update([(1_000_000_000, packets)])
     self.assertIsNotNone(rr)
     points = {point.trackId: point for point in rr.points}
     self.assertEqual(set(points), set(range(8)))
-    self.assertAlmostEqual(points[0].dRel, 18.66, places=2)
-    self.assertAlmostEqual(points[0].yRel, -0.8, places=2)
-    self.assertAlmostEqual(points[2].dRel, 21.69, places=2)
-    self.assertAlmostEqual(points[2].yRel, 6.5, places=2)
-    self.assertAlmostEqual(points[2].vRel, -0.2, places=2)
+    self.assertAlmostEqual(points[0].dRel, 9.33, places=2)
+    self.assertAlmostEqual(points[0].yRel, 0.64, places=2)
+    self.assertAlmostEqual(points[2].dRel, 10.845, places=2)
+    self.assertAlmostEqual(points[2].yRel, -5.2, places=2)
+    self.assertAlmostEqual(points[2].vRel, -0.1, places=2)
 
     empty = {}
     sentinel = bytes.fromhex("fff8000000ffff") * 8
     for address in range(0x180, 0x183):
       data = bytearray(CAMRY_RADAR[address])
       data[4:60] = sentinel
+      data[2] = (data[2] + 1) & 0xFF
+      data[3] = (data[3] + 1) & 0xFF
+      data[:2] = toyota_e2e_p05_checksum(address, data).to_bytes(2, "little")
       empty[address] = bytes(data)
     for address in range(0x183, 0x186):
       data = bytearray(CAMRY_RADAR[address])
       data[4:60] = bytes(56)
+      data[2] = (data[2] + 1) & 0xFF
+      data[3] = (data[3] + 1) & 0xFF
+      data[:2] = toyota_e2e_p05_checksum(address, data).to_bytes(2, "little")
       empty[address] = bytes(data)
-    rr = ri.update([(1_050_000_000, [CanData(address, data, 1) for address, data in empty.items()])])
+    rr = ri.update([(1_050_000_000, [CanData(address, data, 0) for address, data in empty.items()])])
     self.assertIsNotNone(rr)
     self.assertEqual(len(rr.points), 0)
 
@@ -224,50 +234,25 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     angle = int.from_bytes(data[4:6], "big", signed=True) * (1024 / 17870)
     self.assertAlmostEqual(angle, state.steeringAngleDeg, delta=0.12)
 
-  def test_controller_owns_camry_hud_at_native_cadence(self):
+  def test_stock_harness_hud_is_observed_not_replaced(self):
     ci = CarInterface(self.CP)
     update_state(ci, hud=CAMRY_HUD)
+    self.assertEqual(ci.can_parsers[Bus.pt].vl["TSS3_LKAS_HUD"]["BYTE_0"], 0x14)
+    self.assertNotIn(0x412, ci.can_parsers[Bus.cam].addresses)
+    for i in range(110):
+      _, sends = ci.apply(control(1.0, cancel=True, left_lane=True, right_lane=True, steer_alert=True),
+                          2_000_000_000 + i * 10_000_000)
+      self.assertFalse(any(address in (0x101, 0x412) for address, _, _ in sends))
 
-    # Replace Toyota's wheel-nudge visual with openpilot's lane/DM state.
-    _, sends = ci.apply(control(1.0, left_lane=True, right_lane=True), 2_000_000_000)
-    hud = next(data for address, data, bus in sends if address == 0x412 and bus == 0)
-    self.assertEqual(hud, bytes.fromhex("1400004401ee9307"))
-
-    # Stable state follows the measured ~1 Hz source heartbeat; changed state
-    # may publish at the recovered <=10 Hz event rate.
-    for i in range(1, 100):
-      _, sends = ci.apply(control(1.0, left_lane=True, right_lane=True), 2_000_000_000 + i * 10_000_000)
-      self.assertFalse(any(address == 0x412 for address, _, _ in sends))
-    _, sends = ci.apply(control(1.0, left_lane=True, right_lane=True), 3_000_000_000)
-    self.assertTrue(any(address == 0x412 for address, _, _ in sends))
-
-    for i in range(1, 10):
-      ci.apply(control(1.0, left_lane=True, right_lane=True, steer_alert=True), 3_000_000_000 + i * 10_000_000)
-    _, sends = ci.apply(control(1.0, left_lane=True, right_lane=True, steer_alert=True), 3_100_000_000)
-    hud = next(data for address, data, bus in sends if address == 0x412 and bus == 0)
-    self.assertEqual(hud, bytes.fromhex("140c004401ee9307"))
-
-  def test_controller_preserves_noncanonical_hud_and_asymmetric_orientation(self):
-    ci = CarInterface(self.CP)
-    asymmetric = bytes.fromhex("1200001202ee9307")
-    update_state(ci, hud=asymmetric)
-    _, sends = ci.apply(control(1.0, left_lane=False, right_lane=True), 2_000_000_000)
-    hud = next(data for address, data, bus in sends if address == 0x412 and bus == 0)
-    self.assertEqual(hud, bytes.fromhex("1400004201ee9307"))
-
-    ci = CarInterface(self.CP)
-    noncanonical = bytes.fromhex("1000042102ee9307")
-    update_state(ci, hud=noncanonical)
-    _, sends = ci.apply(control(1.0, False, left_lane=True, steer_alert=True), 2_000_000_000)
-    hud = next(data for address, data, bus in sends if address == 0x412 and bus == 0)
-    self.assertEqual(hud, noncanonical)
-
-  def test_controller_brake_cancel_clones_stock_101(self):
+  def test_reengagement_does_not_reuse_the_residents_consumed_sequence(self):
     ci = CarInterface(self.CP)
     update_state(ci)
-    _, sends = ci.apply(control(1.0, cancel=True), 2_000_000_000)
-    cancel = next(msg for msg in sends if msg[0] == 0x101)
-    self.assertEqual(cancel, (0x101, bytes.fromhex("8800000100000093"), 2))
+    frames = []
+    for active in (True, False, True):
+      _, sends = ci.apply(control(1.0, active=active), 2_000_000_000)
+      frames.append(next(data for address, data, _ in sends if address == 0x1FDC0002))
+      ci.apply(control(1.0, active=active), 2_010_000_000)
+    self.assertEqual([frame[2] for frame in frames], [1, 0, 2])
 
 
 class TestToyotaCamryTSS3Safety(unittest.TestCase):
@@ -297,6 +282,7 @@ class TestToyotaCamryTSS3Safety(unittest.TestCase):
     data[4] = (data[4] & 0x80) | (raw >> 8)
     data[5] = raw & 0xFF
     data[12] = round(-accel / 0.1) & 0x7F
+    data[:2] = toyota_e2e_p05_checksum(0x160, data).to_bytes(2, "little")
     return libsafety_py.make_CANPacket(0x160, bus, bytes(data))
 
   def test_tss3_longitudinal_bounds_and_dynamic_forwarding(self):
@@ -305,8 +291,10 @@ class TestToyotaCamryTSS3Safety(unittest.TestCase):
     self.assertFalse(self.safety.safety_tx_hook(self.long_request(1.4)))
     self.assertFalse(self.safety.safety_tx_hook(self.long_request(-1.6)))
     self.assertFalse(self.safety.safety_tx_hook(self.long_request(0.0, bus=1)))
-    unsafe_coarse = bytearray(self.long_request(0.0).data)
+    unsafe_coarse = bytearray(self.long_request(0.0).data[0:32])
     unsafe_coarse[12] = (-30) & 0x7F
+    unsafe_coarse[:2] = toyota_e2e_p05_checksum(0x160, unsafe_coarse).to_bytes(2, "little")
+    self.assertEqual(len(unsafe_coarse), 32)
     self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x160, 0, bytes(unsafe_coarse))))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x160), -1)
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x230), 0)
@@ -330,30 +318,43 @@ class TestToyotaCamryTSS3Safety(unittest.TestCase):
     self.assertFalse(self.safety.get_controls_allowed())
     self.assertFalse(self.safety.safety_tx_hook(self.c7()))
 
-  def test_brake_cancel_safety_allows_only_stock_shaped_checked_frame(self):
-    good = bytes.fromhex("8800000600000098")
-    self.assertTrue(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x101, 2, good)))
+  def test_byte_exact_stock_handoff_is_not_clipped_to_host_limits(self):
+    # Native August-27 drive A, segment 4, 308202253232 ns: the measured
+    # B4:B5 quantity is -1.532, outside the bounded host request envelope.
+    stock = bytes.fromhex("8e78bf82fa04400537281b000da81280022f80c0000fffc40000000000000000")
+    tx = libsafety_py.make_CANPacket(0x160, 0, stock)
+    self.assertFalse(self.safety.safety_tx_hook(tx))
+    self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x160, 2, stock)))
+    self.assertTrue(self.safety.safety_tx_hook(tx))
+    changed = bytearray(stock)
+    changed[13] ^= 1
+    changed[:2] = toyota_e2e_p05_checksum(0x160, changed).to_bytes(2, "little")
+    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x160, 0, changed)))
+    corrupt = bytearray(stock)
+    corrupt[0] ^= 1
+    self.assertFalse(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x160, 2, corrupt)))
+    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x160, 0, corrupt)))
 
-    brake_off = bytearray(good)
-    brake_off[0] &= ~0x08
-    brake_off[7] = (8 + 1 + 1 + sum(brake_off[:7])) & 0xFF
-    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x101, 2, bytes(brake_off))))
+  def test_corrupt_host_longitudinal_packet_is_rejected(self):
+    packet = self.long_request(0.5)
+    packet[0].data[0] ^= 1
+    self.assertFalse(self.safety.safety_tx_hook(packet))
 
-    bad_shape = bytearray(good)
-    bad_shape[4] = 1
-    bad_shape[7] = (8 + 1 + 1 + sum(bad_shape[:7])) & 0xFF
-    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x101, 2, bytes(bad_shape))))
+  def test_unsplit_hud_and_brake_are_not_host_replaceable(self):
+    for address, data in ((0x101, bytes.fromhex("8800000600000098")),
+                          (0x412, bytes.fromhex("1400004401ee9307"))):
+      for bus in range(3):
+        self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(address, bus, data)))
+      self.assertEqual(self.safety.safety_fwd_hook(2, address), 0)
 
-    bad_checksum = bytearray(good)
-    bad_checksum[7] ^= 1
-    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x101, 2, bytes(bad_checksum))))
-    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x101, 0, good)))
-
-  def test_camry_hud_is_a_camera_owned_replacement(self):
-    clean_hud = bytes.fromhex("1400004401ee9307")
-    self.assertTrue(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x412, 0, clean_hud)))
-    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x412, 2, clean_hud)))
-    self.assertEqual(self.safety.safety_fwd_hook(2, 0x412), -1)
+  def test_absolute_angle_limit_is_not_just_a_rate_limit(self):
+    for sign in (-1, 1):
+      self.safety.set_controls_allowed(True)
+      self.safety.set_desired_angle_last(sign * 1744)
+      self.assertTrue(self.safety.safety_tx_hook(self.c7(sign * 1745)))
+      self.safety.set_controls_allowed(True)
+      self.safety.set_desired_angle_last(sign * 1745)
+      self.assertFalse(self.safety.safety_tx_hook(self.c7(sign * 1746)))
 
 
 if __name__ == "__main__":
