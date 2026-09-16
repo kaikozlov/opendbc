@@ -49,15 +49,16 @@ class RadarInterface(RadarInterfaceBase):
 
     self.rcp = None if CP.radarUnavailable else _create_radar_can_parser(CP)
     self.updated_messages = set()
+    self.tss3_cycle = None
+    self.tss3_cycle_time = None
 
   def update(self, can_strings):
     if self.rcp is None:
       return super().update(None)
 
     if self.CP.flags & ToyotaFlags.TSS3:
-      # A truncated FD packet must not be zero-padded into a plausible object.
-      can_strings = [(t, [msg for msg in frames if msg[0] not in self.rcp.addresses or len(msg[1]) == 64])
-                     for t, frames in can_strings]
+      return self._update_tss3(can_strings)
+
     vls = self.rcp.update(can_strings)
     self.updated_messages.update(vls)
 
@@ -66,8 +67,79 @@ class RadarInterface(RadarInterfaceBase):
 
     rr = self._update(self.updated_messages)
     self.updated_messages.clear()
-
     return rr
+
+  def _update_tss3(self, can_packets):
+    # Consume every source cycle, including intermediate lifecycle events when
+    # multiple cycles arrive in one publication. Reading only the last vl would
+    # lose a deletion/replacement followed by an ordinary tracking update.
+    self.frame += 1
+    result = None
+    for nanos, packets in can_packets:
+      for address, data, bus in packets:
+        if bus != self.rcp.bus or address not in self.rcp.addresses or len(data) != 64:
+          continue
+        updated = self.rcp.update([(nanos, [(address, data, bus)])])
+        self.updated_messages.update(updated)
+        if len(self.updated_messages) != len(self.rcp.addresses):
+          continue
+        cycles = {(int(self.rcp.vl[a]["COUNTER"]), int(self.rcp.vl[a]["CYCLE_BYTE"])) for a in self.rcp.addresses}
+        if len(cycles) != 1:
+          continue
+        cycle = next(iter(cycles))
+        self.updated_messages.clear()
+        if cycle == self.tss3_cycle:
+          continue
+        # Both source bytes increment independently modulo 256; they are not
+        # one 16-bit counter. A missing cycle can hide a one-frame lifecycle
+        # flag, so do not carry object identity across it.
+        gap = self.tss3_cycle is not None and any((new - old) % 256 != 1 for new, old in zip(cycle, self.tss3_cycle, strict=True))
+        timeout = self.tss3_cycle_time is not None and any(
+          nanos - self.tss3_cycle_time > state.timeout_threshold for state in self.rcp.message_states.values())
+        if gap or timeout:
+          self.pts.clear()
+        self.tss3_cycle = cycle
+        self.tss3_cycle_time = nanos
+        result = self._update_tss3_points()
+      # Advance normal CAN-parser liveness even when no radar frame arrives.
+      self.rcp.update([(nanos, [])])
+
+    if not self.rcp.can_valid:
+      self.pts.clear()
+      if self.tss3_cycle_time is not None or self.rcp.bus_timeout:
+        self.updated_messages.clear()
+      self.tss3_cycle = None
+      self.tss3_cycle_time = None
+      if result is not None or self.frame % 5 == 0:
+        result = RadarData()
+        result.errors.canError = True
+    return result
+
+  def _update_tss3_points(self):
+    for bank, address in enumerate(self.RADAR_A_MSGS):
+      geometry, motion = self.rcp.vl[address], self.rcp.vl[address + 3]
+      for slot in range(8):
+        key = bank * 8 + slot
+        # Ending the previous track and starting its replacement can happen in
+        # the same occupied slot, without an intervening empty range sentinel.
+        if motion[f"TRACK_ENDED_{slot}"] or motion[f"NEW_TRACK_{slot}"]:
+          self.pts.pop(key, None)
+        if motion[f"TRACK_ENDED_{slot}"] and not motion[f"NEW_TRACK_{slot}"]:
+          continue
+        distance = geometry[f"DIST_{slot}"]
+        if motion[f"TRACK_STATE_{slot}"] == 0 or not 0 < distance < 0xFFF8 * 0.005:
+          self.pts.pop(key, None)
+          continue
+        if key not in self.pts:
+          self.pts[key] = RadarData.RadarPoint()
+          self.pts[key].trackId = self.track_id
+          self.track_id += 1
+        self.pts[key].dRel = distance
+        self.pts[key].yRel = geometry[f"LAT_{slot}"]
+        self.pts[key].vRel = motion[f"VREL_{slot}"]
+    result = RadarData()
+    result.points = list(self.pts.values())
+    return result
 
   def _update(self, updated_messages):
     ret = RadarData()
@@ -75,40 +147,12 @@ class RadarInterface(RadarInterfaceBase):
       ret.errors.canError = True
 
     if self.CP.flags & ToyotaFlags.TSS3:
-      # All three geometry/motion pairs belong to the same source cycle. The
-      # byte counters wrap together every 256 cycles; they are not a global ID.
-      messages = self.RADAR_A_MSGS + self.RADAR_B_MSGS
-      complete = set(messages).issubset(updated_messages)
-      cycles = {(self.rcp.vl[msg]['COUNTER'], self.rcp.vl[msg]['CYCLE_BYTE']) for msg in messages}
-      if not complete or len(cycles) != 1 or ret.errors.canError:
+      cycles = {(int(self.rcp.vl[a]["COUNTER"]), int(self.rcp.vl[a]["CYCLE_BYTE"])) for a in self.rcp.addresses}
+      if ret.errors.canError or set(updated_messages) != self.rcp.addresses or len(cycles) != 1:
         self.pts.clear()
         ret.errors.canError = True
         return ret
-
-      # Independent vision/gyro/wheel-speed anchors, not diagnostic FFD scales:
-      # range word * 0.005 m; signed12 lateral * 0.04 m, already left-positive;
-      # low14 motion word * 0.025 m/s. The top two motion bits are flags.
-      # Object validity and continuous-slot reassignment remain unqualified;
-      # this decoder stays disabled in production CarParams for now.
-      for bank, geometry_msg in enumerate(self.RADAR_A_MSGS):
-        geometry = self.rcp.vl[geometry_msg]
-        motion = self.rcp.vl[geometry_msg + 3]
-        for slot in range(8):
-          point_id = bank * 8 + slot
-          distance = geometry[f'DIST_{slot}']
-          if 0. < distance < 0xFFF8 * 0.005:
-            if point_id not in self.pts:
-              self.pts[point_id] = RadarData.RadarPoint()
-              self.pts[point_id].trackId = self.track_id
-              self.track_id += 1
-            self.pts[point_id].dRel = distance
-            self.pts[point_id].yRel = geometry[f'LAT_{slot}']
-            self.pts[point_id].vRel = motion[f'VREL_{slot}']
-          elif point_id in self.pts:
-            del self.pts[point_id]
-
-      ret.points = list(self.pts.values())
-      return ret
+      return self._update_tss3_points()
 
     if self.rcp.vl['STATUS_MSG']['RADAR_STATUS'] != 1 or self.rcp.vl['STATUS_MSG']['RADAR_PRE_FAULT'] != 0:
       ret.errors.radarUnavailableTemporary = True

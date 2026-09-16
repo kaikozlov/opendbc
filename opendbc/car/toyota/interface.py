@@ -35,9 +35,9 @@ class CarInterface(CarInterfaceBase):
 
     if ret.flags & ToyotaFlags.TSS3:
       ret.steerControlType = SteerControlType.angle
-      # Geometry/velocity and lateral sign have independent retained anchors,
-      # but target validity and reassignment semantics are not qualified for fusion.
-      ret.radarUnavailable = True
+      # Camry object geometry, qualifier and lifecycle are verified against
+      # retained source frames; other TSS3 platforms have no radar DBC mapping.
+      ret.radarUnavailable = Bus.radar not in DBC[candidate]
       ret.openpilotLongitudinalControl = False
       ret.autoResumeSng = False
       ret.minEnableSpeed = -1.

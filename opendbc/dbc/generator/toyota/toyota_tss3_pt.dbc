@@ -168,6 +168,30 @@ BO_ 387 TSS3_OBJECT_MOTION_0: 64 XXX
  SG_ VREL_5 : 325|14@0- (0.025,0) [-204.8|204.775] "m/s" XXX
  SG_ VREL_6 : 381|14@0- (0.025,0) [-204.8|204.775] "m/s" XXX
  SG_ VREL_7 : 437|14@0- (0.025,0) [-204.8|204.775] "m/s" XXX
+ SG_ NEW_TRACK_0 : 71|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_ENDED_0 : 76|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_STATE_0 : 73|2@0+ (1,0) [0|3] "" XXX
+ SG_ NEW_TRACK_1 : 127|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_ENDED_1 : 132|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_STATE_1 : 129|2@0+ (1,0) [0|3] "" XXX
+ SG_ NEW_TRACK_2 : 183|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_ENDED_2 : 188|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_STATE_2 : 185|2@0+ (1,0) [0|3] "" XXX
+ SG_ NEW_TRACK_3 : 239|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_ENDED_3 : 244|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_STATE_3 : 241|2@0+ (1,0) [0|3] "" XXX
+ SG_ NEW_TRACK_4 : 295|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_ENDED_4 : 300|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_STATE_4 : 297|2@0+ (1,0) [0|3] "" XXX
+ SG_ NEW_TRACK_5 : 351|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_ENDED_5 : 356|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_STATE_5 : 353|2@0+ (1,0) [0|3] "" XXX
+ SG_ NEW_TRACK_6 : 407|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_ENDED_6 : 412|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_STATE_6 : 409|2@0+ (1,0) [0|3] "" XXX
+ SG_ NEW_TRACK_7 : 463|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_ENDED_7 : 468|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_STATE_7 : 465|2@0+ (1,0) [0|3] "" XXX
 
 BO_ 388 TSS3_OBJECT_MOTION_1: 64 XXX
  SG_ CHECKSUM : 0|16@1+ (1,0) [0|65535] "" XXX
@@ -181,6 +205,30 @@ BO_ 388 TSS3_OBJECT_MOTION_1: 64 XXX
  SG_ VREL_5 : 325|14@0- (0.025,0) [-204.8|204.775] "m/s" XXX
  SG_ VREL_6 : 381|14@0- (0.025,0) [-204.8|204.775] "m/s" XXX
  SG_ VREL_7 : 437|14@0- (0.025,0) [-204.8|204.775] "m/s" XXX
+ SG_ NEW_TRACK_0 : 71|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_ENDED_0 : 76|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_STATE_0 : 73|2@0+ (1,0) [0|3] "" XXX
+ SG_ NEW_TRACK_1 : 127|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_ENDED_1 : 132|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_STATE_1 : 129|2@0+ (1,0) [0|3] "" XXX
+ SG_ NEW_TRACK_2 : 183|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_ENDED_2 : 188|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_STATE_2 : 185|2@0+ (1,0) [0|3] "" XXX
+ SG_ NEW_TRACK_3 : 239|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_ENDED_3 : 244|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_STATE_3 : 241|2@0+ (1,0) [0|3] "" XXX
+ SG_ NEW_TRACK_4 : 295|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_ENDED_4 : 300|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_STATE_4 : 297|2@0+ (1,0) [0|3] "" XXX
+ SG_ NEW_TRACK_5 : 351|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_ENDED_5 : 356|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_STATE_5 : 353|2@0+ (1,0) [0|3] "" XXX
+ SG_ NEW_TRACK_6 : 407|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_ENDED_6 : 412|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_STATE_6 : 409|2@0+ (1,0) [0|3] "" XXX
+ SG_ NEW_TRACK_7 : 463|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_ENDED_7 : 468|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_STATE_7 : 465|2@0+ (1,0) [0|3] "" XXX
 
 BO_ 389 TSS3_OBJECT_MOTION_2: 64 XXX
  SG_ CHECKSUM : 0|16@1+ (1,0) [0|65535] "" XXX
@@ -194,6 +242,30 @@ BO_ 389 TSS3_OBJECT_MOTION_2: 64 XXX
  SG_ VREL_5 : 325|14@0- (0.025,0) [-204.8|204.775] "m/s" XXX
  SG_ VREL_6 : 381|14@0- (0.025,0) [-204.8|204.775] "m/s" XXX
  SG_ VREL_7 : 437|14@0- (0.025,0) [-204.8|204.775] "m/s" XXX
+ SG_ NEW_TRACK_0 : 71|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_ENDED_0 : 76|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_STATE_0 : 73|2@0+ (1,0) [0|3] "" XXX
+ SG_ NEW_TRACK_1 : 127|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_ENDED_1 : 132|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_STATE_1 : 129|2@0+ (1,0) [0|3] "" XXX
+ SG_ NEW_TRACK_2 : 183|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_ENDED_2 : 188|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_STATE_2 : 185|2@0+ (1,0) [0|3] "" XXX
+ SG_ NEW_TRACK_3 : 239|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_ENDED_3 : 244|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_STATE_3 : 241|2@0+ (1,0) [0|3] "" XXX
+ SG_ NEW_TRACK_4 : 295|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_ENDED_4 : 300|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_STATE_4 : 297|2@0+ (1,0) [0|3] "" XXX
+ SG_ NEW_TRACK_5 : 351|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_ENDED_5 : 356|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_STATE_5 : 353|2@0+ (1,0) [0|3] "" XXX
+ SG_ NEW_TRACK_6 : 407|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_ENDED_6 : 412|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_STATE_6 : 409|2@0+ (1,0) [0|3] "" XXX
+ SG_ NEW_TRACK_7 : 463|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_ENDED_7 : 468|1@0+ (1,0) [0|1] "" XXX
+ SG_ TRACK_STATE_7 : 465|2@0+ (1,0) [0|3] "" XXX
 
 BO_ 257 BRAKE_MODULE: 8 XXX
  SG_ SET_ME_1 : 7|1@0+ (1,0) [0|1] "" XXX
@@ -272,7 +344,7 @@ CM_ BO_ 48 "Exact H/F EPS transmits this 32-byte PDU. Driver torque and B6 safet
 CM_ SG_ 48 STEERING_WHEEL_TORQUE_TRUNC "DID 0x1035 Steering Wheel Torque source, saturating truncation-toward-zero 0.1 Nm view. It can differ from COARSE by one count due to firmware rounding.";
 CM_ SG_ 48 STEERING_WHEEL_TORQUE_COARSE "Coarse component of exact physical Steering Wheel Torque reconstruction.";
 CM_ SG_ 48 STEERING_WHEEL_TORQUE_FINE "Signed hundredths remainder. Exact torque = COARSE + FINE.";
-CM_ SG_ 48 EPS_FAULT_INHIBIT "Target-native EPS fault/inhibit aggregate; do not infer temporary/permanent openpilot fault class.";
+CM_ SG_ 48 EPS_FAULT_INHIBIT "Selected live EPS fault/inhibit aggregate. Exact F33 maps its recoverable current-unavailability projection to openpilot steerFaultTemporary; this is not an exhaustive fault list or a restart-required latch. H/F policy is separate.";
 CM_ SG_ 48 DRIVER_TORQUE_INVALID "Target-native driver-torque invalid/inhibit gate.";
 CM_ SG_ 48 EPS_STATUS_B6_BIT1 "Runtime status bit; exact OEM meaning unresolved.";
 CM_ SG_ 48 EPS_STATUS_B6_BIT3 "Runtime status bit; exact OEM meaning unresolved.";
@@ -294,3 +366,9 @@ VAL_ 182 TARGET_LATERAL_ID 27 "Remote Parking" 25 "AP" 19 "PDA" 11 "LTA/LCA" 10 
 CM_ SG_ 138 ACC_STATE "Retained Corolla values: 0x12 idle/standby, Span 0x5D engaged; contributor live captures additionally report 0x47 engaged and 0x67 standstill hold. Bit 0x20 is the standstill/hold substate.";
 CM_ SG_ 138 COROLLA_ACC_ENGAGED "Byte22 bit0x10 is the generation-native Corolla ACC engaged gate: 2363 clear / 37 asserted frames in the retained Span drive and used by Albino's validated longitudinal port.";
 CM_ SG_ 593 UI_SET_SPEED "Contributor live capture reports byte2 as the retained dash set speed in mph, factor 1.0; retained public/Span excerpts contain no set-speed adjustment and remain zero.";
+
+CM_ BO_ 387 "Camry retained August/September object lifecycle: each slot B4[7] starts a new track; B5[4] ends the old track and can coincide with a new one. B5[1:0] is a raw object state: zero includes empty and unqualified retained geometry. Individual nonzero state names remain unassigned.";
+
+CM_ BO_ 388 "Camry retained August/September object lifecycle: each slot B4[7] starts a new track; B5[4] ends the old track and can coincide with a new one. B5[1:0] is a raw object state: zero includes empty and unqualified retained geometry. Individual nonzero state names remain unassigned.";
+
+CM_ BO_ 389 "Camry retained August/September object lifecycle: each slot B4[7] starts a new track; B5[4] ends the old track and can coincide with a new one. B5[1:0] is a raw object state: zero includes empty and unqualified retained geometry. Individual nonzero state names remain unassigned.";

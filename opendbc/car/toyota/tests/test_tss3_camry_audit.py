@@ -67,9 +67,12 @@ class TestCamryEvidenceAudit(unittest.TestCase):
   def test_planner_limits_match_the_camry_actuator_envelope(self):
     self.assertEqual(CarInterface.get_pid_accel_limits(self.cp, 15.0, 25.0), (-1.5, 1.3))
 
-  def test_unqualified_radar_uses_the_normal_model_only_path(self):
-    self.assertTrue(self.cp.radarUnavailable)
-    self.assertIsNone(RadarInterface(self.cp).rcp)
+  def test_lifecycle_qualified_camry_radar_does_not_enable_other_tss3_variants(self):
+    self.assertFalse(self.cp.radarUnavailable)
+    self.assertIsNotNone(RadarInterface(self.cp).rcp)
+    corolla = CarInterface.get_non_essential_params(CAR.TOYOTA_COROLLA_TSS3)
+    self.assertTrue(corolla.radarUnavailable)
+    self.assertIsNone(RadarInterface(corolla).rcp)
 
   @staticmethod
   def radar_cycle(counter, *, empty=False):

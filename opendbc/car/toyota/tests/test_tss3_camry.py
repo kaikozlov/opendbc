@@ -61,10 +61,15 @@ def fingerprint() -> dict[int, dict[int, int]]:
   return fp
 
 
-def update_state(ci: CarInterface, moving: bool = False, counter_offset: int = 0, hud: bytes | None = None):
+def update_state(ci: CarInterface, moving: bool = False, counter_offset: int = 0, hud: bytes | None = None, eps_status: int | None = None):
   state = None
   for i in range(20):
     frames = dict(CAMRY_COMMON)
+    if eps_status is not None:
+      eps = bytearray(frames[0x030])
+      eps[6] = eps_status
+      eps[7] = (sum(eps[:7]) + 0x38) & 0xFF
+      frames[0x030] = bytes(eps)
     if moving:
       frames[0x0AA] = bytes.fromhex("1c001c001c001c00")
     packets = ([CanData(address, data, 1) for address, data in frames.items()] +
@@ -104,7 +109,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertTrue(self.CP.openpilotLongitudinalControl)
     self.assertTrue(self.CP.alphaLongitudinalAvailable)
     self.assertFalse(self.CP.autoResumeSng)
-    self.assertTrue(self.CP.radarUnavailable)
+    self.assertFalse(self.CP.radarUnavailable)
     self.assertEqual(DBC[CAR.TOYOTA_CAMRY_TSS3][Bus.radar], "toyota_tss3_pt_generated")
     self.assertAlmostEqual(self.CP.steerRatio, 15.3, places=3)
     # paramsd learns a multiplier of CP.tireStiffnessFront/Rear, not a
@@ -133,9 +138,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertEqual(resolve_platform({}, "JTDAA12K0T0123456", {}, context), {str(CAR.TOYOTA_CAMRY_TSS3)})
 
   def test_tss3_radar_points_from_retained_object_bank(self):
-    # Exercise the candidate parser explicitly; unqualified tracks are not
-    # enabled for normal radar/vision fusion by the production CarParams.
-    self.CP.radarUnavailable = False
+    # Raw source frames exercise the default Camry radar interface.
     ri = RadarInterface(self.CP)
     packets = [CanData(address, data, 0) for address, data in CAMRY_RADAR.items()]
     rr = ri.update([(1_000_000_000, packets)])
@@ -189,6 +192,26 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertFalse(state.carNotReady)
     self.assertFalse(state.steerFaultTemporary)
     self.assertFalse(state.steerFaultPermanent)
+
+  def test_current_fault_inhibit_asserts_and_clears_without_a_permanent_latch(self):
+    ci = CarInterface(self.CP)
+    clear = update_state(ci, moving=True, eps_status=0)
+    self.assertFalse(clear.steerFaultTemporary)
+    fault = update_state(ci, moving=True, counter_offset=20, eps_status=0x04)
+    self.assertTrue(fault.steerFaultTemporary)
+    self.assertFalse(fault.steerFaultPermanent)
+    self.assertFalse(fault.vehicleSensorsInvalid)
+    recovered = update_state(ci, moving=True, counter_offset=40, eps_status=0)
+    self.assertFalse(recovered.steerFaultTemporary)
+    self.assertFalse(recovered.steerFaultPermanent)
+
+  def test_unrelated_eps_status_bits_are_not_promoted_to_faults(self):
+    for status in (0, 1, 2, 8, 0xF0):
+      with self.subTest(status=status):
+        state = update_state(CarInterface(self.CP), eps_status=status)
+        self.assertFalse(state.steerFaultTemporary)
+        self.assertFalse(state.steerFaultPermanent)
+        self.assertEqual(state.vehicleSensorsInvalid, bool(status & 1))
 
   def test_controller_emits_c7_and_template_preserving_longitudinal_request(self):
     ci = CarInterface(self.CP)
