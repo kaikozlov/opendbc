@@ -530,6 +530,11 @@ def match_fw_to_car_fuzzy(live_fw_versions, vin, offline_fw_versions) -> set[str
 # Toyota vehicle types are release/region-specific OEM identities. This bridge
 # is deliberately curated: the GTS resolver may identify an unsupported car,
 # but it cannot declare that car control-compatible with an openpilot platform.
+# Corolla ICE/HV remain one control platform: GTS gives them the same EMPS/ABS/FRC
+# stack, while every mapped HV install set adds category 466 Brake Booster.
+TOYOTA_COROLLA_TSS3_ICE_VEHICLE_TYPES = frozenset((12512, 12513, 12516, 12821, 12822, 12827))
+TOYOTA_COROLLA_TSS3_HYBRID_VEHICLE_TYPES = frozenset((12514, 12515, 12823, 12824))
+
 TOYOTA_PLATFORM_BY_VEHICLE: dict[tuple[str, int], CAR] = {
   # Camry/Camry HV 2021-24. All resolve the established TSS2 architecture
   # (FRC category 430), distinct from the category-498 TSS3 architecture.
@@ -548,10 +553,8 @@ TOYOTA_PLATFORM_BY_VEHICLE: dict[tuple[str, int], CAR] = {
   # Corolla generation-23 and generation-25 identities covering the two
   # directly acquired H/F EPS specimens. Corolla Cross and GR Corolla remain
   # separate even though GTS may place them in the same broad TSS3 family.
-  **{("NA", vehicle_type): CAR.TOYOTA_COROLLA_TSS3 for vehicle_type in (
-    12512, 12513, 12514, 12515, 12516,
-    12821, 12822, 12823, 12824, 12827,
-  )},
+  **{("NA", vehicle_type): CAR.TOYOTA_COROLLA_TSS3
+     for vehicle_type in TOYOTA_COROLLA_TSS3_ICE_VEHICLE_TYPES | TOYOTA_COROLLA_TSS3_HYBRID_VEHICLE_TYPES},
 }
 
 
@@ -671,7 +674,7 @@ FW_QUERY_CONFIG = FwQueryConfig(
     # - Body Control Module ((0x750, 0x40))
     # - Telematics ((0x750, 0xc7))
 
-    # Hybrid control computer can be on 0x7e2 (KWP) or 0x7d2 (UDS) depending on platform
+    # Hybrid control computer can be on 0x7e2 (KWP) or 0x7d2 (UDS) depending on platform.
     (Ecu.hybrid, 0x7e2, None),  # Hybrid Control Assembly & Computer
     (Ecu.hybrid, 0x7d2, None),  # Hybrid Control Assembly & Computer
     (Ecu.srs, 0x780, None),     # SRS Airbag

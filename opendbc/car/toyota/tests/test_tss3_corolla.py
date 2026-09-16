@@ -6,7 +6,8 @@ from opendbc.car import Bus, CanData, structs
 from opendbc.car.fw_versions import match_fw_to_car_exact
 from opendbc.car.toyota.fingerprints import FW_VERSIONS
 from opendbc.car.toyota.interface import CarInterface
-from opendbc.car.toyota.values import CAR, DBC, EPS_SCALE, FW_QUERY_CONFIG, TOYOTA_PLATFORM_BY_VEHICLE, ToyotaFlags, ToyotaSafetyFlags
+from opendbc.car.toyota.values import CAR, DBC, EPS_SCALE, FW_QUERY_CONFIG, TOYOTA_COROLLA_TSS3_HYBRID_VEHICLE_TYPES, \
+                                      TOYOTA_COROLLA_TSS3_ICE_VEHICLE_TYPES, TOYOTA_PLATFORM_BY_VEHICLE, ToyotaFlags, ToyotaSafetyFlags
 from opendbc.safety.tests.libsafety import libsafety_py
 
 
@@ -131,7 +132,9 @@ class TestToyotaCorollaTSS3(unittest.TestCase):
       bytes.fromhex("023839363546313230383030300000000038413331313132303230303000000000"),
       bytes.fromhex("023839363546313230383030300000000038413331313132313330303000000000"),
     ])
-    for vehicle_type in (12512, 12513, 12514, 12515, 12516, 12821, 12822, 12823, 12824, 12827):
+    self.assertEqual(TOYOTA_COROLLA_TSS3_ICE_VEHICLE_TYPES, {12512, 12513, 12516, 12821, 12822, 12827})
+    self.assertEqual(TOYOTA_COROLLA_TSS3_HYBRID_VEHICLE_TYPES, {12514, 12515, 12823, 12824})
+    for vehicle_type in TOYOTA_COROLLA_TSS3_ICE_VEHICLE_TYPES | TOYOTA_COROLLA_TSS3_HYBRID_VEHICLE_TYPES:
       self.assertEqual(TOYOTA_PLATFORM_BY_VEHICLE[("NA", vehicle_type)], CAR.TOYOTA_COROLLA_TSS3)
     self.assertTrue(any(request.bus == 1 and request.whitelist_ecus == [Ecu.eps, Ecu.abs] and not request.obd_multiplexing
                         for request in FW_QUERY_CONFIG.requests))
@@ -164,6 +167,20 @@ class TestToyotaCorollaTSS3(unittest.TestCase):
     self.assertTrue(state.cruiseState.available)
     self.assertFalse(state.cruiseState.enabled)
     self.assertFalse(state.cruiseState.standstill)
+
+  def test_hybrid_subtype_detection_uses_diagnostic_architecture(self):
+    # Exact EPS F181 is shared across ICE/HV. GTS differentiates the HV install
+    # set by category 466 Brake Booster, while the hybrid controller and 0x127
+    # remain independent positive fingerprints.
+    for ecu in (Ecu.hybrid, Ecu.electricBrakeBooster):
+      with self.subTest(ecu=ecu):
+        fw = structs.CarParams.CarFw()
+        fw.ecu = ecu
+        cp = CarInterface.get_params(CAR.TOYOTA_COROLLA_TSS3, fingerprint(hybrid=False), [fw], False, False, False)
+        self.assertTrue(cp.flags & ToyotaFlags.HYBRID)
+        ci = CarInterface(cp)
+        self.assertIn("GEAR_PACKET_HYBRID", ci.can_parsers[Bus.pt].vl)
+        self.assertNotIn("TSS3_GEAR_PACKET", ci.can_parsers[Bus.pt].vl)
 
   def test_tss3_gear_carriers(self):
     ice_cp = CarInterface.get_params(CAR.TOYOTA_COROLLA_TSS3, fingerprint(hybrid=False), [], False, False, False)
