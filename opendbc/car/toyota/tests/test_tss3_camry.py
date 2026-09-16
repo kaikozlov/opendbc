@@ -1,5 +1,6 @@
 import unittest
 
+from opendbc.can import CANParser
 from opendbc.car import Bus, CanData, structs
 from opendbc.car.fw_versions import match_fw_to_car_exact
 from opendbc.car.fw_query_definitions import PlatformResolverContext
@@ -63,12 +64,15 @@ def fingerprint() -> dict[int, dict[int, int]]:
 
 
 def update_state(ci: CarInterface, moving: bool = False, counter_offset: int = 0, hud: bytes | None = None,
-                 eps_status: int | None = None, eps_telemetry: bytes | None = None):
+                 eps_status: int | None = None, eps_telemetry: bytes | None = None,
+                 control_request: bytes | None = None):
   state = None
   for i in range(20):
     frames = dict(CAMRY_COMMON)
     if eps_telemetry is not None:
       frames[0x030] = eps_telemetry
+    if control_request is not None:
+      frames[0x08A] = control_request
     if eps_status is not None:
       eps = bytearray(frames[0x030])
       eps[6] = eps_status
@@ -187,6 +191,34 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertEqual(self.CP.minSteerSpeed, 0.)
     self.assertTrue(self.CP.steerAtStandstill)
 
+  def test_unified_tss3_request_and_result_dbc_layout(self):
+    request_parser = CANParser("toyota_tss3_pt_generated", [("TSS3_CONTROL_REQUEST", 0)], 1)
+    request_parser.update([(1_000_000_000, [CanData(0x08A, CAMRY_COMMON[0x08A], 1)])])
+    request = request_parser.vl["TSS3_CONTROL_REQUEST"]
+    self.assertAlmostEqual(request["LONGITUDINAL_REQUEST_ACCEL_A"], -0.442, places=6)
+    self.assertAlmostEqual(request["LONGITUDINAL_REQUEST_ACCEL_B"], -0.442, places=6)
+    self.assertEqual(request["DELAYED_HOLD_STATE"], 0)
+    self.assertEqual(request["LONGITUDINAL_REQUEST_ID_A"], 11)
+    self.assertEqual(request["LONGITUDINAL_ALLOCATION_METHOD_A"], 1)
+    self.assertEqual(request["LONGITUDINAL_REQUEST_ID_B"], 17)
+    self.assertEqual(request["LONGITUDINAL_ALLOCATION_METHOD_B"], 3)
+    self.assertEqual(request["TARGET_LATERAL_ID"], 0)
+    self.assertAlmostEqual(request["LATERAL_REQUEST_PINION_ANGLE"], -0.203 * 1.000121519, places=6)
+    self.assertAlmostEqual(request["LATERAL_ASSIST_GAIN"], 1.0, places=6)
+    self.assertAlmostEqual(request["LATERAL_DAMPING_GAIN"], 0.0, places=6)
+    self.assertEqual(request["REQUEST_SEQUENCE"], 60)
+
+    # Retained relay-correct drive-A result frame with selected longitudinal ID11.
+    result_frame = bytes.fromhex("00000018ffc80b730000000400000000000dffc8ffa2135dffa2000043d6390a")
+    result_parser = CANParser("toyota_tss3_pt_generated", [("TSS3_CONTROL_RESULT", 0)], 1)
+    result_parser.update([(1_010_000_000, [CanData(0x081, result_frame, 1)])])
+    result = result_parser.vl["TSS3_CONTROL_RESULT"]
+    self.assertEqual(result["LONGITUDINAL_RESULT_ID"], 11)
+    self.assertEqual(result["REQUEST_LOSS_STATUS"], 0)
+    self.assertEqual(result["LATERAL_RESULT_ID"], 0)
+    self.assertAlmostEqual(result["LATERAL_RESULT_PINION_ANGLE"], 0.013 * 1.000121519, places=6)
+    self.assertAlmostEqual(result["LONGITUDINAL_RESULT_ACCEL"], -0.094, places=6)
+
   def test_stock_toyota_b_state_is_entirely_on_bus_one(self):
     ci = CarInterface(self.CP)
     self.assertEqual(ci.can_parsers[Bus.pt].bus, 1)
@@ -197,6 +229,27 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertFalse(state.carNotReady)
     self.assertFalse(state.steerFaultTemporary)
     self.assertFalse(state.steerFaultPermanent)
+
+  def test_delayed_hold_uses_request_id_and_allocation_not_raw_acc_state(self):
+    ci = CarInterface(self.CP)
+    normal = bytearray(CAMRY_COMMON[0x08A])
+    normal[7] = 0x47  # request-B ID17 / Brake Only
+    self.assertFalse(update_state(ci, control_request=bytes(normal)).cruiseState.standstill)
+
+    hold = bytearray(CAMRY_COMMON[0x08A])
+    hold[4] |= 0x20
+    hold[7] = 0x67  # request-B ID25 / Brake Only
+    self.assertTrue(update_state(ci, counter_offset=20, control_request=bytes(hold)).cruiseState.standstill)
+
+    hold_override = bytearray(CAMRY_COMMON[0x08A])
+    hold_override[4] |= 0x20
+    hold_override[6:8] = bytes((0x2C, 0x66))  # A allocation0, B ID25/allocation2
+    self.assertTrue(update_state(ci, counter_offset=40, control_request=bytes(hold_override)).cruiseState.standstill)
+
+    moving_id25 = bytearray(CAMRY_COMMON[0x08A])
+    moving_id25[6:8] = bytes((0x47, 0x65))  # retained moving counterexample: B ID25/allocation1
+    self.assertFalse(update_state(ci, moving=True, counter_offset=60,
+                                  control_request=bytes(moving_id25)).cruiseState.standstill)
 
   def test_current_fault_inhibit_asserts_and_clears_without_a_permanent_latch(self):
     ci = CarInterface(self.CP)
