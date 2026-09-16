@@ -110,8 +110,8 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertFalse(self.CP.flags & ToyotaFlags.TSS2)
     self.assertFalse(self.CP.dashcamOnly)
     self.assertFalse(self.CP.secOcRequired)
-    self.assertTrue(self.CP.openpilotLongitudinalControl)
-    self.assertTrue(self.CP.alphaLongitudinalAvailable)
+    self.assertFalse(self.CP.openpilotLongitudinalControl)
+    self.assertFalse(self.CP.alphaLongitudinalAvailable)
     self.assertFalse(self.CP.autoResumeSng)
     self.assertFalse(self.CP.radarUnavailable)
     self.assertEqual(DBC[CAR.TOYOTA_CAMRY_TSS3][Bus.radar], "toyota_tss3_pt_generated")
@@ -123,16 +123,17 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertEqual(self.CP.steerControlType, structs.CarParams.SteerControlType.angle)
     self.assertEqual(self.CP.safetyConfigs[0].safetyModel, structs.CarParams.SafetyModel.toyota)
     self.assertTrue(self.CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.F33)
-    self.assertFalse(self.CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.STOCK_LONGITUDINAL)
+    self.assertTrue(self.CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.STOCK_LONGITUDINAL)
     self.assertEqual(DBC[CAR.TOYOTA_CAMRY_TSS3][Bus.pt], "toyota_tss3_pt_generated")
     self.assertTrue(self.CP.enableBsm)
 
-  def test_alpha_long_gating(self):
-    cp = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint(), [], False, False, False)
-    self.assertTrue(cp.alphaLongitudinalAvailable)
-    self.assertFalse(cp.openpilotLongitudinalControl)
-    self.assertFalse(cp.autoResumeSng)
-    self.assertTrue(cp.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.STOCK_LONGITUDINAL)
+  def test_unqualified_camry_longitudinal_is_not_advertised(self):
+    for alpha_long in (False, True):
+      cp = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint(), [], alpha_long, False, False)
+      self.assertFalse(cp.alphaLongitudinalAvailable)
+      self.assertFalse(cp.openpilotLongitudinalControl)
+      self.assertFalse(cp.autoResumeSng)
+      self.assertTrue(cp.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.STOCK_LONGITUDINAL)
 
   def test_exact_identity_and_oem_resolver(self):
     fw = FW_VERSIONS[CAR.TOYOTA_CAMRY_TSS3]
@@ -243,39 +244,19 @@ class TestToyotaCamryTSS3(unittest.TestCase):
         self.assertFalse(state.steerFaultPermanent)
         self.assertEqual(state.vehicleSensorsInvalid, bool(status & 1))
 
-  def test_controller_emits_c7_and_template_preserving_longitudinal_request(self):
+  def test_controller_emits_c7_without_unqualified_camry_longitudinal_output(self):
     ci = CarInterface(self.CP)
     update_state(ci, moving=True)
     output, sends = ci.apply(control(5.0, accel=1.2, long_active=True), 2_000_000_000)
-    self.assertEqual(len(sends), 2)
-    address, data, bus = next(msg for msg in sends if msg[0] == 0x1FDC0002)
+    self.assertEqual(len(sends), 1)
+    address, data, bus = sends[0]
     self.assertEqual((address, bus, len(data)), (0x1FDC0002, 1, 8))
     self.assertEqual(data[:4], b"\x00\xC7\x01\x00")
     self.assertEqual(data[6:], b"\x00\x00")
     self.assertAlmostEqual(output.steeringAngleDeg,
                            int.from_bytes(data[4:6], "big", signed=True) * (1024 / 17870), delta=0.03)
-    _, long_data, long_bus = next(msg for msg in sends if msg[0] == 0x160)
-    self.assertEqual(long_bus, 0)
-    expected = bytearray(CAMRY_LONG)
-    expected[4:6] = bytes.fromhex("84b0")
-    expected[12] = 0x74
-    self.assertEqual(long_data, long_with_counter(expected, CAMRY_LONG[2] + 19))
-
-    state = update_state(ci, counter_offset=20)
-    self.assertLess(state.vEgo, 0.45)
-    output, sends = ci.apply(control(5.0, accel=1.2, long_active=True), 2_100_000_000)
-    _, long_data, _ = next(msg for msg in sends if msg[0] == 0x160)
-    self.assertEqual(long_data, long_with_counter(CAMRY_LONG, CAMRY_LONG[2] + 39))
     self.assertEqual(output.accel, 0.0)
-
-  def test_camry_coarse_request_uses_bounded_inverse_tenths(self):
-    ci = CarInterface(self.CP)
-    update_state(ci, moving=True)
-    output, sends = ci.apply(control(0.0, accel=1.5, long_active=True), 2_000_000_000)
-    _, data, _ = next(msg for msg in sends if msg[0] == 0x160)
-    self.assertAlmostEqual(output.accel, 1.3)
-    self.assertEqual(data[4:6], bytes.fromhex("8514"))
-    self.assertEqual(data[12], 0x73)
+    self.assertFalse(any(address == 0x160 for address, _, _ in sends))
 
   def test_inactive_c7_tracks_measured_angle_with_neutral_sequence(self):
     ci = CarInterface(self.CP)
