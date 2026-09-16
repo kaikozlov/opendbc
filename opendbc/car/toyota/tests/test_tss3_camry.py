@@ -15,7 +15,8 @@ Ecu = structs.CarParams.Ecu
 
 CAMRY_COMMON = {
   0x025: bytes.fromhex("000100005000007e0000000000000000000000000000000000000000bb6fee54"),
-  0x030: bytes.fromhex("00000000170000500000100026820000000000010000ffff00000000b280595f"),
+  # Operating zero-torque source: route 8d, segment 6, logMonoTime 3057008786467.
+  0x030: bytes.fromhex("000000ffc400201b00ffc0ff9e00003f22000000ff9e007000000000b96152f6"),
   0x08A: bytes.fromhex("0000000880002d47fe462afe467fff007fffff35c000100064003c005db7797f"),
   0x0AA: bytes.fromhex("1a6f1a6f1a6f1a6f"),
   0x0FE: bytes.fromhex("567d393f0000c36200000000000000002640000000ff000000000000d54aaf10"),
@@ -61,10 +62,13 @@ def fingerprint() -> dict[int, dict[int, int]]:
   return fp
 
 
-def update_state(ci: CarInterface, moving: bool = False, counter_offset: int = 0, hud: bytes | None = None, eps_status: int | None = None):
+def update_state(ci: CarInterface, moving: bool = False, counter_offset: int = 0, hud: bytes | None = None,
+                 eps_status: int | None = None, eps_telemetry: bytes | None = None):
   state = None
   for i in range(20):
     frames = dict(CAMRY_COMMON)
+    if eps_telemetry is not None:
+      frames[0x030] = eps_telemetry
     if eps_status is not None:
       eps = bytearray(frames[0x030])
       eps[6] = eps_status
@@ -204,6 +208,32 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     recovered = update_state(ci, moving=True, counter_offset=40, eps_status=0)
     self.assertFalse(recovered.steerFaultTemporary)
     self.assertFalse(recovered.steerFaultPermanent)
+
+  def test_carstate_cooperative_inhibits_assert_and_recover(self):
+    for command_inhibit, angle_inhibit in ((1, 0), (0, 1), (1, 1)):
+      with self.subTest(command=command_inhibit, angle=angle_inhibit):
+        ci = CarInterface(self.CP)
+        raw = bytearray(CAMRY_COMMON[0x030])
+        raw[16] = (raw[16] & ~1) | command_inhibit
+        raw[19] = (raw[19] & ~1) | angle_inhibit
+        state = update_state(ci, eps_telemetry=bytes(raw), hud=CAMRY_HUD)
+        self.assertTrue(state.canValid)
+        self.assertTrue(state.steerFaultTemporary)
+        self.assertFalse(state.steerFaultPermanent)
+        self.assertFalse(state.vehicleSensorsInvalid)
+        state = update_state(ci, counter_offset=20, hud=CAMRY_HUD)
+        self.assertFalse(state.steerFaultTemporary)
+        self.assertFalse(state.steerFaultPermanent)
+
+  def test_reference_initializing_source_is_not_healthy_steering(self):
+    # The original fixture is valid telemetry, but F33's reference-inhibit
+    # signal at B19[0] is set. Do not silently label this startup state healthy.
+    initializing = bytes.fromhex("00000000170000500000100026820000000000010000ffff00000000b280595f")
+    state = update_state(CarInterface(self.CP), eps_telemetry=initializing, hud=CAMRY_HUD)
+    self.assertTrue(state.canValid)
+    self.assertTrue(state.steerFaultTemporary)
+    self.assertFalse(state.steerFaultPermanent)
+    self.assertFalse(state.vehicleSensorsInvalid)
 
   def test_unrelated_eps_status_bits_are_not_promoted_to_faults(self):
     for status in (0, 1, 2, 8, 0xF0):
