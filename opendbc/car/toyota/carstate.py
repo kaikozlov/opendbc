@@ -126,10 +126,13 @@ class CarState(CarStateBase):
                           cp.vl["TSS3_EPS_TELEMETRY"]["STEERING_WHEEL_TORQUE_FINE"]) if not driver_torque_invalid else 0.0
     ret.steeringTorqueEps = 0.0
     ret.steeringPressed = abs(ret.steeringTorque) >= TSS3_STEER_DRIVER_TORQUE_THRESHOLD
-    # Exact F33 4C000 -> 4C97A publishes a live OR of selected active DEM
-    # counts and fault statuses. The counts decrement on recovery; the bit
-    # is not the separate latched-history/restart-required classification.
-    ret.steerFaultTemporary = bool(cp.vl["TSS3_EPS_TELEMETRY"]["EPS_FAULT_INHIBIT"])
+    # F33 publishes selected current hardware faults plus two separate
+    # cooperative-control inhibits. Either inhibit exits its steering-ready
+    # state (CE772/CE7A6). The command aggregate merges clearing and latched
+    # failures, so these bits do not identify a restart-required fault class.
+    ret.steerFaultTemporary = any(cp.vl["TSS3_EPS_TELEMETRY"][signal] for signal in (
+      "EPS_FAULT_INHIBIT", "F33_COOPERATIVE_COMMAND_INHIBIT", "F33_COOPERATIVE_ANGLE_INHIBIT",
+    ))
     ret.steerFaultPermanent = False
 
     if self.CP.enableBsm:
