@@ -64,15 +64,15 @@ def create_accel_command_2(packer, accel):
   return packer.make_can_msg("ACC_CONTROL_2", 0, values)
 
 
-def create_tss3_brake_cancel_command(packer, stock_brake):
-  """Clone live 0x101 state and assert only the source-real brake-cancel bit."""
+def create_tss3_brake_cancel_command(packer, stock_brake, bus):
+  """Clone live 0x101 state and assert only the native brake-cancel bit."""
   values = {
     "SET_ME_1": stock_brake["SET_ME_1"],
     "BRAKE_PRESSED": 1,
     "BRAKE_BYTE_1": stock_brake["BRAKE_BYTE_1"],
     "BRAKE_BYTE_3": stock_brake["BRAKE_BYTE_3"],
   }
-  return packer.make_can_msg("BRAKE_MODULE", 2, values)
+  return packer.make_can_msg("BRAKE_MODULE", bus, values)
 
 
 def create_tss3_hud_command(stock_hud, left_line: bool, right_line: bool, lat_active: bool, steer_alert: bool):

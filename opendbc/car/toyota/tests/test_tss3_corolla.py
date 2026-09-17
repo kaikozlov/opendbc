@@ -95,11 +95,12 @@ def update_control_state(ci, moving: bool = True, counter_offset: int = 0, *,
   return state
 
 
-def control(angle, active=True, accel=0.0, long_active=False):
+def control(angle, active=True, accel=0.0, long_active=False, cancel=False):
   cc = structs.CarControl()
   cc.enabled = True
   cc.latActive = active
   cc.longActive = long_active
+  cc.cruiseControl.cancel = cancel
   cc.actuators.steeringAngleDeg = angle
   cc.actuators.accel = accel
   return cc.as_reader()
@@ -299,6 +300,22 @@ class TestToyotaCorollaTSS3(unittest.TestCase):
     self.assertFalse(any(address == 0x160 for address, _, _ in sends))
     self.assertEqual(output.accel, 0.0)
 
+  def test_controller_uses_native_brake_module_for_stock_acc_cancel(self):
+    ci = CarInterface(self.CP)
+    update_state(ci)
+    self.assertIsNotNone(ci.CS.tss3_brake_module)
+    self.assertEqual(int(ci.CS.tss3_brake_module["BRAKE_BYTE_3"]), SPAN_FRAMES[0x101][3])
+
+    _, sends = ci.apply(control(0.0, active=False, cancel=True), 2_000_000_000)
+    self.assertEqual({address for address, _, _ in sends}, {0x101, 0x777})
+    _, data, bus = next(msg for msg in sends if msg[0] == 0x101)
+    self.assertEqual(bus, 1)
+    expected = with_toyota_checksum(0x101, bytes((0x88, 0x00, 0x00, SPAN_FRAMES[0x101][3], 0, 0, 0, 0)))
+    self.assertEqual(data, expected)
+
+    _, sends = ci.apply(control(0.0, active=False, cancel=False), 2_010_000_000)
+    self.assertFalse(any(address == 0x101 for address, _, _ in sends))
+
 
 class TestToyotaCorollaTSS3Safety(unittest.TestCase):
   def setUp(self):
@@ -332,6 +349,18 @@ class TestToyotaCorollaTSS3Safety(unittest.TestCase):
       data = bytearray(self.c7()[0].data)
       data[index] ^= 1
       self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x777, 1, bytes(data))))
+
+  def test_stock_shaped_brake_cancel_only(self):
+    cancel = with_toyota_checksum(0x101, bytes.fromhex("8800003a00000000"))
+    self.assertTrue(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x101, 1, cancel)))
+    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x101, 2, cancel)))
+
+    clear = with_toyota_checksum(0x101, bytes.fromhex("8000003a00000000"))
+    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x101, 1, clear)))
+
+    bad_checksum = bytearray(cancel)
+    bad_checksum[7] ^= 1
+    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x101, 1, bytes(bad_checksum))))
 
   def test_0x160_is_not_host_replaceable(self):
     for bus in range(3):

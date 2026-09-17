@@ -261,7 +261,8 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
     };
 
     const bool signer_control = (msg->bus == 1U) && (msg->addr == 0x777U);
-    tx = signer_control;
+    const bool corolla_brake_cancel = toyota_corolla_hf && (msg->bus == 1U) && (msg->addr == 0x101U);
+    tx = signer_control || corolla_brake_cancel;
     if (signer_control) {
       const bool header_valid = (msg->data[0] == 7U) && (msg->data[1] == 0xC7U) &&
                                 (msg->data[2] == 0xC7U) && (msg->data[6] == 0U) && (msg->data[7] == 0U);
@@ -271,6 +272,14 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
       tx = header_valid && !safety_max_limit_check(target_angle, TOYOTA_TSS3_ANGLE_STEERING_LIMITS.max_angle,
                                                   -TOYOTA_TSS3_ANGLE_STEERING_LIMITS.max_angle) &&
                           !steer_angle_cmd_checks(target_angle, steer_control_enabled, TOYOTA_TSS3_ANGLE_STEERING_LIMITS);
+    }
+    if (corolla_brake_cancel) {
+      // Stock-longitudinal cancel follows the normal openpilot policy boundary:
+      // require the native cancel actuation bit and a valid Toyota checksum.
+      // CarController clones every non-cancel field from the live 0x101 frame.
+      const bool brake_cancel = GET_BIT(msg, 3U);
+      const bool checksum_valid = toyota_compute_checksum(msg) == toyota_get_checksum(msg);
+      tx = brake_cancel && checksum_valid;
     }
     return tx;
   }
@@ -458,11 +467,12 @@ static safety_config toyota_init(uint16_t param) {
 
   safety_config ret;
   if (toyota_tss3_signer) {
-    static const CanMsg toyota_tss3_tx_msgs[] = {
-      {0x777, 1, 8, .check_relay = false},
-    };
-    SET_TX_MSGS(toyota_tss3_tx_msgs, ret);
     if (toyota_corolla_hf) {
+      static const CanMsg toyota_corolla_tss3_tx_msgs[] = {
+        {0x777, 1, 8, .check_relay = false},
+        {0x101, 1, 8, .check_relay = false},
+      };
+      SET_TX_MSGS(toyota_corolla_tss3_tx_msgs, ret);
       static RxCheck toyota_corolla_hf_rx_checks[] = {
         {.msg = {{0x025, 1, 32, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
         {.msg = {{0x0AA, 1, 8, 100U, .ignore_checksum = true, .ignore_counter = true}, {0}, {0}}},
@@ -472,6 +482,10 @@ static safety_config toyota_init(uint16_t param) {
       };
       SET_RX_CHECKS(toyota_corolla_hf_rx_checks, ret);
     } else {
+      static const CanMsg toyota_f33_tss3_tx_msgs[] = {
+        {0x777, 1, 8, .check_relay = false},
+      };
+      SET_TX_MSGS(toyota_f33_tss3_tx_msgs, ret);
       static RxCheck toyota_f33_rx_checks[] = {
         {.msg = {{0x025, 1, 32, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
         {.msg = {{0x0AA, 1, 8, 100U, .ignore_checksum = true, .ignore_counter = true}, {0}, {0}}},
