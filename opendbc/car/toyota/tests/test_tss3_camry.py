@@ -167,14 +167,31 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertIsNotNone(rr)
     self.assertEqual(len(rr.points), 0)
 
-  def test_exact_eps_identity_fingerprints_camry_tss3(self):
-    for version in FW_VERSIONS[CAR.TOYOTA_CAMRY_TSS3][(Ecu.eps, 0x7A1, None)]:
-      self.assertEqual(match_fw_to_car_exact({(0x7A1, None): {version}}, match_brand="toyota", log=False),
-                       {str(CAR.TOYOTA_CAMRY_TSS3)})
+  def test_exact_identity_survives_nrtd_diagnostic_eps_miss(self):
+    fw = FW_VERSIONS[CAR.TOYOTA_CAMRY_TSS3]
+    eps_version = fw[(Ecu.eps, 0x7A1, None)][0]
+    abs_version = fw[(Ecu.abs, 0x7B0, None)][0]
+
+    # Normal startup: both exact control-API and corroborating chassis identities match.
+    live_fw = {(0x7A1, None): {eps_version}, (0x7B0, None): {abs_version}}
+    self.assertEqual(match_fw_to_car_exact(live_fw, match_brand="toyota", log=False),
+                     {str(CAR.TOYOTA_CAMRY_TSS3)})
+
+    # NRTD startup can transiently miss EPS F181. The exact F33 ABS identity is
+    # enough to retain the platform instead of falling through to MOCK/dashcam mode.
+    self.assertEqual(match_fw_to_car_exact({(0x7B0, None): {abs_version}}, match_brand="toyota", log=False),
+                     {str(CAR.TOYOTA_CAMRY_TSS3)})
+
+    # Optional means "may be absent", not "ignore it": a present wrong EPS
+    # identity must still reject the Camry even when the ABS identity matches.
+    wrong_eps = bytearray(eps_version)
+    wrong_eps[13] ^= 1
+    mismatch = {(0x7A1, None): {bytes(wrong_eps)}, (0x7B0, None): {abs_version}}
+    self.assertNotIn(str(CAR.TOYOTA_CAMRY_TSS3),
+                     match_fw_to_car_exact(mismatch, match_brand="toyota", log=False))
 
     # Production control is not downgraded based on a transient diagnostic
-    # response failure. The exact EPS identity is part of fingerprinting, while
-    # runtime capability comes from source-real CAN state.
+    # response failure; runtime capability comes from source-real CAN state.
     self.assertEqual(self.CP.minSteerSpeed, 0.)
     self.assertTrue(self.CP.steerAtStandstill)
 
