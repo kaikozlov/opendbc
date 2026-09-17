@@ -105,6 +105,13 @@ class CarController(CarControllerBase):
       ))
       output.steeringAngleDeg = self.last_angle
 
+      # Stock longitudinal stays Toyota-owned. Match the normal openpilot Toyota
+      # cancel contract: controlsd owns CC.cruiseControl.cancel and CarController
+      # emits the target-native cancel carrier. Corolla's native 0x101 lives on
+      # the unsplit bus 1 and is cloned from the live Brake Module state.
+      if self.CP.carFingerprint == CAR.TOYOTA_COROLLA_TSS3 and CC.cruiseControl.cancel:
+        can_sends.append(toyotacan.create_tss3_brake_cancel_command(self.packer, CS.tss3_brake_module, 1))
+
       # Longitudinal remains Toyota-owned until openpilot can replace the
       # shared 0x08A request plane with source-real ownership.
       output.accel = 0.0
