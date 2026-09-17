@@ -648,7 +648,11 @@ FW_QUERY_CONFIG = FwQueryConfig(
   non_essential_ecus={
     # FIXME: On some models, abs can sometimes be missing
     Ecu.abs: [CAR.TOYOTA_RAV4, CAR.TOYOTA_COROLLA, CAR.TOYOTA_HIGHLANDER, CAR.TOYOTA_SIENNA, CAR.LEXUS_IS, CAR.TOYOTA_ALPHARD_TSS2,
-              CAR.TOYOTA_CAMRY_TSS3, CAR.TOYOTA_COROLLA_TSS3],
+              CAR.TOYOTA_COROLLA_TSS3],
+    # F33 can transiently miss EPS F181 during NRTD startup. Its exact ABS
+    # identity remains sufficient to identify the Camry; if EPS does respond,
+    # the generic exact matcher still requires that response to match.
+    Ecu.eps: [CAR.TOYOTA_CAMRY_TSS3],
     Ecu.fwdCamera: [CAR.TOYOTA_CAMRY_TSS3, CAR.TOYOTA_COROLLA_TSS3],
     # On some models, the engine can show on two different addresses
     Ecu.engine: [CAR.TOYOTA_HIGHLANDER, CAR.TOYOTA_CAMRY, CAR.TOYOTA_COROLLA_TSS2, CAR.TOYOTA_CHR, CAR.TOYOTA_CHR_TSS2, CAR.LEXUS_IS,
