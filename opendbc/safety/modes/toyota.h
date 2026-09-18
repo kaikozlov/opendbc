@@ -127,7 +127,7 @@ static void toyota_rx_hook(const CANPacket_t *msg) {
       }
       toyota_tss3_08a_native_valid = msg->data[21] == 0U;
     }
-    if ((msg->bus == 2U) && (msg->addr == 0xFU) && (GET_LEN(msg) == 8U)) {
+    if ((msg->bus == 0U) && (msg->addr == 0xFU) && (GET_LEN(msg) == 8U)) {
       const uint32_t reset_counter = ((uint32_t)msg->data[2] << 12U) |
                                      ((uint32_t)msg->data[3] << 4U) |
                                      ((uint32_t)msg->data[4] >> 4U);
@@ -657,7 +657,7 @@ static safety_config toyota_init(uint16_t param) {
         {.msg = {{0x101, 0, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
         {.msg = {{0x08A, 0, 32, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
         {.msg = {{0x08A, 2, 32, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
-        {.msg = {{0x00F, 2, 8, 10U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
+        {.msg = {{0x00F, 0, 8, 10U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
       };
       if (toyota_tss3_08a_host) {
         SET_RX_CHECKS(toyota_f33_08a_host_rx_checks, ret);

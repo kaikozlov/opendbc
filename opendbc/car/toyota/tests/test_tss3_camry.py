@@ -476,7 +476,7 @@ class TestToyotaCamryTSS3Id0ReplacementSafety(unittest.TestCase):
     data[2] = (reset >> 12) & 0xFF
     data[3] = (reset >> 4) & 0xFF
     data[4] = (reset & 0xF) << 4
-    return libsafety_py.make_CANPacket(0x00F, 2, bytes(data))
+    return libsafety_py.make_CANPacket(0x00F, 0, bytes(data))
 
   @staticmethod
   def admin(action: int, b26: int = 0):
