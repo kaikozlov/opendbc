@@ -74,7 +74,6 @@ static uint8_t toyota_tss3_08a_next_b26 = 0U;
 static uint32_t toyota_tss3_08a_last_tx_ts = 0U;
 static bool toyota_tss3_08a_sync_valid = false;
 static uint32_t toyota_tss3_08a_reset_counter = 0U;
-static uint32_t toyota_tss3_08a_active_reset_counter = 0U;
 static bool toyota_tss3_08a_msg_low2_valid = false;
 static uint8_t toyota_tss3_08a_msg_low2 = 0U;
 static uint8_t toyota_tss3_08a_oracle_next_cf = 0U;
@@ -131,10 +130,9 @@ static void toyota_rx_hook(const CANPacket_t *msg) {
       const uint32_t reset_counter = ((uint32_t)msg->data[2] << 12U) |
                                      ((uint32_t)msg->data[3] << 4U) |
                                      ((uint32_t)msg->data[4] >> 4U);
-      if (toyota_tss3_08a_replacement_active && (reset_counter != toyota_tss3_08a_active_reset_counter)) {
-        toyota_tss3_08a_replacement_active = false;
-        toyota_tss3_08a_msg_low2_valid = false;
-      }
+      // RESET_CNT advances normally at ~10 Hz while 0x08A continues at ~40 Hz.
+      // Ownership spans these increments; exact/signed replacements must simply
+      // carry the currently-valid reset-low2 in FV4.
       toyota_tss3_08a_reset_counter = reset_counter;
       toyota_tss3_08a_sync_valid = true;
     }
@@ -340,7 +338,6 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
                toyota_tss3_08a_sync_valid && !vehicle_moving;
           if (tx) {
             toyota_tss3_08a_next_b26 = (toyota_tss3_08a_native_app[26] + 1U) & 0x3FU;
-            toyota_tss3_08a_active_reset_counter = toyota_tss3_08a_reset_counter;
             toyota_tss3_08a_last_tx_ts = microsecond_timer_get();
             toyota_tss3_08a_msg_low2_valid = false;
             toyota_tss3_08a_replacement_active = true;
