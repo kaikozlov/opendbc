@@ -306,9 +306,9 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
     const bool corolla_brake_cancel = toyota_corolla_hf && (msg->bus == 1U) && (msg->addr == 0x101U);
     tx = signer_control || oracle_transport || host_08a || corolla_brake_cancel;
     if (signer_control) {
-      const bool c7_header_valid = (msg->data[0] == 7U) && (msg->data[1] == 0xC7U) &&
+      const bool c7_header_valid = !msg->fd && (msg->data[0] == 7U) && (msg->data[1] == 0xC7U) &&
                                     (msg->data[2] == 0xC7U) && (msg->data[6] == 0U) && (msg->data[7] == 0U);
-      const bool host_admin_valid = toyota_tss3_08a_host && !toyota_corolla_hf &&
+      const bool host_admin_valid = toyota_tss3_08a_host && !toyota_corolla_hf && !msg->fd &&
                                     (msg->data[0] == 7U) && (msg->data[1] == 0xC9U) &&
                                     (msg->data[2] == 0xA8U) && (msg->data[3] <= 1U) &&
                                     (msg->data[5] == 0U) && (msg->data[6] == 0U) && (msg->data[7] == 0U);
@@ -342,10 +342,10 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
       }
     }
     if (oracle_transport) {
-      const bool first_frame = (msg->data[0] == 0x10U) && (msg->data[1] == 40U) &&
+      const bool first_frame = !msg->fd && (msg->data[0] == 0x10U) && (msg->data[1] == 40U) &&
                                (msg->data[2] == 0xC9U) && (msg->data[3] == 0xC9U) &&
                                (msg->data[5] == 0U) && (msg->data[6] == 0x8AU);
-      const bool consecutive_frame = (toyota_tss3_08a_oracle_next_cf != 0U) &&
+      const bool consecutive_frame = !msg->fd && (toyota_tss3_08a_oracle_next_cf != 0U) &&
                                      (msg->data[0] == (0x20U | toyota_tss3_08a_oracle_next_cf));
       tx = first_frame || consecutive_frame;
       if (first_frame) {
@@ -359,7 +359,7 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
     }
     if (host_08a) {
       bool application_matches = toyota_tss3_08a_replacement_active && toyota_tss3_08a_native_valid &&
-                                 toyota_tss3_08a_sync_valid && (GET_LEN(msg) == 32U) && (msg->data[21] == 0U);
+                                 toyota_tss3_08a_sync_valid && msg->fd && (GET_LEN(msg) == 32U) && (msg->data[21] == 0U);
       for (uint8_t i = 0U; i < 28U; i++) {
         if (i != 26U) {
           application_matches &= msg->data[i] == toyota_tss3_08a_native_app[i];
