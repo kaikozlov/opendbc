@@ -5,7 +5,7 @@ from opendbc.car import Bus, DT_CTRL, create_button_events, structs
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.common.filter_simple import FirstOrderFilter
 from opendbc.car.interfaces import CarStateBase
-from opendbc.car.toyota.values import ToyotaFlags, CAR, DBC, STEER_THRESHOLD, EPS_SCALE, TSS3_STEER_DRIVER_TORQUE_THRESHOLD
+from opendbc.car.toyota.values import ToyotaFlags, ToyotaSafetyFlags, CAR, DBC, STEER_THRESHOLD, EPS_SCALE, TSS3_STEER_DRIVER_TORQUE_THRESHOLD
 
 ButtonType = structs.CarState.ButtonEvent.Type
 SteerControlType = structs.CarParams.SteerControlType
@@ -407,8 +407,11 @@ class CarState(CarStateBase):
         # The stock-harness capture puts 0x412 on unsplit bus 1, not
         # the intercepted ADAS link. Read it without claiming replacement.
         pt_messages.append(("TSS3_LKAS_HUD", 1))
+      relay_correct_f33 = (CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3 and CP.safetyConfigs and
+                           bool(CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.TSS3_08A_HOST.value))
+      pt_bus = 0 if relay_correct_f33 else 1
       return {
-        Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, 1),
+        Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, pt_bus),
         Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], [], 2),
       }
 

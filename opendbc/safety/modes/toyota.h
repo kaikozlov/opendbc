@@ -141,8 +141,11 @@ static void toyota_rx_hook(const CANPacket_t *msg) {
   }
 
   if (toyota_tss3_signer) {
-    // Stock Toyota-B exposes the TSS3 EPS/Brake network on unsplit bus 1.
-    if (msg_matches(msg, 0x25U, 1U)) {
+    // Stock Toyota-B uses unsplit bus 1. Exact-F33 host replacement requires
+    // the physical repin onto Panda's 0<->2 relay pair, with chassis state
+    // consumed downstream on bus 0 and the FRC source observed upstream on 2.
+    const uint8_t tss3_state_bus = toyota_tss3_08a_host ? 0U : 1U;
+    if (msg_matches(msg, 0x25U, tss3_state_bus)) {
       int angle_coarse = ((msg->data[0] & 0xFU) << 8U) | msg->data[1];
       angle_coarse = to_signed(angle_coarse, 12);
       const int angle_fraction = to_signed((msg->data[4] >> 4U) & 0xFU, 4);
@@ -150,13 +153,13 @@ static void toyota_rx_hook(const CANPacket_t *msg) {
       update_sample(&angle_meas, ROUND(((float)angle_tenths * 1787.0F) / 1024.0F));
     }
 
-    if (msg_matches(msg, 0x116U, 1U)) {
+    if (msg_matches(msg, 0x116U, tss3_state_bus)) {
       gas_pressed = msg->data[1] != 0U;
     }
-    if (msg_matches(msg, 0x101U, 1U)) {
+    if (msg_matches(msg, 0x101U, tss3_state_bus)) {
       brake_pressed = GET_BIT(msg, 3U);
     }
-    if (msg_matches(msg, 0xAAU, 1U)) {
+    if (msg_matches(msg, 0xAAU, tss3_state_bus)) {
       int speed = 0;
       for (uint8_t i = 0U; i < 8U; i += 2U) {
         speed += (((msg->data[i] & 0x7FU) << 8U) | msg->data[i + 1U]) - 6767;
@@ -168,10 +171,10 @@ static void toyota_rx_hook(const CANPacket_t *msg) {
         toyota_tss3_08a_msg_low2_valid = false;
       }
     }
-    if (!toyota_corolla_hf && msg_matches(msg, 0x8AU, 1U)) {
+    if (!toyota_corolla_hf && msg_matches(msg, 0x8AU, tss3_state_bus)) {
       pcm_cruise_check(GET_BIT(msg, 27U));
     }
-    if (toyota_corolla_hf && msg_matches(msg, 0x8AU, 1U)) {
+    if (toyota_corolla_hf && msg_matches(msg, 0x8AU, tss3_state_bus)) {
       pcm_cruise_check(GET_BIT(msg, 180U));
     }
     return;
@@ -641,11 +644,11 @@ static safety_config toyota_init(uint16_t param) {
         {.msg = {{0x08A, 1, 32, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
       };
       static RxCheck toyota_f33_08a_host_rx_checks[] = {
-        {.msg = {{0x025, 1, 32, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
-        {.msg = {{0x0AA, 1, 8, 100U, .ignore_checksum = true, .ignore_counter = true}, {0}, {0}}},
-        {.msg = {{0x116, 1, 8, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
-        {.msg = {{0x101, 1, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
-        {.msg = {{0x08A, 1, 32, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
+        {.msg = {{0x025, 0, 32, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
+        {.msg = {{0x0AA, 0, 8, 100U, .ignore_checksum = true, .ignore_counter = true}, {0}, {0}}},
+        {.msg = {{0x116, 0, 8, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
+        {.msg = {{0x101, 0, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
+        {.msg = {{0x08A, 0, 32, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
         {.msg = {{0x08A, 2, 32, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
         {.msg = {{0x00F, 2, 8, 10U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
       };
