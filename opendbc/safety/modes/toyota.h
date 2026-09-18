@@ -311,7 +311,7 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
 
     const bool signer_control = (msg->bus == 1U) && (msg->addr == 0x777U);
     const bool oracle_transport = toyota_tss3_08a_host && !toyota_corolla_hf &&
-                                  (msg->bus == 1U) && (msg->addr == 0x7A1U);
+                                  (msg->bus == 0U) && (msg->addr == 0x7A1U);
     const bool host_08a = toyota_tss3_08a_host && !toyota_corolla_hf &&
                           (msg->bus == 0U) && (msg->addr == 0x8AU);
     const bool corolla_brake_cancel = toyota_corolla_hf && (msg->bus == 1U) && (msg->addr == 0x101U);
@@ -684,7 +684,7 @@ static safety_config toyota_init(uint16_t param) {
     } else {
       static const CanMsg toyota_f33_tss3_tx_msgs[] = {
         {0x777, 1, 8, .check_relay = false},
-        {0x7A1, 1, 8, .check_relay = false},
+        {0x7A1, 0, 8, .check_relay = false},
         {0x08A, 0, 32, .check_relay = false},
       };
       SET_TX_MSGS(toyota_f33_tss3_tx_msgs, ret);
