@@ -427,5 +427,140 @@ class TestToyotaCamryTSS3Safety(unittest.TestCase):
       self.assertFalse(self.safety.safety_tx_hook(self.c7(sign * 1746)))
 
 
+class TestToyotaCamryTSS3Id0ReplacementSafety(unittest.TestCase):
+  PARAM = (EPS_SCALE[CAR.TOYOTA_CAMRY_TSS3] | ToyotaSafetyFlags.F33 |
+           ToyotaSafetyFlags.STOCK_LONGITUDINAL | ToyotaSafetyFlags.TSS3_08A_HOST)
+
+  def setUp(self):
+    self.safety = libsafety_py.libsafety
+    self.assertEqual(self.safety.set_safety_hooks(structs.CarParams.SafetyModel.toyota, self.PARAM), 0)
+    self.safety.init_tests()
+    self.safety.set_timer(0)
+
+  @staticmethod
+  def source_08a(b26: int = 0x12, *, target_id: int = 0):
+    data = bytearray(CAMRY_COMMON[0x08A])
+    data[21] = target_id
+    data[26] = b26 & 0x3F
+    return libsafety_py.make_CANPacket(0x08A, 2, bytes(data))
+
+  @staticmethod
+  def sync(reset: int = 0x12345, trip: int = 0x026C):
+    data = bytearray(8)
+    data[0:2] = trip.to_bytes(2, "big")
+    data[2] = (reset >> 12) & 0xFF
+    data[3] = (reset >> 4) & 0xFF
+    data[4] = (reset & 0xF) << 4
+    return libsafety_py.make_CANPacket(0x00F, 2, bytes(data))
+
+  @staticmethod
+  def admin(action: int, b26: int = 0):
+    return libsafety_py.make_CANPacket(0x777, 1, bytes((7, 0xC9, 0xA8, action, b26, 0, 0, 0)))
+
+  @staticmethod
+  def oracle_ff(seq: int = 1):
+    return libsafety_py.make_CANPacket(0x7A1, 1, bytes((0x10, 40, 0xC9, 0xC9, seq, 0x00, 0x8A, 0x00)))
+
+  @staticmethod
+  def oracle_cf(sn: int, fill: int = 0):
+    return libsafety_py.make_CANPacket(0x7A1, 1, bytes((0x20 | sn, fill, fill, fill, fill, fill, fill, fill)))
+
+  @staticmethod
+  def replacement(source: bytes, *, b26: int, reset: int, message: int = 0):
+    data = bytearray(source)
+    data[26] = b26 & 0x3F
+    fv4 = ((message & 0x3) << 2) | (reset & 0x3)
+    data[28] = (fv4 << 4) | (data[28] & 0x0F)
+    return libsafety_py.make_CANPacket(0x08A, 0, bytes(data))
+
+  def seed_native(self, *, b26: int = 0x12, reset: int = 0x12345, target_id: int = 0):
+    source = self.source_08a(b26, target_id=target_id)
+    self.assertTrue(self.safety.safety_rx_hook(source))
+    self.assertTrue(self.safety.safety_rx_hook(self.sync(reset)))
+    return bytes(source[0].data)[:32]
+
+  def test_oracle_transport_is_exact_and_sequential(self):
+    self.assertFalse(self.safety.safety_tx_hook(self.oracle_cf(1)))
+    self.assertTrue(self.safety.safety_tx_hook(self.oracle_ff(9)))
+    for sn in range(1, 6):
+      self.assertTrue(self.safety.safety_tx_hook(self.oracle_cf(sn, fill=sn)))
+    self.assertFalse(self.safety.safety_tx_hook(self.oracle_cf(6)))
+
+    bad = bytearray(self.oracle_ff()[0].data)
+    bad[6] = 0xB6
+    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x7A1, 1, bytes(bad))))
+    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x7A1, 0, bytes(self.oracle_ff()[0].data))))
+
+  def test_arm_requires_native_id0_and_sync(self):
+    self.assertFalse(self.safety.safety_tx_hook(self.admin(1, 0x13)))
+    self.assertTrue(self.safety.safety_rx_hook(self.source_08a(0x12)))
+    self.assertFalse(self.safety.safety_tx_hook(self.admin(1, 0x13)))
+    self.assertTrue(self.safety.safety_rx_hook(self.sync()))
+    self.assertFalse(self.safety.safety_tx_hook(self.admin(1, 0x14)))
+    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0x13)))
+
+    self.safety.set_safety_hooks(structs.CarParams.SafetyModel.toyota, self.PARAM)
+    self.safety.init_tests()
+    self.assertTrue(self.safety.safety_rx_hook(self.source_08a(0x12, target_id=11)))
+    self.assertTrue(self.safety.safety_rx_hook(self.sync()))
+    self.assertFalse(self.safety.safety_tx_hook(self.admin(1, 0x13)))
+
+  def test_host_08a_is_id0_template_bounded_and_sequential(self):
+    reset = 0x12345
+    source = self.seed_native(b26=0x12, reset=reset)
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
+    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0x13)))
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
+
+    first = self.replacement(source, b26=0x13, reset=reset, message=2)
+    self.assertTrue(self.safety.safety_tx_hook(first))
+
+    wrong_b26 = self.replacement(source, b26=0x15, reset=reset, message=3)
+    self.assertFalse(self.safety.safety_tx_hook(wrong_b26))
+    mutated = bytearray(self.replacement(source, b26=0x14, reset=reset, message=3)[0].data)
+    mutated[18] ^= 1
+    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x08A, 0, bytes(mutated))))
+    wrong_reset = self.replacement(source, b26=0x14, reset=reset + 1, message=3)
+    self.assertFalse(self.safety.safety_tx_hook(wrong_reset))
+    active = bytearray(self.replacement(source, b26=0x14, reset=reset, message=3)[0].data)
+    active[21] = 11
+    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x08A, 0, bytes(active))))
+
+    second = self.replacement(source, b26=0x14, reset=reset, message=3)
+    self.assertTrue(self.safety.safety_tx_hook(second))
+
+  def test_watchdog_and_epoch_change_fail_open_to_stock(self):
+    reset = 0x12345
+    self.seed_native(b26=0x12, reset=reset)
+    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0x13)))
+    self.safety.set_timer(39_999)
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
+    self.safety.set_timer(40_001)
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
+
+    self.seed_native(b26=0x20, reset=reset)
+    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0x21)))
+    self.assertTrue(self.safety.safety_rx_hook(self.sync(reset + 1)))
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
+
+  def test_explicit_release_resumes_stock(self):
+    self.seed_native(b26=0x12)
+    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0x13)))
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
+    self.assertTrue(self.safety.safety_tx_hook(self.admin(0, 0)))
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
+
+  def test_without_host_flag_existing_surface_is_unchanged(self):
+    param = EPS_SCALE[CAR.TOYOTA_CAMRY_TSS3] | ToyotaSafetyFlags.F33 | ToyotaSafetyFlags.STOCK_LONGITUDINAL
+    self.assertEqual(self.safety.set_safety_hooks(structs.CarParams.SafetyModel.toyota, param), 0)
+    self.safety.init_tests()
+    self.assertTrue(self.safety.safety_rx_hook(self.source_08a()))
+    self.assertTrue(self.safety.safety_rx_hook(self.sync()))
+    self.assertFalse(self.safety.safety_tx_hook(self.admin(1, 0x13)))
+    self.assertFalse(self.safety.safety_tx_hook(self.oracle_ff()))
+    self.assertFalse(self.safety.safety_tx_hook(self.replacement(bytes(self.source_08a()[0].data)[:32], b26=0x13, reset=0x12345)))
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
+
+
 if __name__ == "__main__":
   unittest.main()
