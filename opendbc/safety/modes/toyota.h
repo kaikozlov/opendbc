@@ -62,6 +62,20 @@ static bool toyota_stock_longitudinal = false;
 static bool toyota_lta = false;
 static bool toyota_tss3_signer = false;
 static bool toyota_corolla_hf = false;
+static bool toyota_tss3_08a_host = false;
+static bool toyota_tss3_08a_replacement_active = false;
+static bool toyota_tss3_08a_native_valid = false;
+static uint8_t toyota_tss3_08a_native_app[28] = {0};
+static uint8_t toyota_tss3_08a_next_b26 = 0U;
+static uint32_t toyota_tss3_08a_last_tx_ts = 0U;
+static bool toyota_tss3_08a_sync_valid = false;
+static uint32_t toyota_tss3_08a_reset_counter = 0U;
+static uint32_t toyota_tss3_08a_active_reset_counter = 0U;
+static bool toyota_tss3_08a_msg_low2_valid = false;
+static uint8_t toyota_tss3_08a_msg_low2 = 0U;
+static uint8_t toyota_tss3_08a_oracle_next_cf = 0U;
+
+const uint32_t TOYOTA_TSS3_08A_REPLACEMENT_TIMEOUT_US = 40000U;
 static int toyota_dbc_eps_torque_factor = 100;   // conversion factor for STEER_TORQUE_EPS in %: see dbc file
 
 static uint32_t toyota_compute_checksum(const CANPacket_t *msg) {
@@ -97,6 +111,26 @@ static bool toyota_get_quality_flag_valid(const CANPacket_t *msg) {
 }
 
 static void toyota_rx_hook(const CANPacket_t *msg) {
+  if (toyota_tss3_08a_host && !toyota_corolla_hf) {
+    if ((msg->bus == 2U) && (msg->addr == 0x8AU) && (GET_LEN(msg) == 32U)) {
+      for (uint8_t i = 0U; i < 28U; i++) {
+        toyota_tss3_08a_native_app[i] = msg->data[i];
+      }
+      toyota_tss3_08a_native_valid = msg->data[21] == 0U;
+    }
+    if ((msg->bus == 2U) && (msg->addr == 0xFU) && (GET_LEN(msg) == 8U)) {
+      const uint32_t reset_counter = ((uint32_t)msg->data[2] << 12U) |
+                                     ((uint32_t)msg->data[3] << 4U) |
+                                     ((uint32_t)msg->data[4] >> 4U);
+      if (toyota_tss3_08a_replacement_active && (reset_counter != toyota_tss3_08a_active_reset_counter)) {
+        toyota_tss3_08a_replacement_active = false;
+        toyota_tss3_08a_msg_low2_valid = false;
+      }
+      toyota_tss3_08a_reset_counter = reset_counter;
+      toyota_tss3_08a_sync_valid = true;
+    }
+  }
+
   if (toyota_tss3_signer) {
     // Stock Toyota-B exposes the TSS3 EPS/Brake network on unsplit bus 1.
     if (msg_matches(msg, 0x25U, 1U)) {
@@ -261,17 +295,89 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
     };
 
     const bool signer_control = (msg->bus == 1U) && (msg->addr == 0x777U);
+    const bool oracle_transport = toyota_tss3_08a_host && !toyota_corolla_hf &&
+                                  (msg->bus == 1U) && (msg->addr == 0x7A1U);
+    const bool host_08a = toyota_tss3_08a_host && !toyota_corolla_hf &&
+                          (msg->bus == 0U) && (msg->addr == 0x8AU);
     const bool corolla_brake_cancel = toyota_corolla_hf && (msg->bus == 1U) && (msg->addr == 0x101U);
-    tx = signer_control || corolla_brake_cancel;
+    tx = signer_control || oracle_transport || host_08a || corolla_brake_cancel;
     if (signer_control) {
-      const bool header_valid = (msg->data[0] == 7U) && (msg->data[1] == 0xC7U) &&
-                                (msg->data[2] == 0xC7U) && (msg->data[6] == 0U) && (msg->data[7] == 0U);
-      int target_angle = (msg->data[4] << 8U) | msg->data[5];
-      target_angle = to_signed(target_angle, 16);
-      const bool steer_control_enabled = msg->data[3] != 0U;
-      tx = header_valid && !safety_max_limit_check(target_angle, TOYOTA_TSS3_ANGLE_STEERING_LIMITS.max_angle,
-                                                  -TOYOTA_TSS3_ANGLE_STEERING_LIMITS.max_angle) &&
-                          !steer_angle_cmd_checks(target_angle, steer_control_enabled, TOYOTA_TSS3_ANGLE_STEERING_LIMITS);
+      const bool c7_header_valid = (msg->data[0] == 7U) && (msg->data[1] == 0xC7U) &&
+                                    (msg->data[2] == 0xC7U) && (msg->data[6] == 0U) && (msg->data[7] == 0U);
+      const bool host_admin_valid = toyota_tss3_08a_host && !toyota_corolla_hf &&
+                                    (msg->data[0] == 7U) && (msg->data[1] == 0xC9U) &&
+                                    (msg->data[2] == 0xA8U) && (msg->data[3] <= 1U) &&
+                                    (msg->data[5] == 0U) && (msg->data[6] == 0U) && (msg->data[7] == 0U);
+      if (host_admin_valid) {
+        const bool release = msg->data[3] == 0U;
+        if (release) {
+          tx = msg->data[4] == 0U;
+          if (tx) {
+            toyota_tss3_08a_replacement_active = false;
+            toyota_tss3_08a_msg_low2_valid = false;
+          }
+        } else {
+          const uint8_t expected_b26 = (toyota_tss3_08a_native_app[26] + 1U) & 0x3FU;
+          tx = toyota_tss3_08a_native_valid && toyota_tss3_08a_sync_valid &&
+               (msg->data[4] == expected_b26);
+          if (tx) {
+            toyota_tss3_08a_next_b26 = expected_b26;
+            toyota_tss3_08a_active_reset_counter = toyota_tss3_08a_reset_counter;
+            toyota_tss3_08a_last_tx_ts = microsecond_timer_get();
+            toyota_tss3_08a_msg_low2_valid = false;
+            toyota_tss3_08a_replacement_active = true;
+          }
+        }
+      } else {
+        int target_angle = (msg->data[4] << 8U) | msg->data[5];
+        target_angle = to_signed(target_angle, 16);
+        const bool steer_control_enabled = msg->data[3] != 0U;
+        tx = c7_header_valid && !safety_max_limit_check(target_angle, TOYOTA_TSS3_ANGLE_STEERING_LIMITS.max_angle,
+                                                       -TOYOTA_TSS3_ANGLE_STEERING_LIMITS.max_angle) &&
+                               !steer_angle_cmd_checks(target_angle, steer_control_enabled, TOYOTA_TSS3_ANGLE_STEERING_LIMITS);
+      }
+    }
+    if (oracle_transport) {
+      const bool first_frame = (msg->data[0] == 0x10U) && (msg->data[1] == 40U) &&
+                               (msg->data[2] == 0xC9U) && (msg->data[3] == 0xC9U) &&
+                               (msg->data[5] == 0U) && (msg->data[6] == 0x8AU);
+      const bool consecutive_frame = (toyota_tss3_08a_oracle_next_cf != 0U) &&
+                                     (msg->data[0] == (0x20U | toyota_tss3_08a_oracle_next_cf));
+      tx = first_frame || consecutive_frame;
+      if (first_frame) {
+        toyota_tss3_08a_oracle_next_cf = 1U;
+      } else if (consecutive_frame) {
+        toyota_tss3_08a_oracle_next_cf++;
+        if (toyota_tss3_08a_oracle_next_cf > 5U) {
+          toyota_tss3_08a_oracle_next_cf = 0U;
+        }
+      }
+    }
+    if (host_08a) {
+      bool application_matches = toyota_tss3_08a_replacement_active && toyota_tss3_08a_native_valid &&
+                                 toyota_tss3_08a_sync_valid && (GET_LEN(msg) == 32U) && (msg->data[21] == 0U);
+      for (uint8_t i = 0U; i < 28U; i++) {
+        if (i != 26U) {
+          application_matches &= msg->data[i] == toyota_tss3_08a_native_app[i];
+        }
+      }
+      const uint8_t b26 = msg->data[26] & 0x3FU;
+      application_matches &= (msg->data[26] & 0xC0U) == (toyota_tss3_08a_native_app[26] & 0xC0U);
+      application_matches &= b26 == toyota_tss3_08a_next_b26;
+      const uint8_t fv4 = msg->data[28] >> 4U;
+      const uint8_t reset_low2 = toyota_tss3_08a_reset_counter & 0x3U;
+      const uint8_t message_low2 = (fv4 >> 2U) & 0x3U;
+      application_matches &= (fv4 & 0x3U) == reset_low2;
+      if (toyota_tss3_08a_msg_low2_valid) {
+        application_matches &= message_low2 == ((toyota_tss3_08a_msg_low2 + 1U) & 0x3U);
+      }
+      tx = application_matches;
+      if (tx) {
+        toyota_tss3_08a_next_b26 = (toyota_tss3_08a_next_b26 + 1U) & 0x3FU;
+        toyota_tss3_08a_msg_low2 = message_low2;
+        toyota_tss3_08a_msg_low2_valid = true;
+        toyota_tss3_08a_last_tx_ts = microsecond_timer_get();
+      }
     }
     if (corolla_brake_cancel) {
       // Stock-longitudinal cancel follows the normal openpilot policy boundary:
@@ -421,9 +527,18 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
 }
 
 static bool toyota_fwd_hook(int bus_num, int addr) {
-  (void)bus_num;
-  (void)addr;
-  return false;
+  bool block = false;
+  if (toyota_tss3_08a_host && !toyota_corolla_hf && toyota_tss3_08a_replacement_active &&
+      (bus_num == 2) && (addr == 0x8A)) {
+    const uint32_t elapsed = safety_get_ts_elapsed(microsecond_timer_get(), toyota_tss3_08a_last_tx_ts);
+    if (elapsed > TOYOTA_TSS3_08A_REPLACEMENT_TIMEOUT_US) {
+      toyota_tss3_08a_replacement_active = false;
+      toyota_tss3_08a_msg_low2_valid = false;
+    } else {
+      block = true;
+    }
+  }
+  return block;
 }
 
 static safety_config toyota_init(uint16_t param) {
@@ -452,6 +567,7 @@ static safety_config toyota_init(uint16_t param) {
   const uint32_t TOYOTA_PARAM_LTA = 4UL << TOYOTA_PARAM_OFFSET;
   const uint32_t TOYOTA_PARAM_TSS3_SIGNER = 16UL << TOYOTA_PARAM_OFFSET;
   const uint32_t TOYOTA_PARAM_COROLLA_HF = 32UL << TOYOTA_PARAM_OFFSET;
+  const uint32_t TOYOTA_PARAM_TSS3_08A_HOST = 64UL << TOYOTA_PARAM_OFFSET;
 
 #ifdef ALLOW_DEBUG
   const uint32_t TOYOTA_PARAM_SECOC = 8UL << TOYOTA_PARAM_OFFSET;
@@ -463,6 +579,12 @@ static safety_config toyota_init(uint16_t param) {
   toyota_lta = GET_FLAG(param, TOYOTA_PARAM_LTA);
   toyota_tss3_signer = GET_FLAG(param, TOYOTA_PARAM_TSS3_SIGNER);
   toyota_corolla_hf = GET_FLAG(param, TOYOTA_PARAM_COROLLA_HF);
+  toyota_tss3_08a_host = GET_FLAG(param, TOYOTA_PARAM_TSS3_08A_HOST);
+  toyota_tss3_08a_replacement_active = false;
+  toyota_tss3_08a_native_valid = false;
+  toyota_tss3_08a_sync_valid = false;
+  toyota_tss3_08a_msg_low2_valid = false;
+  toyota_tss3_08a_oracle_next_cf = 0U;
   toyota_dbc_eps_torque_factor = param & TOYOTA_EPS_FACTOR;
 
   safety_config ret;
@@ -484,6 +606,8 @@ static safety_config toyota_init(uint16_t param) {
     } else {
       static const CanMsg toyota_f33_tss3_tx_msgs[] = {
         {0x777, 1, 8, .check_relay = false},
+        {0x7A1, 1, 8, .check_relay = false},
+        {0x08A, 0, 32, .check_relay = false},
       };
       SET_TX_MSGS(toyota_f33_tss3_tx_msgs, ret);
       static RxCheck toyota_f33_rx_checks[] = {
@@ -493,7 +617,20 @@ static safety_config toyota_init(uint16_t param) {
         {.msg = {{0x101, 1, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
         {.msg = {{0x08A, 1, 32, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
       };
-      SET_RX_CHECKS(toyota_f33_rx_checks, ret);
+      static RxCheck toyota_f33_08a_host_rx_checks[] = {
+        {.msg = {{0x025, 1, 32, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
+        {.msg = {{0x0AA, 1, 8, 100U, .ignore_checksum = true, .ignore_counter = true}, {0}, {0}}},
+        {.msg = {{0x116, 1, 8, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
+        {.msg = {{0x101, 1, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
+        {.msg = {{0x08A, 1, 32, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
+        {.msg = {{0x08A, 2, 32, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
+        {.msg = {{0x00F, 2, 8, 10U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
+      };
+      if (toyota_tss3_08a_host) {
+        SET_RX_CHECKS(toyota_f33_08a_host_rx_checks, ret);
+      } else {
+        SET_RX_CHECKS(toyota_f33_rx_checks, ret);
+      }
     }
   } else if (toyota_secoc) {
     if (toyota_stock_longitudinal) {
