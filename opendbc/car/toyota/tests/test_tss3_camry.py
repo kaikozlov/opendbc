@@ -613,7 +613,7 @@ class TestToyotaCamryTSS3Id0ReplacementSafety(unittest.TestCase):
     fd_ff[0].fd = 1
     self.assertFalse(self.safety.safety_tx_hook(fd_ff))
 
-  def test_watchdog_and_epoch_change_fail_open_to_stock(self):
+  def test_watchdog_fails_open_but_normal_reset_progression_keeps_ownership(self):
     reset = 0x12345
     self.seed_native(b26=0x12, reset=reset)
     self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0)))
@@ -622,10 +622,13 @@ class TestToyotaCamryTSS3Id0ReplacementSafety(unittest.TestCase):
     self.safety.set_timer(40_001)
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
 
-    self.seed_native(b26=0x20, reset=reset)
+    source = self.seed_native(b26=0x20, reset=reset)
     self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0)))
     self.assertTrue(self.safety.safety_rx_hook(self.sync(reset + 1)))
-    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
+    replacement = self.replacement(source, b26=0x21, reset=reset + 1, message=0)
+    self.assertTrue(self.safety.safety_tx_hook(replacement))
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
 
   def test_host_mode_state_bus_is_relay_correct_bus0(self):
     self.seed_native(b26=0x12)
