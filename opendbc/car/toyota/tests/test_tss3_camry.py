@@ -543,6 +543,20 @@ class TestToyotaCamryTSS3Id0ReplacementSafety(unittest.TestCase):
     self.assertTrue(self.safety.safety_rx_hook(self.sync(reset + 1)))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
 
+  def test_motion_prevents_or_releases_replacement(self):
+    self.seed_native(b26=0x12)
+    moving = libsafety_py.make_CANPacket(0x0AA, 1, bytes.fromhex("1c001c001c001c00"))
+    self.assertTrue(self.safety.safety_rx_hook(moving))
+    self.assertFalse(self.safety.safety_tx_hook(self.admin(1, 0x13)))
+
+    self.safety.set_safety_hooks(structs.CarParams.SafetyModel.toyota, self.PARAM)
+    self.safety.init_tests()
+    self.seed_native(b26=0x12)
+    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0x13)))
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
+    self.assertTrue(self.safety.safety_rx_hook(moving))
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
+
   def test_explicit_release_resumes_stock(self):
     self.seed_native(b26=0x12)
     self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0x13)))

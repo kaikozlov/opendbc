@@ -155,6 +155,10 @@ static void toyota_rx_hook(const CANPacket_t *msg) {
         }
         vehicle_moving = speed != 0;
         UPDATE_VEHICLE_SPEED(speed / 4.0 * 0.01 * KPH_TO_MS);
+        if (toyota_tss3_08a_host && toyota_tss3_08a_replacement_active && vehicle_moving) {
+          toyota_tss3_08a_replacement_active = false;
+          toyota_tss3_08a_msg_low2_valid = false;
+        }
       }
       if (!toyota_corolla_hf && (msg->addr == 0x8AU)) {
         pcm_cruise_check(GET_BIT(msg, 27U));
@@ -320,7 +324,7 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
           }
         } else {
           const uint8_t expected_b26 = (toyota_tss3_08a_native_app[26] + 1U) & 0x3FU;
-          tx = toyota_tss3_08a_native_valid && toyota_tss3_08a_sync_valid &&
+          tx = toyota_tss3_08a_native_valid && toyota_tss3_08a_sync_valid && !vehicle_moving &&
                (msg->data[4] == expected_b26);
           if (tx) {
             toyota_tss3_08a_next_b26 = expected_b26;
