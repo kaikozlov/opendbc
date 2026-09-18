@@ -704,7 +704,9 @@ static safety_config toyota_init(uint16_t param) {
         {.msg = {{0x0AA, 0, 8, 100U, .ignore_checksum = true, .ignore_counter = true}, {0}, {0}}},
         {.msg = {{0x116, 0, 8, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
         {.msg = {{0x101, 0, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
-        {.msg = {{0x08A, 0, 32, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
+        // Relay-open F33 has authoritative native 0x08A only on source bus2.
+        // Its downstream bus0 copy is Panda forwarding/TX echo, not an
+        // independent RX source and must not be required for safety validity.
         {.msg = {{0x08A, 2, 32, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
         {.msg = {{0x00F, 0, 8, 10U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
       };
