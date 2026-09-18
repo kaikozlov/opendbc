@@ -51,6 +51,17 @@ def fingerprint() -> dict[int, dict[int, int]]:
   return fp
 
 
+def relay_fingerprint() -> dict[int, dict[int, int]]:
+  fp = fingerprint()
+  # Exact measured repin: chassis/state side on bus0, FRC source on bus2,
+  # radar/object family remains on bus1. Only the topology discriminators are
+  # required here; parser behavior is covered separately below.
+  fp[0][0x025] = len(CAMRY_COMMON[0x025])
+  fp[2][0x08A] = len(CAMRY_COMMON[0x08A])
+  fp[2][0x3F6] = len(CAMRY_COMMON[0x3F6])
+  return fp
+
+
 def update_state(ci: CarInterface, moving: bool = False, counter_offset: int = 0, hud: bytes | None = None,
                  eps_status: int | None = None, eps_telemetry: bytes | None = None,
                  control_request: bytes | None = None, bus: int = 1, source_bus: int | None = None):
@@ -119,6 +130,15 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertTrue(self.CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.STOCK_LONGITUDINAL)
     self.assertEqual(DBC[CAR.TOYOTA_CAMRY_TSS3][Bus.pt], "toyota_tss3_pt_generated")
     self.assertTrue(self.CP.enableBsm)
+
+  def test_relay_request_plane_is_selected_from_fingerprint_topology(self):
+    stock = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint(), [], True, False, False)
+    self.assertFalse(stock.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.TSS3_08A_HOST.value)
+
+    relay = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, relay_fingerprint(), [], True, False, False)
+    self.assertTrue(relay.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.TSS3_08A_HOST.value)
+    self.assertTrue(relay.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.TSS3_08A_SIGNED.value)
+    self.assertTrue(relay.enableBsm)
 
   def test_unqualified_camry_longitudinal_is_not_advertised(self):
     for alpha_long in (False, True):
@@ -337,9 +357,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertEqual(sequences, [1, 2, 3, 4])
 
   def test_host_request_plane_uses_native_id11_without_emitting_c7(self):
-    cp = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint(), [], True, False, False)
-    cp.safetyConfigs[0].safetyParam |= (ToyotaSafetyFlags.TSS3_08A_HOST.value |
-                                        ToyotaSafetyFlags.TSS3_08A_SIGNED.value)
+    cp = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, relay_fingerprint(), [], True, False, False)
     ci = CarInterface(cp)
     request = bytearray(CAMRY_COMMON[0x08A])
     request[21] = (request[21] & 0xC0) | 11
