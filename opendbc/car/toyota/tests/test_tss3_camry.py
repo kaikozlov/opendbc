@@ -442,7 +442,9 @@ class TestToyotaCamryTSS3Id0ReplacementSafety(unittest.TestCase):
     data = bytearray(CAMRY_COMMON[0x08A])
     data[21] = target_id
     data[26] = b26 & 0x3F
-    return libsafety_py.make_CANPacket(0x08A, 2, bytes(data))
+    msg = libsafety_py.make_CANPacket(0x08A, 2, bytes(data))
+    msg[0].fd = 1
+    return msg
 
   @staticmethod
   def sync(reset: int = 0x12345, trip: int = 0x026C):
@@ -471,7 +473,9 @@ class TestToyotaCamryTSS3Id0ReplacementSafety(unittest.TestCase):
     data[26] = b26 & 0x3F
     fv4 = ((message & 0x3) << 2) | (reset & 0x3)
     data[28] = (fv4 << 4) | (data[28] & 0x0F)
-    return libsafety_py.make_CANPacket(0x08A, 0, bytes(data))
+    msg = libsafety_py.make_CANPacket(0x08A, 0, bytes(data))
+    msg[0].fd = 1
+    return msg
 
   def seed_native(self, *, b26: int = 0x12, reset: int = 0x12345, target_id: int = 0):
     source = self.source_08a(b26, target_id=target_id)
@@ -528,6 +532,24 @@ class TestToyotaCamryTSS3Id0ReplacementSafety(unittest.TestCase):
 
     second = self.replacement(source, b26=0x14, reset=reset, message=3)
     self.assertTrue(self.safety.safety_tx_hook(second))
+
+  def test_replacement_requires_fd_and_sidebands_require_classic(self):
+    reset = 0x12345
+    source = self.seed_native(b26=0x12, reset=reset)
+    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0x13)))
+    replacement = self.replacement(source, b26=0x13, reset=reset, message=2)
+    classic = libsafety_py.make_CANPacket(0x08A, 0, bytes(replacement[0].data)[:32])
+    self.assertFalse(self.safety.safety_tx_hook(classic))
+    self.assertTrue(self.safety.safety_tx_hook(replacement))
+
+    self.safety.set_safety_hooks(structs.CarParams.SafetyModel.toyota, self.PARAM)
+    self.safety.init_tests()
+    fd_admin = self.admin(0, 0)
+    fd_admin[0].fd = 1
+    self.assertFalse(self.safety.safety_tx_hook(fd_admin))
+    fd_ff = self.oracle_ff()
+    fd_ff[0].fd = 1
+    self.assertFalse(self.safety.safety_tx_hook(fd_ff))
 
   def test_watchdog_and_epoch_change_fail_open_to_stock(self):
     reset = 0x12345
