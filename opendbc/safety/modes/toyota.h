@@ -333,11 +333,13 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
             toyota_tss3_08a_msg_low2_valid = false;
           }
         } else {
-          const uint8_t expected_b26 = (toyota_tss3_08a_native_app[26] + 1U) & 0x3FU;
-          tx = toyota_tss3_08a_native_valid && toyota_tss3_08a_sync_valid && !vehicle_moving &&
-               (msg->data[4] == expected_b26);
+          // Host does not predict the handoff generation. Accept a canonical arm
+          // request, then choose the next native B26 atomically from Panda's own
+          // current source state. Exact host clones are rejected until active.
+          tx = (msg->data[4] == 0U) && toyota_tss3_08a_native_valid &&
+               toyota_tss3_08a_sync_valid && !vehicle_moving;
           if (tx) {
-            toyota_tss3_08a_next_b26 = expected_b26;
+            toyota_tss3_08a_next_b26 = (toyota_tss3_08a_native_app[26] + 1U) & 0x3FU;
             toyota_tss3_08a_active_reset_counter = toyota_tss3_08a_reset_counter;
             toyota_tss3_08a_last_tx_ts = microsecond_timer_get();
             toyota_tss3_08a_msg_low2_valid = false;
@@ -400,6 +402,11 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
         toyota_tss3_08a_msg_low2 = message_low2;
         toyota_tss3_08a_msg_low2_valid = true;
         toyota_tss3_08a_last_tx_ts = microsecond_timer_get();
+      } else if (toyota_tss3_08a_replacement_active) {
+        // A malformed/mistimed replacement must fail open immediately rather
+        // than keeping subsequent native source frames suppressed.
+        toyota_tss3_08a_replacement_active = false;
+        toyota_tss3_08a_msg_low2_valid = false;
       }
     }
     if (corolla_brake_cancel) {

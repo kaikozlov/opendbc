@@ -519,42 +519,51 @@ class TestToyotaCamryTSS3Id0ReplacementSafety(unittest.TestCase):
     self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x7A1, 0, bytes(self.oracle_ff()[0].data))))
 
   def test_arm_requires_native_id0_and_sync(self):
-    self.assertFalse(self.safety.safety_tx_hook(self.admin(1, 0x13)))
+    self.assertFalse(self.safety.safety_tx_hook(self.admin(1, 0)))
     self.assertTrue(self.safety.safety_rx_hook(self.source_08a(0x12)))
-    self.assertFalse(self.safety.safety_tx_hook(self.admin(1, 0x13)))
+    self.assertFalse(self.safety.safety_tx_hook(self.admin(1, 0)))
     self.assertTrue(self.safety.safety_rx_hook(self.sync()))
     self.assertFalse(self.safety.safety_tx_hook(self.admin(1, 0x14)))
-    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0x13)))
+    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0)))
 
     self.safety.set_safety_hooks(structs.CarParams.SafetyModel.toyota, self.PARAM)
     self.safety.init_tests()
     self.assertTrue(self.safety.safety_rx_hook(self.source_08a(0x12, target_id=11)))
     self.assertTrue(self.safety.safety_rx_hook(self.sync()))
-    self.assertFalse(self.safety.safety_tx_hook(self.admin(1, 0x13)))
+    self.assertFalse(self.safety.safety_tx_hook(self.admin(1, 0)))
 
   def test_host_08a_is_id0_template_bounded_and_sequential(self):
     reset = 0x12345
     source = self.seed_native(b26=0x12, reset=reset)
-    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
-    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0x13)))
-    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
-
     first = self.replacement(source, b26=0x13, reset=reset, message=2)
-    self.assertTrue(self.safety.safety_tx_hook(first))
 
-    wrong_b26 = self.replacement(source, b26=0x15, reset=reset, message=3)
-    self.assertFalse(self.safety.safety_tx_hook(wrong_b26))
-    mutated = bytearray(self.replacement(source, b26=0x14, reset=reset, message=3)[0].data)
-    mutated[18] ^= 1
-    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x08A, 0, bytes(mutated))))
-    wrong_reset = self.replacement(source, b26=0x14, reset=reset + 1, message=3)
-    self.assertFalse(self.safety.safety_tx_hook(wrong_reset))
-    active = bytearray(self.replacement(source, b26=0x14, reset=reset, message=3)[0].data)
-    active[21] = 11
-    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x08A, 0, bytes(active))))
+    # Exact clones are dropped while stock forwarding still owns the path.
+    self.assertFalse(self.safety.safety_tx_hook(first))
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
+
+    # Canonical arm carries no target generation. Panda derives current+1.
+    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0)))
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
+    self.assertTrue(self.safety.safety_tx_hook(first))
 
     second = self.replacement(source, b26=0x14, reset=reset, message=3)
     self.assertTrue(self.safety.safety_tx_hook(second))
+
+    # Any generation mismatch is rejected and immediately fails open.
+    wrong_b26 = self.replacement(source, b26=0x16, reset=reset, message=0)
+    self.assertFalse(self.safety.safety_tx_hook(wrong_b26))
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
+
+  def test_malformed_replacement_fails_open(self):
+    reset = 0x12345
+    source = self.seed_native(b26=0x12, reset=reset)
+    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0)))
+    malformed = bytearray(self.replacement(source, b26=0x13, reset=reset, message=2)[0].data)
+    malformed[18] ^= 1
+    msg = libsafety_py.make_CANPacket(0x08A, 0, bytes(malformed)[:32])
+    msg[0].fd = 1
+    self.assertFalse(self.safety.safety_tx_hook(msg))
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
 
   def test_signed_mode_allows_two_generation_old_id0_template_only(self):
     reset = 0x12345
@@ -569,7 +578,7 @@ class TestToyotaCamryTSS3Id0ReplacementSafety(unittest.TestCase):
       frames.append(bytes(msg[0].data)[:32])
       self.assertTrue(self.safety.safety_rx_hook(msg))
 
-    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0x13)))
+    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0)))
     two_back = self.replacement(frames[0], b26=0x13, reset=reset, message=2)
     self.assertTrue(self.safety.safety_tx_hook(two_back))
 
@@ -580,17 +589,19 @@ class TestToyotaCamryTSS3Id0ReplacementSafety(unittest.TestCase):
     self.assertTrue(self.safety.safety_rx_hook(self.sync(reset)))
     for b26, semantic in ((0x10, 0x31), (0x11, 0x32), (0x12, 0x33)):
       self.assertTrue(self.safety.safety_rx_hook(self.source_08a(b26, semantic=semantic)))
-    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0x13)))
+    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0)))
     stale = self.replacement(frames[0], b26=0x13, reset=reset, message=2)
     self.assertFalse(self.safety.safety_tx_hook(stale))
 
   def test_replacement_requires_fd_and_sidebands_require_classic(self):
     reset = 0x12345
     source = self.seed_native(b26=0x12, reset=reset)
-    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0x13)))
+    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0)))
     replacement = self.replacement(source, b26=0x13, reset=reset, message=2)
     classic = libsafety_py.make_CANPacket(0x08A, 0, bytes(replacement[0].data)[:32])
     self.assertFalse(self.safety.safety_tx_hook(classic))
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
+    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0)))
     self.assertTrue(self.safety.safety_tx_hook(replacement))
 
     self.safety.set_safety_hooks(structs.CarParams.SafetyModel.toyota, self.PARAM)
@@ -605,14 +616,14 @@ class TestToyotaCamryTSS3Id0ReplacementSafety(unittest.TestCase):
   def test_watchdog_and_epoch_change_fail_open_to_stock(self):
     reset = 0x12345
     self.seed_native(b26=0x12, reset=reset)
-    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0x13)))
+    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0)))
     self.safety.set_timer(39_999)
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
     self.safety.set_timer(40_001)
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
 
     self.seed_native(b26=0x20, reset=reset)
-    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0x21)))
+    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0)))
     self.assertTrue(self.safety.safety_rx_hook(self.sync(reset + 1)))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
 
@@ -623,30 +634,30 @@ class TestToyotaCamryTSS3Id0ReplacementSafety(unittest.TestCase):
     # dispatched to Toyota's RX callback in relay-correct host mode, so it does
     # not set vehicle_moving and cannot prevent the arm.
     self.assertTrue(self.safety.safety_rx_hook(moving_bus1))
-    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0x13)))
+    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0)))
     self.assertTrue(self.safety.safety_tx_hook(self.admin(0, 0)))
 
     moving_bus0 = libsafety_py.make_CANPacket(0x0AA, 0, bytes.fromhex("1c001c001c001c00"))
     self.assertTrue(self.safety.safety_rx_hook(moving_bus0))
-    self.assertFalse(self.safety.safety_tx_hook(self.admin(1, 0x13)))
+    self.assertFalse(self.safety.safety_tx_hook(self.admin(1, 0)))
 
   def test_motion_prevents_or_releases_replacement(self):
     self.seed_native(b26=0x12)
     moving = libsafety_py.make_CANPacket(0x0AA, 0, bytes.fromhex("1c001c001c001c00"))
     self.assertTrue(self.safety.safety_rx_hook(moving))
-    self.assertFalse(self.safety.safety_tx_hook(self.admin(1, 0x13)))
+    self.assertFalse(self.safety.safety_tx_hook(self.admin(1, 0)))
 
     self.safety.set_safety_hooks(structs.CarParams.SafetyModel.toyota, self.PARAM)
     self.safety.init_tests()
     self.seed_native(b26=0x12)
-    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0x13)))
+    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0)))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
     self.assertTrue(self.safety.safety_rx_hook(moving))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
 
   def test_explicit_release_resumes_stock(self):
     self.seed_native(b26=0x12)
-    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0x13)))
+    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0)))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
     self.assertTrue(self.safety.safety_tx_hook(self.admin(0, 0)))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
@@ -657,7 +668,7 @@ class TestToyotaCamryTSS3Id0ReplacementSafety(unittest.TestCase):
     self.safety.init_tests()
     self.assertTrue(self.safety.safety_rx_hook(self.source_08a()))
     self.assertTrue(self.safety.safety_rx_hook(self.sync()))
-    self.assertFalse(self.safety.safety_tx_hook(self.admin(1, 0x13)))
+    self.assertFalse(self.safety.safety_tx_hook(self.admin(1, 0)))
     self.assertFalse(self.safety.safety_tx_hook(self.oracle_ff()))
     self.assertFalse(self.safety.safety_tx_hook(self.replacement(bytes(self.source_08a()[0].data)[:32], b26=0x13, reset=0x12345)))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
