@@ -53,7 +53,7 @@ def fingerprint() -> dict[int, dict[int, int]]:
 
 def update_state(ci: CarInterface, moving: bool = False, counter_offset: int = 0, hud: bytes | None = None,
                  eps_status: int | None = None, eps_telemetry: bytes | None = None,
-                 control_request: bytes | None = None):
+                 control_request: bytes | None = None, bus: int = 1):
   state = None
   for i in range(20):
     frames = dict(CAMRY_COMMON)
@@ -68,9 +68,9 @@ def update_state(ci: CarInterface, moving: bool = False, counter_offset: int = 0
       frames[0x030] = bytes(eps)
     if moving:
       frames[0x0AA] = bytes.fromhex("1c001c001c001c00")
-    packets = [CanData(address, data, 1) for address, data in frames.items()]
+    packets = [CanData(address, data, bus) for address, data in frames.items()]
     if hud is not None:
-      packets.append(CanData(0x412, hud, 1))
+      packets.append(CanData(0x412, hud, bus))
     state = ci.update([(1_000_000_000 + (counter_offset + i) * 10_000_000, packets)])
   return state
 
@@ -426,6 +426,20 @@ class TestToyotaCamryTSS3Safety(unittest.TestCase):
       self.safety.set_desired_angle_last(sign * 1745)
       self.assertFalse(self.safety.safety_tx_hook(self.c7(sign * 1746)))
 
+  def test_relay_correct_host_mode_uses_bus0_state_parser(self):
+    cp = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint(), [], True, False, False)
+    cp.safetyConfigs[0].safetyParam |= ToyotaSafetyFlags.TSS3_08A_HOST.value
+    ci = CarInterface(cp)
+    state = update_state(ci, bus=0, hud=CAMRY_HUD)
+    self.assertTrue(state.canValid)
+    self.assertTrue(state.standstill)
+
+    # The same interface no longer consumes the stock-harness bus1 state when
+    # the relay-correct host mode is selected.
+    ci_wrong_bus = CarInterface(cp)
+    state_wrong_bus = update_state(ci_wrong_bus, bus=1, hud=CAMRY_HUD)
+    self.assertFalse(state_wrong_bus.canValid)
+
 
 class TestToyotaCamryTSS3Id0ReplacementSafety(unittest.TestCase):
   PARAM = (EPS_SCALE[CAR.TOYOTA_CAMRY_TSS3] | ToyotaSafetyFlags.F33 |
@@ -596,9 +610,23 @@ class TestToyotaCamryTSS3Id0ReplacementSafety(unittest.TestCase):
     self.assertTrue(self.safety.safety_rx_hook(self.sync(reset + 1)))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
 
+  def test_host_mode_state_bus_is_relay_correct_bus0(self):
+    self.seed_native(b26=0x12)
+    moving_bus1 = libsafety_py.make_CANPacket(0x0AA, 1, bytes.fromhex("1c001c001c001c00"))
+    # Untracked messages still return valid generically, but bus1 is not
+    # dispatched to Toyota's RX callback in relay-correct host mode, so it does
+    # not set vehicle_moving and cannot prevent the arm.
+    self.assertTrue(self.safety.safety_rx_hook(moving_bus1))
+    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0x13)))
+    self.assertTrue(self.safety.safety_tx_hook(self.admin(0, 0)))
+
+    moving_bus0 = libsafety_py.make_CANPacket(0x0AA, 0, bytes.fromhex("1c001c001c001c00"))
+    self.assertTrue(self.safety.safety_rx_hook(moving_bus0))
+    self.assertFalse(self.safety.safety_tx_hook(self.admin(1, 0x13)))
+
   def test_motion_prevents_or_releases_replacement(self):
     self.seed_native(b26=0x12)
-    moving = libsafety_py.make_CANPacket(0x0AA, 1, bytes.fromhex("1c001c001c001c00"))
+    moving = libsafety_py.make_CANPacket(0x0AA, 0, bytes.fromhex("1c001c001c001c00"))
     self.assertTrue(self.safety.safety_rx_hook(moving))
     self.assertFalse(self.safety.safety_tx_hook(self.admin(1, 0x13)))
 
