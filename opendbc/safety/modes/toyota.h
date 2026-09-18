@@ -73,7 +73,11 @@ static uint32_t toyota_tss3_08a_native_last_rx_ts = 0U;
 static uint32_t toyota_tss3_08a_last_tx_ts = 0U;
 static uint8_t toyota_tss3_08a_oracle_next_cf = 0U;
 
-const uint32_t TOYOTA_TSS3_08A_REPLACEMENT_TIMEOUT_US = 40000U;
+// Native 0x08A is ~40 Hz. The live bus0 command-5 pipeline has one observed
+// source-ordered host-output gap of 46.24 ms, so keep ownership for three native
+// periods. The host/oracle worker still fails open independently on signing error
+// or its 120 ms oracle timeout.
+const uint32_t TOYOTA_TSS3_08A_REPLACEMENT_TIMEOUT_US = 75000U;
 static int toyota_dbc_eps_torque_factor = 100;   // conversion factor for STEER_TORQUE_EPS in %: see dbc file
 
 static uint32_t toyota_compute_checksum(const CANPacket_t *msg) {

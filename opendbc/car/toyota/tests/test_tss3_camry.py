@@ -592,7 +592,7 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.assertTrue(self.safety.safety_tx_hook(self.admin(1)))
 
     self.assertTrue(self.safety.safety_tx_hook(self.admin(0)))
-    self.safety.set_timer(40_001)
+    self.safety.set_timer(75_001)
     self.assertFalse(self.safety.safety_tx_hook(self.admin(1)))
 
   def test_exact_clone_preserves_non_id11_requests_and_is_single_use(self):
@@ -736,9 +736,9 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     source = self.observe_source(target_id=0)
     self.arm()
     self.assertTrue(self.safety.safety_tx_hook(self.host_frame(source)))
-    self.safety.set_timer(39_999)
+    self.safety.set_timer(74_999)
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
-    self.safety.set_timer(40_001)
+    self.safety.set_timer(75_001)
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
 
   def test_explicit_release_resumes_stock(self):
