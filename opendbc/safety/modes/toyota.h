@@ -63,9 +63,13 @@ static bool toyota_lta = false;
 static bool toyota_tss3_signer = false;
 static bool toyota_corolla_hf = false;
 static bool toyota_tss3_08a_host = false;
+static bool toyota_tss3_08a_signed = false;
 static bool toyota_tss3_08a_replacement_active = false;
 static bool toyota_tss3_08a_native_valid = false;
 static uint8_t toyota_tss3_08a_native_app[28] = {0};
+static uint8_t toyota_tss3_08a_native_app_prev1[28] = {0};
+static uint8_t toyota_tss3_08a_native_app_prev2[28] = {0};
+static uint8_t toyota_tss3_08a_native_history = 0U;
 static uint8_t toyota_tss3_08a_next_b26 = 0U;
 static uint32_t toyota_tss3_08a_last_tx_ts = 0U;
 static bool toyota_tss3_08a_sync_valid = false;
@@ -114,7 +118,12 @@ static void toyota_rx_hook(const CANPacket_t *msg) {
   if (toyota_tss3_08a_host && !toyota_corolla_hf) {
     if ((msg->bus == 2U) && (msg->addr == 0x8AU) && (GET_LEN(msg) == 32U)) {
       for (uint8_t i = 0U; i < 28U; i++) {
+        toyota_tss3_08a_native_app_prev2[i] = toyota_tss3_08a_native_app_prev1[i];
+        toyota_tss3_08a_native_app_prev1[i] = toyota_tss3_08a_native_app[i];
         toyota_tss3_08a_native_app[i] = msg->data[i];
+      }
+      if (toyota_tss3_08a_native_history < 3U) {
+        toyota_tss3_08a_native_history++;
       }
       toyota_tss3_08a_native_valid = msg->data[21] == 0U;
     }
@@ -360,13 +369,20 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
       }
     }
     if (host_08a) {
-      bool application_matches = toyota_tss3_08a_replacement_active && toyota_tss3_08a_native_valid &&
-                                 toyota_tss3_08a_sync_valid && msg->fd && (GET_LEN(msg) == 32U) && (msg->data[21] == 0U);
+      bool application_matches_current = true;
+      bool application_matches_prev1 = toyota_tss3_08a_signed && (toyota_tss3_08a_native_history >= 2U);
+      bool application_matches_prev2 = toyota_tss3_08a_signed && (toyota_tss3_08a_native_history >= 3U);
       for (uint8_t i = 0U; i < 28U; i++) {
         if (i != 26U) {
-          application_matches &= msg->data[i] == toyota_tss3_08a_native_app[i];
+          application_matches_current &= msg->data[i] == toyota_tss3_08a_native_app[i];
+          application_matches_prev1 &= msg->data[i] == toyota_tss3_08a_native_app_prev1[i];
+          application_matches_prev2 &= msg->data[i] == toyota_tss3_08a_native_app_prev2[i];
         }
       }
+      bool application_matches = toyota_tss3_08a_replacement_active && toyota_tss3_08a_native_valid &&
+                                 toyota_tss3_08a_sync_valid && msg->fd && (GET_LEN(msg) == 32U) &&
+                                 (msg->data[21] == 0U) &&
+                                 (application_matches_current || application_matches_prev1 || application_matches_prev2);
       const uint8_t b26 = msg->data[26] & 0x3FU;
       application_matches &= (msg->data[26] & 0xC0U) == (toyota_tss3_08a_native_app[26] & 0xC0U);
       application_matches &= b26 == toyota_tss3_08a_next_b26;
@@ -576,6 +592,7 @@ static safety_config toyota_init(uint16_t param) {
   const uint32_t TOYOTA_PARAM_TSS3_SIGNER = 16UL << TOYOTA_PARAM_OFFSET;
   const uint32_t TOYOTA_PARAM_COROLLA_HF = 32UL << TOYOTA_PARAM_OFFSET;
   const uint32_t TOYOTA_PARAM_TSS3_08A_HOST = 64UL << TOYOTA_PARAM_OFFSET;
+  const uint32_t TOYOTA_PARAM_TSS3_08A_SIGNED = 128UL << TOYOTA_PARAM_OFFSET;
 
 #ifdef ALLOW_DEBUG
   const uint32_t TOYOTA_PARAM_SECOC = 8UL << TOYOTA_PARAM_OFFSET;
@@ -588,8 +605,10 @@ static safety_config toyota_init(uint16_t param) {
   toyota_tss3_signer = GET_FLAG(param, TOYOTA_PARAM_TSS3_SIGNER);
   toyota_corolla_hf = GET_FLAG(param, TOYOTA_PARAM_COROLLA_HF);
   toyota_tss3_08a_host = GET_FLAG(param, TOYOTA_PARAM_TSS3_08A_HOST);
+  toyota_tss3_08a_signed = GET_FLAG(param, TOYOTA_PARAM_TSS3_08A_SIGNED);
   toyota_tss3_08a_replacement_active = false;
   toyota_tss3_08a_native_valid = false;
+  toyota_tss3_08a_native_history = 0U;
   toyota_tss3_08a_sync_valid = false;
   toyota_tss3_08a_msg_low2_valid = false;
   toyota_tss3_08a_oracle_next_cf = 0U;
