@@ -50,14 +50,22 @@ class CarInterface(CarInterfaceBase):
         ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.toyota)]
         ret.safetyConfigs[0].safetyParam = (EPS_SCALE[candidate] |
                                              ToyotaSafetyFlags.F33.value)
+        # The physical request-plane harness is self-identifying: chassis/state
+        # lives on bus0 while the FRC-native 0x08A source lives on bus2. Select
+        # host 0x08A ownership from that observed topology, not a private Param.
+        relay_request_plane = 0x025 in fingerprint.get(0, {}) and 0x08A in fingerprint.get(2, {})
+        if relay_request_plane:
+          ret.safetyConfigs[0].safetyParam |= (ToyotaSafetyFlags.TSS3_08A_HOST.value |
+                                               ToyotaSafetyFlags.TSS3_08A_SIGNED.value)
         ret.dashcamOnly = False
         # The EPS-resident helper owns native B6 signing; openpilot owns only
         # the bounded C7 sideband and therefore needs no host SecOC key.
         ret.secOcRequired = False
         ret.minSteerSpeed = 0.
         ret.steerAtStandstill = True
-        # Stock Toyota-B exposes the EPS/Brake network on Panda bus 1.
-        ret.enableBsm = 0x3F6 in fingerprint[1]
+        # Stock Toyota-B exposes this source on bus1; the request-plane repin
+        # moves the FRC vocabulary, including BSM, to bus2.
+        ret.enableBsm = 0x3F6 in fingerprint[2 if relay_request_plane else 1]
         ret.steerActuatorDelay = 0.18
         ret.steerLimitTimer = 0.8
       elif candidate == CAR.TOYOTA_COROLLA_TSS3:
