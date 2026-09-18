@@ -336,6 +336,31 @@ class TestToyotaCamryTSS3(unittest.TestCase):
       sequences.append(data[3])
     self.assertEqual(sequences, [1, 2, 3, 4])
 
+  def test_host_request_plane_uses_native_id11_without_emitting_c7(self):
+    cp = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint(), [], True, False, False)
+    cp.safetyConfigs[0].safetyParam |= (ToyotaSafetyFlags.TSS3_08A_HOST.value |
+                                        ToyotaSafetyFlags.TSS3_08A_SIGNED.value)
+    ci = CarInterface(cp)
+    request = bytearray(CAMRY_COMMON[0x08A])
+    request[21] = (request[21] & 0xC0) | 11
+    state = update_state(ci, moving=True, control_request=bytes(request), bus=0, source_bus=2, hud=CAMRY_HUD)
+    self.assertTrue(state.canValid)
+    self.assertEqual(ci.CS.tss3_lateral_request_id, 11)
+
+    output, sends = ci.apply(control(5.0), 2_000_000_000)
+    self.assertFalse(any(address == 0x777 for address, _, _ in sends))
+    self.assertAlmostEqual(output.steeringAngleDeg, 0.15, delta=0.01)
+
+    # When Toyota leaves ID11, the request-plane target resets to measured
+    # steering instead of accumulating an unsent command behind another app.
+    request[21] = request[21] & 0xC0
+    state = update_state(ci, moving=True, control_request=bytes(request), bus=0, source_bus=2, hud=CAMRY_HUD)
+    output, sends = ci.apply(control(20.0), 2_010_000_000)
+    self.assertEqual(ci.CS.tss3_lateral_request_id, 0)
+    self.assertFalse(any(address == 0x777 for address, _, _ in sends))
+    self.assertAlmostEqual(output.steeringAngleDeg,
+                           state.steeringAngleDeg + state.steeringAngleOffsetDeg, delta=0.2)
+
   def test_inactive_c7_tracks_measured_angle_with_neutral_sequence(self):
     ci = CarInterface(self.CP)
     state = update_state(ci)
@@ -447,40 +472,40 @@ class TestToyotaCamryTSS3Safety(unittest.TestCase):
     self.assertFalse(state_wrong_state.canValid)
 
 
-class TestToyotaCamryTSS3Id0ReplacementSafety(unittest.TestCase):
+class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
   PARAM = (EPS_SCALE[CAR.TOYOTA_CAMRY_TSS3] | ToyotaSafetyFlags.F33 |
            ToyotaSafetyFlags.STOCK_LONGITUDINAL | ToyotaSafetyFlags.TSS3_08A_HOST)
   SIGNED_PARAM = PARAM | ToyotaSafetyFlags.TSS3_08A_SIGNED
 
   def setUp(self):
     self.safety = libsafety_py.libsafety
-    self.assertEqual(self.safety.set_safety_hooks(structs.CarParams.SafetyModel.toyota, self.PARAM), 0)
+    self.assertEqual(self.safety.set_safety_hooks(structs.CarParams.SafetyModel.toyota, self.SIGNED_PARAM), 0)
     self.safety.init_tests()
     self.safety.set_timer(0)
 
   @staticmethod
-  def source_08a(b26: int = 0x12, *, target_id: int = 0, semantic: int | None = None):
+  def source_08a(b26: int = 0x12, *, target_id: int = 0, angle_raw: int = 0,
+                 semantic: int | None = None, fv4: int | None = None):
     data = bytearray(CAMRY_COMMON[0x08A])
-    data[21] = target_id
+    data[18:20] = angle_raw.to_bytes(2, "big", signed=True)
+    data[21] = (data[21] & 0xC0) | (target_id & 0x3F)
     if semantic is not None:
       data[22] = semantic
-    data[26] = b26 & 0x3F
+    data[26] = (data[26] & 0xC0) | (b26 & 0x3F)
+    if fv4 is not None:
+      data[28] = ((fv4 & 0xF) << 4) | (data[28] & 0x0F)
     msg = libsafety_py.make_CANPacket(0x08A, 2, bytes(data))
     msg[0].fd = 1
     return msg
 
   @staticmethod
-  def sync(reset: int = 0x12345, trip: int = 0x026C):
-    data = bytearray(8)
-    data[0:2] = trip.to_bytes(2, "big")
-    data[2] = (reset >> 12) & 0xFF
-    data[3] = (reset >> 4) & 0xFF
-    data[4] = (reset & 0xF) << 4
-    return libsafety_py.make_CANPacket(0x00F, 0, bytes(data))
+  def admin(action: int):
+    return libsafety_py.make_CANPacket(0x777, 1, bytes((7, 0xC9, 0xA8, action, 0, 0, 0, 0)))
 
   @staticmethod
-  def admin(action: int, b26: int = 0):
-    return libsafety_py.make_CANPacket(0x777, 1, bytes((7, 0xC9, 0xA8, action, b26, 0, 0, 0)))
+  def c7(angle_raw: int = 0, sequence: int = 1):
+    data = b"\x07\xC7\xC7" + bytes((sequence,)) + angle_raw.to_bytes(2, "big", signed=True) + b"\x00\x00"
+    return libsafety_py.make_CANPacket(0x777, 1, data)
 
   @staticmethod
   def oracle_ff(seq: int = 1):
@@ -491,20 +516,27 @@ class TestToyotaCamryTSS3Id0ReplacementSafety(unittest.TestCase):
     return libsafety_py.make_CANPacket(0x7A1, 1, bytes((0x20 | sn, fill, fill, fill, fill, fill, fill, fill)))
 
   @staticmethod
-  def replacement(source: bytes, *, b26: int, reset: int, message: int = 0):
+  def host_frame(source: bytes, *, angle_raw: int | None = None, mutate_mac: bool = False):
     data = bytearray(source)
-    data[26] = b26 & 0x3F
-    fv4 = ((message & 0x3) << 2) | (reset & 0x3)
-    data[28] = (fv4 << 4) | (data[28] & 0x0F)
+    if angle_raw is not None:
+      data[18:20] = angle_raw.to_bytes(2, "big", signed=True)
+    if mutate_mac:
+      data[28] ^= 0x0F  # MAC28 only; preserve FV4 high nibble
+      data[29] ^= 0xA5
+      data[30] ^= 0x5A
+      data[31] ^= 0xFF
     msg = libsafety_py.make_CANPacket(0x08A, 0, bytes(data))
     msg[0].fd = 1
     return msg
 
-  def seed_native(self, *, b26: int = 0x12, reset: int = 0x12345, target_id: int = 0):
-    source = self.source_08a(b26, target_id=target_id)
-    self.assertTrue(self.safety.safety_rx_hook(source))
-    self.assertTrue(self.safety.safety_rx_hook(self.sync(reset)))
-    return bytes(source[0].data)[:32]
+  def observe_source(self, **kwargs) -> bytes:
+    msg = self.source_08a(**kwargs)
+    self.assertTrue(self.safety.safety_rx_hook(msg))
+    return bytes(msg[0].data)[:32]
+
+  def arm(self):
+    self.assertTrue(self.safety.safety_tx_hook(self.admin(1)))
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
 
   def test_oracle_transport_is_exact_and_sequential(self):
     self.assertFalse(self.safety.safety_tx_hook(self.oracle_cf(1)))
@@ -518,151 +550,136 @@ class TestToyotaCamryTSS3Id0ReplacementSafety(unittest.TestCase):
     self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x7A1, 1, bytes(bad))))
     self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x7A1, 0, bytes(self.oracle_ff()[0].data))))
 
-  def test_arm_requires_native_id0_and_sync(self):
-    self.assertFalse(self.safety.safety_tx_hook(self.admin(1, 0)))
-    self.assertTrue(self.safety.safety_rx_hook(self.source_08a(0x12)))
-    self.assertFalse(self.safety.safety_tx_hook(self.admin(1, 0)))
-    self.assertTrue(self.safety.safety_rx_hook(self.sync()))
-    self.assertFalse(self.safety.safety_tx_hook(self.admin(1, 0x14)))
-    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0)))
+  def test_arm_is_fresh_source_ownership_not_id_or_motion_policy(self):
+    self.assertFalse(self.safety.safety_tx_hook(self.admin(1)))
 
-    self.safety.set_safety_hooks(structs.CarParams.SafetyModel.toyota, self.PARAM)
-    self.safety.init_tests()
-    self.assertTrue(self.safety.safety_rx_hook(self.source_08a(0x12, target_id=11)))
-    self.assertTrue(self.safety.safety_rx_hook(self.sync()))
-    self.assertFalse(self.safety.safety_tx_hook(self.admin(1, 0)))
+    # Any fresh native request identity can establish relay ownership; the arm
+    # itself carries no steering authority.
+    self.observe_source(target_id=18)
+    self.assertTrue(self.safety.safety_tx_hook(self.admin(1)))
+    self.assertTrue(self.safety.safety_tx_hook(self.admin(0)))
 
-  def test_host_08a_is_id0_template_bounded_and_sequential(self):
-    reset = 0x12345
-    source = self.seed_native(b26=0x12, reset=reset)
-    first = self.replacement(source, b26=0x13, reset=reset, message=2)
+    self.observe_source(target_id=11)
+    moving = libsafety_py.make_CANPacket(0x0AA, 0, bytes.fromhex("1c001c001c001c00"))
+    self.assertTrue(self.safety.safety_rx_hook(moving))
+    self.assertTrue(self.safety.safety_tx_hook(self.admin(1)))
 
-    # Exact clones are dropped while stock forwarding still owns the path.
-    self.assertFalse(self.safety.safety_tx_hook(first))
+    self.assertTrue(self.safety.safety_tx_hook(self.admin(0)))
+    self.safety.set_timer(40_001)
+    self.assertFalse(self.safety.safety_tx_hook(self.admin(1)))
+
+  def test_exact_clone_preserves_non_id11_requests_and_is_single_use(self):
+    source = self.observe_source(target_id=18, b26=0x12, semantic=0x51)
+    self.arm()
+    clone = self.host_frame(source)
+    self.safety.set_controls_allowed(False)
+    self.assertTrue(self.safety.safety_tx_hook(clone))
+
+    # A source generation is consumed once. Replay is rejected and fails open.
+    self.assertFalse(self.safety.safety_tx_hook(clone))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
 
-    # Canonical arm carries no target generation. Panda derives current+1.
-    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0)))
-    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
-    self.assertTrue(self.safety.safety_tx_hook(first))
+  def test_modified_frame_is_id11_angle_only(self):
+    source = self.observe_source(target_id=11, angle_raw=100, b26=0x22, semantic=0x61, fv4=9)
+    self.arm()
+    self.safety.set_controls_allowed(True)
+    self.safety.set_desired_angle_last(100)
 
-    second = self.replacement(source, b26=0x14, reset=reset, message=3)
-    self.assertTrue(self.safety.safety_tx_hook(second))
+    modified = self.host_frame(source, angle_raw=105, mutate_mac=True)
+    self.assertTrue(self.safety.safety_tx_hook(modified))
 
-    # Any generation mismatch is rejected and immediately fails open.
-    wrong_b26 = self.replacement(source, b26=0x16, reset=reset, message=0)
-    self.assertFalse(self.safety.safety_tx_hook(wrong_b26))
+    # ID, sequence, gains, longitudinal fields, and every other application byte
+    # remain source-real. Any non-angle semantic edit is rejected.
+    next_source = self.observe_source(target_id=11, angle_raw=105, b26=0x23, semantic=0x62, fv4=10)
+    bad = bytearray(self.host_frame(next_source, angle_raw=110, mutate_mac=True)[0].data)[:32]
+    bad[7] ^= 1
+    bad_msg = libsafety_py.make_CANPacket(0x08A, 0, bytes(bad))
+    bad_msg[0].fd = 1
+    self.assertFalse(self.safety.safety_tx_hook(bad_msg))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
 
-  def test_malformed_replacement_fails_open(self):
-    reset = 0x12345
-    source = self.seed_native(b26=0x12, reset=reset)
-    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0)))
-    malformed = bytearray(self.replacement(source, b26=0x13, reset=reset, message=2)[0].data)
-    malformed[18] ^= 1
-    msg = libsafety_py.make_CANPacket(0x08A, 0, bytes(malformed)[:32])
+  def test_modified_non_id11_is_rejected(self):
+    source = self.observe_source(target_id=18, angle_raw=100)
+    self.arm()
+    self.safety.set_controls_allowed(True)
+    self.safety.set_desired_angle_last(100)
+    self.assertFalse(self.safety.safety_tx_hook(self.host_frame(source, angle_raw=101, mutate_mac=True)))
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
+
+  def test_modified_id11_requires_controls_allowed(self):
+    source = self.observe_source(target_id=11, angle_raw=100)
+    self.arm()
+    self.safety.set_controls_allowed(False)
+    self.safety.set_desired_angle_last(100)
+    self.assertFalse(self.safety.safety_tx_hook(self.host_frame(source, angle_raw=101, mutate_mac=True)))
+
+  def test_modified_id11_preserves_exact_fv4(self):
+    source = self.observe_source(target_id=11, angle_raw=100, fv4=9)
+    self.arm()
+    self.safety.set_controls_allowed(True)
+    self.safety.set_desired_angle_last(100)
+    data = bytearray(self.host_frame(source, angle_raw=101, mutate_mac=True)[0].data)[:32]
+    data[28] ^= 0x10  # change FV4, not merely MAC28
+    msg = libsafety_py.make_CANPacket(0x08A, 0, bytes(data))
     msg[0].fd = 1
     self.assertFalse(self.safety.safety_tx_hook(msg))
-    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
 
-  def test_signed_mode_allows_two_generation_old_id0_template_only(self):
-    reset = 0x12345
-    self.assertEqual(self.safety.set_safety_hooks(structs.CarParams.SafetyModel.toyota, self.SIGNED_PARAM), 0)
-    self.safety.init_tests()
-    self.safety.set_timer(0)
-    self.assertTrue(self.safety.safety_rx_hook(self.sync(reset)))
+  def test_recent_native_history_allows_oracle_reply_lag(self):
+    source0 = self.observe_source(target_id=11, angle_raw=100, b26=0x20, semantic=0x70)
+    self.arm()
+    # A later native generation can arrive while command5 is signing source0.
+    self.observe_source(target_id=18, angle_raw=200, b26=0x21, semantic=0x71)
+    self.safety.set_controls_allowed(True)
+    self.safety.set_desired_angle_last(100)
+    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(source0, angle_raw=105, mutate_mac=True)))
 
-    frames = []
-    for b26, semantic in ((0x10, 0x31), (0x11, 0x32), (0x12, 0x33)):
-      msg = self.source_08a(b26, semantic=semantic)
-      frames.append(bytes(msg[0].data)[:32])
-      self.assertTrue(self.safety.safety_rx_hook(msg))
+  def test_host_request_mode_blocks_legacy_c7_sideband(self):
+    self.observe_source(target_id=11)
+    self.assertFalse(self.safety.safety_tx_hook(self.c7()))
+    self.assertTrue(self.safety.safety_tx_hook(self.admin(1)))
+    self.assertFalse(self.safety.safety_tx_hook(self.c7()))
 
-    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0)))
-    two_back = self.replacement(frames[0], b26=0x13, reset=reset, message=2)
-    self.assertTrue(self.safety.safety_tx_hook(two_back))
-
-    # The same stale template remains forbidden in transparent mode.
+  def test_transparent_host_mode_still_allows_exact_clones_only(self):
     self.assertEqual(self.safety.set_safety_hooks(structs.CarParams.SafetyModel.toyota, self.PARAM), 0)
     self.safety.init_tests()
     self.safety.set_timer(0)
-    self.assertTrue(self.safety.safety_rx_hook(self.sync(reset)))
-    for b26, semantic in ((0x10, 0x31), (0x11, 0x32), (0x12, 0x33)):
-      self.assertTrue(self.safety.safety_rx_hook(self.source_08a(b26, semantic=semantic)))
-    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0)))
-    stale = self.replacement(frames[0], b26=0x13, reset=reset, message=2)
-    self.assertFalse(self.safety.safety_tx_hook(stale))
+    source = self.observe_source(target_id=11, angle_raw=100)
+    self.arm()
+    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(source)))
+
+    next_source = self.observe_source(target_id=11, angle_raw=100, b26=0x13)
+    self.assertFalse(self.safety.safety_tx_hook(self.host_frame(next_source, angle_raw=101, mutate_mac=True)))
 
   def test_replacement_requires_fd_and_sidebands_require_classic(self):
-    reset = 0x12345
-    source = self.seed_native(b26=0x12, reset=reset)
-    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0)))
-    replacement = self.replacement(source, b26=0x13, reset=reset, message=2)
-    classic = libsafety_py.make_CANPacket(0x08A, 0, bytes(replacement[0].data)[:32])
+    source = self.observe_source(target_id=0)
+    self.arm()
+    clone = self.host_frame(source)
+    classic = libsafety_py.make_CANPacket(0x08A, 0, bytes(clone[0].data)[:32])
     self.assertFalse(self.safety.safety_tx_hook(classic))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
-    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0)))
-    self.assertTrue(self.safety.safety_tx_hook(replacement))
 
-    self.safety.set_safety_hooks(structs.CarParams.SafetyModel.toyota, self.PARAM)
-    self.safety.init_tests()
-    fd_admin = self.admin(0, 0)
+    self.observe_source(target_id=0, b26=0x13)
+    self.assertTrue(self.safety.safety_tx_hook(self.admin(1)))
+    fd_admin = self.admin(0)
     fd_admin[0].fd = 1
     self.assertFalse(self.safety.safety_tx_hook(fd_admin))
     fd_ff = self.oracle_ff()
     fd_ff[0].fd = 1
     self.assertFalse(self.safety.safety_tx_hook(fd_ff))
 
-  def test_watchdog_fails_open_but_normal_reset_progression_keeps_ownership(self):
-    reset = 0x12345
-    self.seed_native(b26=0x12, reset=reset)
-    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0)))
+  def test_watchdog_fails_open(self):
+    source = self.observe_source(target_id=0)
+    self.arm()
+    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(source)))
     self.safety.set_timer(39_999)
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
     self.safety.set_timer(40_001)
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
 
-    source = self.seed_native(b26=0x20, reset=reset)
-    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0)))
-    self.assertTrue(self.safety.safety_rx_hook(self.sync(reset + 1)))
-    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
-    replacement = self.replacement(source, b26=0x21, reset=reset + 1, message=0)
-    self.assertTrue(self.safety.safety_tx_hook(replacement))
-    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
-
-  def test_host_mode_state_bus_is_relay_correct_bus0(self):
-    self.seed_native(b26=0x12)
-    moving_bus1 = libsafety_py.make_CANPacket(0x0AA, 1, bytes.fromhex("1c001c001c001c00"))
-    # Untracked messages still return valid generically, but bus1 is not
-    # dispatched to Toyota's RX callback in relay-correct host mode, so it does
-    # not set vehicle_moving and cannot prevent the arm.
-    self.assertTrue(self.safety.safety_rx_hook(moving_bus1))
-    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0)))
-    self.assertTrue(self.safety.safety_tx_hook(self.admin(0, 0)))
-
-    moving_bus0 = libsafety_py.make_CANPacket(0x0AA, 0, bytes.fromhex("1c001c001c001c00"))
-    self.assertTrue(self.safety.safety_rx_hook(moving_bus0))
-    self.assertFalse(self.safety.safety_tx_hook(self.admin(1, 0)))
-
-  def test_motion_prevents_or_releases_replacement(self):
-    self.seed_native(b26=0x12)
-    moving = libsafety_py.make_CANPacket(0x0AA, 0, bytes.fromhex("1c001c001c001c00"))
-    self.assertTrue(self.safety.safety_rx_hook(moving))
-    self.assertFalse(self.safety.safety_tx_hook(self.admin(1, 0)))
-
-    self.safety.set_safety_hooks(structs.CarParams.SafetyModel.toyota, self.PARAM)
-    self.safety.init_tests()
-    self.seed_native(b26=0x12)
-    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0)))
-    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
-    self.assertTrue(self.safety.safety_rx_hook(moving))
-    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
-
   def test_explicit_release_resumes_stock(self):
-    self.seed_native(b26=0x12)
-    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0)))
-    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
-    self.assertTrue(self.safety.safety_tx_hook(self.admin(0, 0)))
+    self.observe_source(target_id=0)
+    self.arm()
+    self.assertTrue(self.safety.safety_tx_hook(self.admin(0)))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
 
   def test_without_host_flag_existing_surface_is_unchanged(self):
@@ -670,10 +687,10 @@ class TestToyotaCamryTSS3Id0ReplacementSafety(unittest.TestCase):
     self.assertEqual(self.safety.set_safety_hooks(structs.CarParams.SafetyModel.toyota, param), 0)
     self.safety.init_tests()
     self.assertTrue(self.safety.safety_rx_hook(self.source_08a()))
-    self.assertTrue(self.safety.safety_rx_hook(self.sync()))
-    self.assertFalse(self.safety.safety_tx_hook(self.admin(1, 0)))
+    self.assertFalse(self.safety.safety_tx_hook(self.admin(1)))
     self.assertFalse(self.safety.safety_tx_hook(self.oracle_ff()))
-    self.assertFalse(self.safety.safety_tx_hook(self.replacement(bytes(self.source_08a()[0].data)[:32], b26=0x13, reset=0x12345)))
+    source = bytes(self.source_08a()[0].data)[:32]
+    self.assertFalse(self.safety.safety_tx_hook(self.host_frame(source)))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
 
 
