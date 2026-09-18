@@ -565,6 +565,24 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.assertTrue(self.safety.safety_tx_hook(self.admin(1)))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
 
+  def test_relay_open_rx_checks_require_native_sources_not_forwarded_bus0_08a(self):
+    def fd(addr: int, bus: int, data: bytes):
+      msg = libsafety_py.make_CANPacket(addr, bus, data)
+      msg[0].fd = 1
+      return msg
+
+    # Real relay-open topology: state/chassis sources are native bus0, while
+    # protected 0x08A is native bus2. There is deliberately no bus0 RX 0x08A;
+    # that downstream copy is produced by Panda forwarding/host replacement.
+    self.assertTrue(self.safety.safety_rx_hook(fd(0x025, 0, CAMRY_COMMON[0x025])))
+    self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x0AA, 0, CAMRY_COMMON[0x0AA])))
+    self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x116, 0, CAMRY_COMMON[0x116])))
+    self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x101, 0, CAMRY_COMMON[0x101])))
+    self.assertTrue(self.safety.safety_rx_hook(self.source_08a()))
+    self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x00F, 0, bytes(8))))
+    self.assertTrue(self.safety.safety_config_valid())
+
+
   def test_oracle_transport_is_exact_and_sequential(self):
     self.assertFalse(self.safety.safety_tx_hook(self.oracle_cf(1)))
     self.assertTrue(self.safety.safety_tx_hook(self.oracle_ff(9)))
