@@ -536,11 +536,11 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
 
   @staticmethod
   def oracle_ff(seq: int = 1):
-    return libsafety_py.make_CANPacket(0x7A1, 1, bytes((0x10, 40, 0xC9, 0xC9, seq, 0x00, 0x8A, 0x00)))
+    return libsafety_py.make_CANPacket(0x7A1, 0, bytes((0x10, 40, 0xC9, 0xC9, seq, 0x00, 0x8A, 0x00)))
 
   @staticmethod
   def oracle_cf(sn: int, fill: int = 0):
-    return libsafety_py.make_CANPacket(0x7A1, 1, bytes((0x20 | sn, fill, fill, fill, fill, fill, fill, fill)))
+    return libsafety_py.make_CANPacket(0x7A1, 0, bytes((0x20 | sn, fill, fill, fill, fill, fill, fill, fill)))
 
   @staticmethod
   def host_frame(source: bytes, *, angle_raw: int | None = None, mutate_mac: bool = False):
@@ -574,8 +574,8 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
 
     bad = bytearray(self.oracle_ff()[0].data)
     bad[6] = 0xB6
-    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x7A1, 1, bytes(bad))))
-    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x7A1, 0, bytes(self.oracle_ff()[0].data))))
+    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x7A1, 0, bytes(bad))))
+    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x7A1, 1, bytes(self.oracle_ff()[0].data))))
 
   def test_arm_is_fresh_source_ownership_not_id_or_motion_policy(self):
     self.assertFalse(self.safety.safety_tx_hook(self.admin(1)))
