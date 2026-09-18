@@ -430,6 +430,7 @@ class TestToyotaCamryTSS3Safety(unittest.TestCase):
 class TestToyotaCamryTSS3Id0ReplacementSafety(unittest.TestCase):
   PARAM = (EPS_SCALE[CAR.TOYOTA_CAMRY_TSS3] | ToyotaSafetyFlags.F33 |
            ToyotaSafetyFlags.STOCK_LONGITUDINAL | ToyotaSafetyFlags.TSS3_08A_HOST)
+  SIGNED_PARAM = PARAM | ToyotaSafetyFlags.TSS3_08A_SIGNED
 
   def setUp(self):
     self.safety = libsafety_py.libsafety
@@ -438,9 +439,11 @@ class TestToyotaCamryTSS3Id0ReplacementSafety(unittest.TestCase):
     self.safety.set_timer(0)
 
   @staticmethod
-  def source_08a(b26: int = 0x12, *, target_id: int = 0):
+  def source_08a(b26: int = 0x12, *, target_id: int = 0, semantic: int | None = None):
     data = bytearray(CAMRY_COMMON[0x08A])
     data[21] = target_id
+    if semantic is not None:
+      data[22] = semantic
     data[26] = b26 & 0x3F
     msg = libsafety_py.make_CANPacket(0x08A, 2, bytes(data))
     msg[0].fd = 1
@@ -532,6 +535,34 @@ class TestToyotaCamryTSS3Id0ReplacementSafety(unittest.TestCase):
 
     second = self.replacement(source, b26=0x14, reset=reset, message=3)
     self.assertTrue(self.safety.safety_tx_hook(second))
+
+  def test_signed_mode_allows_two_generation_old_id0_template_only(self):
+    reset = 0x12345
+    self.assertEqual(self.safety.set_safety_hooks(structs.CarParams.SafetyModel.toyota, self.SIGNED_PARAM), 0)
+    self.safety.init_tests()
+    self.safety.set_timer(0)
+    self.assertTrue(self.safety.safety_rx_hook(self.sync(reset)))
+
+    frames = []
+    for b26, semantic in ((0x10, 0x31), (0x11, 0x32), (0x12, 0x33)):
+      msg = self.source_08a(b26, semantic=semantic)
+      frames.append(bytes(msg[0].data)[:32])
+      self.assertTrue(self.safety.safety_rx_hook(msg))
+
+    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0x13)))
+    two_back = self.replacement(frames[0], b26=0x13, reset=reset, message=2)
+    self.assertTrue(self.safety.safety_tx_hook(two_back))
+
+    # The same stale template remains forbidden in transparent mode.
+    self.assertEqual(self.safety.set_safety_hooks(structs.CarParams.SafetyModel.toyota, self.PARAM), 0)
+    self.safety.init_tests()
+    self.safety.set_timer(0)
+    self.assertTrue(self.safety.safety_rx_hook(self.sync(reset)))
+    for b26, semantic in ((0x10, 0x31), (0x11, 0x32), (0x12, 0x33)):
+      self.assertTrue(self.safety.safety_rx_hook(self.source_08a(b26, semantic=semantic)))
+    self.assertTrue(self.safety.safety_tx_hook(self.admin(1, 0x13)))
+    stale = self.replacement(frames[0], b26=0x13, reset=reset, message=2)
+    self.assertFalse(self.safety.safety_tx_hook(stale))
 
   def test_replacement_requires_fd_and_sidebands_require_classic(self):
     reset = 0x12345
