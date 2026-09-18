@@ -4,7 +4,7 @@ import unittest
 from opendbc.car import CanData
 from opendbc.car.toyota.interface import CarInterface
 from opendbc.car.toyota.radar_interface import RadarInterface
-from opendbc.car.toyota.values import CAR
+from opendbc.car.toyota.values import CAR, ToyotaSafetyFlags
 
 
 def checksum(address, data):
@@ -158,6 +158,18 @@ class TestToyotaTSS3Radar(unittest.TestCase):
     self.assertFalse(self.ri.pts)
     rr = self.update(cycle(1))
     self.assertNotEqual(rr.points[0].trackId, first)
+
+  def test_relay_correct_camry_radar_uses_unsplit_bus1(self):
+    cp = CarInterface.get_non_essential_params(CAR.TOYOTA_CAMRY_TSS3)
+    cp.radarUnavailable = False
+    cp.safetyConfigs[0].safetyParam |= ToyotaSafetyFlags.TSS3_08A_HOST.value
+    ri = RadarInterface(cp)
+    self.assertEqual(ri.rcp.bus, 1)
+    frames = [CanData(frame.address, frame.dat, 1) for frame in cycle(0)]
+    rr = ri.update([(self.time, frames)])
+    self.assertIsNotNone(rr)
+    self.assertFalse(rr.errors.canError)
+    self.assertEqual(len(rr.points), 1)
 
   def test_unrelated_and_wrong_bus_traffic_cannot_publish_radar(self):
     frames = [CanData(frame.address, frame.dat, 1) for frame in cycle(0)]
