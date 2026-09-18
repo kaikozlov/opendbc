@@ -293,6 +293,22 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
       },
     };
 
+    static const AngleSteeringLimits TOYOTA_TSS3_08A_ANGLE_STEERING_LIMITS = {
+      .max_angle = 1745,
+      .angle_deg_to_can = 17.451171875F,
+      // 0x08A is 40 Hz while CarController updates at 100 Hz. Allow the
+      // largest three-controller-tick delta that can be sampled between
+      // adjacent native request frames; CarController remains tighter.
+      .angle_rate_up_lookup = {
+        {5., 25., 25.},
+        {0.45, 0.225, 0.225}
+      },
+      .angle_rate_down_lookup = {
+        {5., 25., 25.},
+        {0.54, 0.39, 0.39}
+      },
+    };
+
     const bool signer_control = (msg->bus == 1U) && (msg->addr == 0x777U);
     const bool oracle_transport = toyota_tss3_08a_host && !toyota_corolla_hf &&
                                   (msg->bus == 1U) && (msg->addr == 0x7A1U);
@@ -404,21 +420,6 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
 
       if (matched_index >= 0) {
         if (matched_modified_id11) {
-          static const AngleSteeringLimits TOYOTA_TSS3_08A_ANGLE_STEERING_LIMITS = {
-            .max_angle = 1745,
-            .angle_deg_to_can = 17.451171875F,
-            // 0x08A is 40 Hz while CarController updates at 100 Hz. Allow the
-            // largest three-controller-tick delta that can be sampled between
-            // adjacent native request frames; CarController remains tighter.
-            .angle_rate_up_lookup = {
-              {5., 25., 25.},
-              {0.45, 0.225, 0.225}
-            },
-            .angle_rate_down_lookup = {
-              {5., 25., 25.},
-              {0.54, 0.39, 0.39}
-            },
-          };
           int target_angle = (msg->data[18] << 8U) | msg->data[19];
           target_angle = to_signed(target_angle, 16);
           tx = !safety_max_limit_check(target_angle, TOYOTA_TSS3_08A_ANGLE_STEERING_LIMITS.max_angle,
@@ -428,6 +429,16 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
           // Stock clone: do not apply openpilot steering policy to Toyota's own
           // LDA/PDA/PCS/LTA request. This is only the relay replacement copy.
           tx = true;
+          const uint8_t native_id = toyota_tss3_08a_native_frames[matched_index][21] & 0x3FU;
+          if (native_id == 11U) {
+            int native_angle = (toyota_tss3_08a_native_frames[matched_index][18] << 8U) |
+                               toyota_tss3_08a_native_frames[matched_index][19];
+            desired_angle_last = to_signed(native_angle, 16);
+          } else {
+            desired_angle_last = SAFETY_CLAMP(angle_meas.values[0],
+                                              -TOYOTA_TSS3_08A_ANGLE_STEERING_LIMITS.max_angle,
+                                               TOYOTA_TSS3_08A_ANGLE_STEERING_LIMITS.max_angle);
+          }
         }
       }
 

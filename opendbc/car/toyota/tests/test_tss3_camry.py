@@ -616,6 +616,22 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.assertFalse(self.safety.safety_tx_hook(bad_msg))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
 
+  def test_exact_non_id11_clone_resets_angle_rate_baseline_for_id11_reentry(self):
+    source = self.observe_source(target_id=11, angle_raw=100, b26=0x20)
+    self.arm()
+    self.safety.set_controls_allowed(True)
+    self.safety.set_desired_angle_last(100)
+    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(source, angle_raw=105, mutate_mac=True)))
+
+    # Toyota owns a different application for a while. Its exact clone resets
+    # the openpilot angle-rate baseline to measured steering.
+    self.safety.set_angle_meas(0, 0)
+    non_id11 = self.observe_source(target_id=18, angle_raw=500, b26=0x21)
+    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(non_id11)))
+
+    reentry = self.observe_source(target_id=11, angle_raw=0, b26=0x22)
+    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(reentry, angle_raw=5, mutate_mac=True)))
+
   def test_modified_non_id11_is_rejected(self):
     source = self.observe_source(target_id=18, angle_raw=100)
     self.arm()
