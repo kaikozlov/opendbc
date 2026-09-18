@@ -9,7 +9,7 @@ from opendbc.car.secoc import add_mac, build_sync_mac
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.toyota import toyotacan
 from opendbc.car.toyota.tss3 import build_signer_control, target_angle_deg_to_raw
-from opendbc.car.toyota.values import CAR, CarControllerParams, ToyotaFlags
+from opendbc.car.toyota.values import CAR, CarControllerParams, ToyotaFlags, ToyotaSafetyFlags
 from opendbc.can import CANPacker
 
 Ecu = structs.CarParams.Ecu
@@ -86,23 +86,34 @@ class CarController(CarControllerBase):
       output = CC.actuators.as_builder()
       can_sends = []
 
+      host_request_plane = (self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3 and self.CP.safetyConfigs and
+                            bool(self.CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.TSS3_08A_HOST.value))
+      # The F33 request-plane carrier exists for openpilot only while the native
+      # FRC application is ID11 (LTA/LCA). Reset the normal angle limiter to the
+      # measured steering angle across other Toyota request identities so a
+      # later ID11 interval re-enters smoothly rather than jumping to a target
+      # accumulated while Toyota owned another application request.
+      lateral_command_active = CC.latActive and (not host_request_plane or CS.tss3_lateral_request_id == 11)
+
       # Run TSS3 lateral at the native 100 Hz openpilot control cadence. The
-      # TSS3 angle deltas are scaled per 10 ms command so this preserves the
-      # same physical deg/s envelope as the earlier 50 Hz bring-up path.
+      # request-plane proxy samples this normal rate-limited target on native
+      # 0x08A arrivals; it does not create a second steering state machine.
       desired_angle = CC.actuators.steeringAngleDeg + CS.out.steeringAngleOffsetDeg
       self.last_angle = apply_std_steer_angle_limits(
         desired_angle, self.last_angle, CS.out.vEgoRaw,
         CS.out.steeringAngleDeg + CS.out.steeringAngleOffsetDeg,
-        CC.latActive, self.params.TSS3_ANGLE_LIMITS,
+        lateral_command_active, self.params.TSS3_ANGLE_LIMITS,
       )
 
-      if CC.latActive:
-        self.tss3_control_sequence = self.tss3_control_sequence % 0xFF + 1
-      # Keep the generation across inactive periods. Sequence zero is the
-      # common unified release command; the next active command must change.
-      can_sends.append(build_signer_control(
-        target_angle_deg_to_raw(self.last_angle), self.tss3_control_sequence if CC.latActive else 0,
-      ))
+      if not host_request_plane:
+        if CC.latActive:
+          self.tss3_control_sequence = self.tss3_control_sequence % 0xFF + 1
+        # Corolla and the legacy Camry bring-up path command the EPS-resident
+        # B6 signer directly. The F33 request-plane path instead consumes this
+        # same rate-limited target in card's authenticated 0x08A proxy.
+        can_sends.append(build_signer_control(
+          target_angle_deg_to_raw(self.last_angle), self.tss3_control_sequence if CC.latActive else 0,
+        ))
       output.steeringAngleDeg = self.last_angle
 
       # Stock longitudinal stays Toyota-owned. Match the normal openpilot Toyota
@@ -112,8 +123,9 @@ class CarController(CarControllerBase):
       if self.CP.carFingerprint == CAR.TOYOTA_COROLLA_TSS3 and CC.cruiseControl.cancel:
         can_sends.append(toyotacan.create_tss3_brake_cancel_command(self.packer, CS.tss3_brake_module, 1))
 
-      # Longitudinal remains Toyota-owned until openpilot can replace the
-      # shared 0x08A request plane with source-real ownership.
+      # Longitudinal remains Toyota-owned. In F33 request-plane mode the host
+      # proxy copies those native 0x08A fields byte-for-byte while selectively
+      # substituting only the ID11 lateral pinion-angle request.
       output.accel = 0.0
 
       self.frame += 1
