@@ -53,7 +53,7 @@ def fingerprint() -> dict[int, dict[int, int]]:
 
 def update_state(ci: CarInterface, moving: bool = False, counter_offset: int = 0, hud: bytes | None = None,
                  eps_status: int | None = None, eps_telemetry: bytes | None = None,
-                 control_request: bytes | None = None, bus: int = 1):
+                 control_request: bytes | None = None, bus: int = 1, source_bus: int | None = None):
   state = None
   for i in range(20):
     frames = dict(CAMRY_COMMON)
@@ -68,9 +68,11 @@ def update_state(ci: CarInterface, moving: bool = False, counter_offset: int = 0
       frames[0x030] = bytes(eps)
     if moving:
       frames[0x0AA] = bytes.fromhex("1c001c001c001c00")
-    packets = [CanData(address, data, bus) for address, data in frames.items()]
+    source_ids = {0x08A, 0x251, 0x3F6, 0x412}
+    packets = [CanData(address, data, source_bus if source_bus is not None and address in source_ids else bus)
+               for address, data in frames.items()]
     if hud is not None:
-      packets.append(CanData(0x412, hud, bus))
+      packets.append(CanData(0x412, hud, source_bus if source_bus is not None else bus))
     state = ci.update([(1_000_000_000 + (counter_offset + i) * 10_000_000, packets)])
   return state
 
@@ -430,15 +432,19 @@ class TestToyotaCamryTSS3Safety(unittest.TestCase):
     cp = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint(), [], True, False, False)
     cp.safetyConfigs[0].safetyParam |= ToyotaSafetyFlags.TSS3_08A_HOST.value
     ci = CarInterface(cp)
-    state = update_state(ci, bus=0, hud=CAMRY_HUD)
+    self.assertEqual(ci.can_parsers[Bus.pt].bus, 0)
+    self.assertEqual(ci.can_parsers[Bus.cam].bus, 2)
+    state = update_state(ci, bus=0, source_bus=2, hud=CAMRY_HUD)
     self.assertTrue(state.canValid)
     self.assertTrue(state.standstill)
 
-    # The same interface no longer consumes the stock-harness bus1 state when
-    # the relay-correct host mode is selected.
-    ci_wrong_bus = CarInterface(cp)
-    state_wrong_bus = update_state(ci_wrong_bus, bus=1, hud=CAMRY_HUD)
-    self.assertFalse(state_wrong_bus.canValid)
+    # Missing either side of the physical split invalidates CarState.
+    ci_missing_source = CarInterface(cp)
+    state_missing_source = update_state(ci_missing_source, bus=0, hud=CAMRY_HUD)
+    self.assertFalse(state_missing_source.canValid)
+    ci_wrong_state = CarInterface(cp)
+    state_wrong_state = update_state(ci_wrong_state, bus=1, source_bus=2, hud=CAMRY_HUD)
+    self.assertFalse(state_wrong_state.canValid)
 
 
 class TestToyotaCamryTSS3Id0ReplacementSafety(unittest.TestCase):
