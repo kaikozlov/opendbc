@@ -521,6 +521,15 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     return libsafety_py.make_CANPacket(0x777, 1, bytes((7, 0xC9, 0xA8, action, 0, 0, 0, 0)))
 
   @staticmethod
+  def sync(reset: int = 0x12345, trip: int = 0x026C):
+    data = bytearray(8)
+    data[0:2] = trip.to_bytes(2, "big")
+    data[2] = (reset >> 12) & 0xFF
+    data[3] = (reset >> 4) & 0xFF
+    data[4] = (reset & 0xF) << 4
+    return libsafety_py.make_CANPacket(0x00F, 0, bytes(data))
+
+  @staticmethod
   def c7(angle_raw: int = 0, sequence: int = 1):
     data = b"\x07\xC7\xC7" + bytes((sequence,)) + angle_raw.to_bytes(2, "big", signed=True) + b"\x00\x00"
     return libsafety_py.make_CANPacket(0x777, 1, data)
@@ -646,6 +655,28 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.safety.set_controls_allowed(False)
     self.safety.set_desired_angle_last(100)
     self.assertFalse(self.safety.safety_tx_hook(self.host_frame(source, angle_raw=101, mutate_mac=True)))
+
+  def test_latest_00f_cannot_veto_a_matched_native_08a_generation(self):
+    old_reset = 0x12345
+    new_reset = old_reset + 1
+    old_fv4 = ((2 & 0x3) << 2) | (old_reset & 0x3)
+    source = self.observe_source(target_id=11, angle_raw=100, b26=0x30, fv4=old_fv4)
+    self.arm()
+
+    # 0x00F advances first. Safety must still accept the exact source generation
+    # (or its bounded ID11 angle substitution) by matching native 0x08A itself.
+    self.assertTrue(self.safety.safety_rx_hook(self.sync(new_reset)))
+    self.safety.set_controls_allowed(True)
+    self.safety.set_desired_angle_last(100)
+    replacement = self.host_frame(source, angle_raw=105, mutate_mac=True)
+    self.assertTrue(self.safety.safety_tx_hook(replacement))
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
+
+    new_fv4 = ((3 & 0x3) << 2) | (new_reset & 0x3)
+    next_source = self.observe_source(target_id=11, angle_raw=105, b26=0x31, fv4=new_fv4)
+    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(next_source, angle_raw=110, mutate_mac=True)))
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
+
 
   def test_modified_id11_preserves_exact_fv4(self):
     source = self.observe_source(target_id=11, angle_raw=100, fv4=9)

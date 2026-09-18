@@ -407,6 +407,9 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
           }
           selective_id11 &= toyota_tss3_08a_signed;
           selective_id11 &= (toyota_tss3_08a_native_frames[history_index][21] & 0x3FU) == 11U;
+          // FV4 belongs to the native generation being replaced. Do not compare
+          // it with latest 0x00F: those two publishers legitimately straddle
+          // normal reset-counter transitions.
           selective_id11 &= (msg->data[28] & 0xF0U) == (toyota_tss3_08a_native_frames[history_index][28] & 0xF0U);
           selective_id11 &= angle_changed;
 
