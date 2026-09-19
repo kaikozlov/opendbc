@@ -54,15 +54,15 @@ class TestCamryEvidenceAudit(unittest.TestCase):
     result = ri.update([(1_000_000_000, [CanData(a, d, ri.rcp.bus) for a, d in frames.items()])])
     self.assertTrue(result is None or not result.points)
 
-  def test_conventional_cruise_is_reported_via_the_normal_contract(self):
-    for mode, non_adaptive in ((0x88, True), (0x90, True), (0x80, False), (0xA0, False), (0xC0, False), (0xE0, False)):
+  def test_conventional_cruise_does_not_report_an_incompatible_control_mode(self):
+    for mode in (0x88, 0x90, 0x80, 0xA0, 0xC0, 0xE0):
       with self.subTest(mode=hex(mode)):
         frames = dict(CAMRY_COMMON)
         frames[0x251] = bytes((mode,)) + frames[0x251][1:]
         ci = CarInterface(self.cp)
         with patch.dict(CAMRY_COMMON, frames):
           state = update_state(ci)
-        self.assertEqual(state.cruiseState.nonAdaptive, non_adaptive)
+        self.assertFalse(state.cruiseState.nonAdaptive)
 
   def test_planner_limits_match_the_camry_actuator_envelope(self):
     self.assertEqual(CarInterface.get_pid_accel_limits(self.cp, 15.0, 25.0), (-1.5, 1.3))
@@ -159,7 +159,7 @@ class TestCamryEvidenceAudit(unittest.TestCase):
             continue
           observed += 1
           self.assertEqual(state.canValid, source["label"] == "working_eps_repin")
-          self.assertTrue(state.cruiseState.nonAdaptive)
+          self.assertFalse(state.cruiseState.nonAdaptive)
           self.assertFalse(state.vehicleSensorsInvalid)
           if source["label"] == "stock_harness_eps_absent":
             missing = {msg.address for parser in ci.can_parsers.values() for msg in parser.message_states.values()
