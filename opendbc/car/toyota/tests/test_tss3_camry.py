@@ -385,6 +385,13 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertGreater(output.steeringAngleDeg, measured + 0.15)
     self.assertAlmostEqual(output.steeringAngleDeg, measured + 0.30, delta=0.02)
 
+  def test_host_request_plane_cancel_clones_native_brake_status_to_source_side(self):
+    cp = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, relay_fingerprint(), [], True, False, False)
+    ci = CarInterface(cp)
+    update_state(ci, bus=0, source_bus=2, hud=CAMRY_HUD)
+    _, sends = ci.apply(control(0.0, active=False, cancel=True), 2_000_000_000)
+    self.assertIn((0x101, bytes.fromhex("8800000100000093"), 2), sends)
+
   def test_inactive_c7_tracks_measured_angle_with_neutral_sequence(self):
     ci = CarInterface(self.CP)
     state = update_state(ci)
@@ -605,6 +612,25 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     disabled_msg[0].fd = 1
     self.assertTrue(self.safety.safety_rx_hook(disabled_msg))
     self.assertFalse(self.safety.get_controls_allowed())
+
+  def test_camry_brake_cancel_safety_is_stock_shaped_and_checksum_valid(self):
+    good = bytes.fromhex("8800000100000093")
+    self.assertTrue(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x101, 2, good)))
+
+    brake_off = bytearray(good)
+    brake_off[0] &= ~0x08
+    brake_off[7] = (0x01 + 0x01 + 8 + sum(brake_off[:7])) & 0xFF
+    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x101, 2, bytes(brake_off))))
+
+    bad_shape = bytearray(good)
+    bad_shape[4] = 1
+    bad_shape[7] = (0x01 + 0x01 + 8 + sum(bad_shape[:7])) & 0xFF
+    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x101, 2, bytes(bad_shape))))
+
+    bad_checksum = bytearray(good)
+    bad_checksum[7] ^= 1
+    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x101, 2, bytes(bad_checksum))))
+    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x101, 0, good)))
 
   def test_oracle_transport_is_one_normal_ff_cf_sequence(self):
     self.assertFalse(self.safety.safety_tx_hook(self.oracle_cf(1)))

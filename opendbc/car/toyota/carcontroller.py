@@ -114,12 +114,14 @@ class CarController(CarControllerBase):
         ))
       output.steeringAngleDeg = self.last_angle
 
-      # Stock longitudinal stays Toyota-owned. Match the normal openpilot Toyota
-      # cancel contract: controlsd owns CC.cruiseControl.cancel and CarController
-      # emits the target-native cancel carrier. Corolla's native 0x101 lives on
-      # the unsplit bus 1 and is cloned from the live Brake Module state.
-      if self.CP.carFingerprint == CAR.TOYOTA_COROLLA_TSS3 and CC.cruiseControl.cancel:
-        can_sends.append(toyotacan.create_tss3_brake_cancel_command(self.packer, CS.tss3_brake_module, 1))
+      # Stock longitudinal stays Toyota-owned. Cancel through the ordinary
+      # Brake Module carrier observed on each topology; do not spoof protected
+      # cruise/longitudinal request PDUs.
+      if CC.cruiseControl.cancel:
+        if self.CP.carFingerprint == CAR.TOYOTA_COROLLA_TSS3:
+          can_sends.append(toyotacan.create_tss3_brake_cancel_command(self.packer, CS.tss3_brake_module, 1))
+        elif self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3 and host_request_plane:
+          can_sends.append(toyotacan.create_tss3_brake_cancel_command(self.packer, CS.tss3_brake_module, 2))
 
       # Longitudinal remains Toyota-owned. In F33 request-plane mode the host
       # proxy copies those native 0x08A fields byte-for-byte while selectively
