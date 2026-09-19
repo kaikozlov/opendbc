@@ -89,6 +89,31 @@ static uint32_t toyota_compute_checksum(const CANPacket_t *msg) {
   return checksum;
 }
 
+static bool toyota_f33_angle_cmd_checks(int desired_angle, bool steer_control_enabled,
+                                        const AngleSteeringLimits limits, const AngleSteeringParams params) {
+  const int desired_angle_previous = desired_angle_last;
+  bool conditioner_violation = false;
+  if (controls_allowed && steer_control_enabled) {
+    // Exact F33 conditions 7 doubled-domain units per 5 ms foreground call.
+    // This is 7 B6 counts per 10 ms openpilot tick. The request-plane proxy
+    // can legitimately sample up to four controller ticks on one native 0x08A
+    // generation, while the direct resident-signer sideband samples every tick.
+    const uint32_t delta_frames = SAFETY_MAX(limits.angle_rate_delta_frames, 1U);
+    const int max_conditioned_delta = 7 * delta_frames;
+    conditioner_violation = safety_max_limit_check(desired_angle,
+                                                   desired_angle_previous + max_conditioned_delta,
+                                                   desired_angle_previous - max_conditioned_delta);
+  }
+
+  bool violation = safety_max_limit_check(desired_angle, limits.max_angle, -limits.max_angle);
+  violation |= steer_angle_cmd_checks_vm(desired_angle, steer_control_enabled, limits, params);
+  violation |= conditioner_violation;
+  if (violation) {
+    desired_angle_last = SAFETY_CLAMP(angle_meas.values[0], -limits.max_angle, limits.max_angle);
+  }
+  return violation;
+}
+
 static uint32_t toyota_get_checksum(const CANPacket_t *msg) {
   int checksum_byte = GET_LEN(msg) - 1U;
   return (uint8_t)(msg->data[checksum_byte]);
@@ -299,7 +324,7 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
   bool tx = true;
 
   if (toyota_tss3_signer) {
-    static const AngleSteeringLimits TOYOTA_TSS3_ANGLE_STEERING_LIMITS = {
+    static const AngleSteeringLimits TOYOTA_TSS3_COROLLA_ANGLE_STEERING_LIMITS = {
       .max_angle = 1745,
       .angle_deg_to_can = 17.451171875F,
       .angle_rate_up_lookup = {
@@ -312,21 +337,27 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
       },
     };
 
-    static const AngleSteeringLimits TOYOTA_TSS3_08A_ANGLE_STEERING_LIMITS = {
+    static const AngleSteeringLimits TOYOTA_F33_ANGLE_STEERING_LIMITS = {
       .max_angle = 1745,
       .angle_deg_to_can = 17.451171875F,
-      // 0x08A is nominally 40 Hz while CarController updates at 100 Hz, but
-      // source intervals on the live F33 are commonly 30-34 ms and can straddle
-      // four controller updates. Allow exactly four controller-tick deltas;
-      // CarController remains the tighter 100-Hz authority.
-      .angle_rate_up_lookup = {
-        {5., 25., 25.},
-        {0.60, 0.30, 0.30}
-      },
-      .angle_rate_down_lookup = {
-        {5., 25., 25.},
-        {0.72, 0.52, 0.52}
-      },
+      .frequency = 100U,
+      .angle_rate_delta_frames = 1U,
+    };
+
+    static const AngleSteeringLimits TOYOTA_F33_08A_ANGLE_STEERING_LIMITS = {
+      .max_angle = 1745,
+      .angle_deg_to_can = 17.451171875F,
+      .frequency = 100U,
+      // Native 0x08A source intervals can straddle four 100-Hz controller
+      // updates. CarController remains the tighter per-tick authority.
+      .angle_rate_delta_frames = 4U,
+    };
+
+    // Exact 2026 Camry parameters used by CarController's VehicleModel.
+    static const AngleSteeringParams TOYOTA_F33_ANGLE_STEERING_PARAMS = {
+      .slip_factor = -0.0007485661713436738F,
+      .steer_ratio = 15.3F,
+      .wheelbase = 2.8244800567626953F,
     };
 
     const bool signer_control = (msg->bus == 1U) && (msg->addr == 0x777U);
@@ -379,9 +410,16 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
         int target_angle = (msg->data[4] << 8U) | msg->data[5];
         target_angle = to_signed(target_angle, 16);
         const bool steer_control_enabled = msg->data[3] != 0U;
-        tx = c7_header_valid && !safety_max_limit_check(target_angle, TOYOTA_TSS3_ANGLE_STEERING_LIMITS.max_angle,
-                                                       -TOYOTA_TSS3_ANGLE_STEERING_LIMITS.max_angle) &&
-                               !steer_angle_cmd_checks(target_angle, steer_control_enabled, TOYOTA_TSS3_ANGLE_STEERING_LIMITS);
+        if (toyota_corolla_hf) {
+          tx = c7_header_valid &&
+               !safety_max_limit_check(target_angle, TOYOTA_TSS3_COROLLA_ANGLE_STEERING_LIMITS.max_angle,
+                                       -TOYOTA_TSS3_COROLLA_ANGLE_STEERING_LIMITS.max_angle) &&
+               !steer_angle_cmd_checks(target_angle, steer_control_enabled, TOYOTA_TSS3_COROLLA_ANGLE_STEERING_LIMITS);
+        } else {
+          tx = c7_header_valid &&
+               !toyota_f33_angle_cmd_checks(target_angle, steer_control_enabled,
+                                            TOYOTA_F33_ANGLE_STEERING_LIMITS, TOYOTA_F33_ANGLE_STEERING_PARAMS);
+        }
       }
     }
     if (oracle_transport) {
@@ -438,8 +476,8 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
               matched_index = history_index;
               tx = true;
               desired_angle_last = SAFETY_CLAMP(angle_meas.values[0],
-                                                -TOYOTA_TSS3_08A_ANGLE_STEERING_LIMITS.max_angle,
-                                                 TOYOTA_TSS3_08A_ANGLE_STEERING_LIMITS.max_angle);
+                                                -TOYOTA_F33_08A_ANGLE_STEERING_LIMITS.max_angle,
+                                                 TOYOTA_F33_08A_ANGLE_STEERING_LIMITS.max_angle);
             }
           } else {
             // Every post-handoff owned generation is validated only as comma's
@@ -472,9 +510,8 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
               int target_angle = (msg->data[18] << 8U) | msg->data[19];
               target_angle = to_signed(target_angle, 16);
               tx = controls_allowed &&
-                   !safety_max_limit_check(target_angle, TOYOTA_TSS3_08A_ANGLE_STEERING_LIMITS.max_angle,
-                                           -TOYOTA_TSS3_08A_ANGLE_STEERING_LIMITS.max_angle) &&
-                   !steer_angle_cmd_checks(target_angle, true, TOYOTA_TSS3_08A_ANGLE_STEERING_LIMITS);
+                   !toyota_f33_angle_cmd_checks(target_angle, true, TOYOTA_F33_08A_ANGLE_STEERING_LIMITS,
+                                                TOYOTA_F33_ANGLE_STEERING_PARAMS);
               if (tx) {
                 matched_index = history_index;
               }

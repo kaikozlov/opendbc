@@ -1,7 +1,7 @@
 import math
 import numpy as np
 from opendbc.car import Bus, make_tester_present_msg, rate_limit, structs, ACCELERATION_DUE_TO_GRAVITY, DT_CTRL
-from opendbc.car.lateral import apply_meas_steer_torque_limits, apply_std_steer_angle_limits, common_fault_avoidance
+from opendbc.car.lateral import apply_meas_steer_torque_limits, apply_std_steer_angle_limits, apply_steer_angle_limits_vm, common_fault_avoidance
 from opendbc.car.carlog import carlog
 from opendbc.car.common.filter_simple import FirstOrderFilter, HighPassFilter
 from opendbc.car.common.pid import PIDController
@@ -10,6 +10,7 @@ from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.toyota import toyotacan
 from opendbc.car.toyota.tss3 import build_signer_control, target_angle_deg_to_raw
 from opendbc.car.toyota.values import CAR, CarControllerParams, ToyotaFlags, ToyotaSafetyFlags
+from opendbc.car.vehicle_model import VehicleModel
 from opendbc.can import CANPacker
 
 Ecu = structs.CarParams.Ecu
@@ -50,6 +51,7 @@ class CarController(CarControllerBase):
   def __init__(self, dbc_names, CP):
     super().__init__(dbc_names, CP)
     self.params = CarControllerParams(self.CP)
+    self.VM = VehicleModel(self.CP)
     self.last_torque = 0
     self.last_angle = 0
     self.alert_active = False
@@ -97,11 +99,17 @@ class CarController(CarControllerBase):
       # request-plane proxy samples this normal rate-limited target on native
       # 0x08A arrivals; it does not create a second steering state machine.
       desired_angle = CC.actuators.steeringAngleDeg + CS.out.steeringAngleOffsetDeg
-      self.last_angle = apply_std_steer_angle_limits(
-        desired_angle, self.last_angle, CS.out.vEgoRaw,
-        CS.out.steeringAngleDeg + CS.out.steeringAngleOffsetDeg,
-        lateral_command_active, self.params.TSS3_ANGLE_LIMITS,
-      )
+      measured_angle = CS.out.steeringAngleDeg + CS.out.steeringAngleOffsetDeg
+      if self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:
+        self.last_angle = apply_steer_angle_limits_vm(
+          desired_angle, self.last_angle, CS.out.vEgoRaw, measured_angle,
+          lateral_command_active, self.params, self.VM,
+        )
+      else:
+        self.last_angle = apply_std_steer_angle_limits(
+          desired_angle, self.last_angle, CS.out.vEgoRaw, measured_angle,
+          lateral_command_active, self.params.TSS3_ANGLE_LIMITS,
+        )
 
       if not host_request_plane:
         if CC.latActive:
