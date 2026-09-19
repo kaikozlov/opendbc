@@ -583,6 +583,21 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.assertTrue(self.safety.safety_config_valid())
 
 
+  def test_relay_open_native_08a_owns_controls_allowed(self):
+    self.assertFalse(self.safety.get_controls_allowed())
+
+    enabled = self.source_08a(target_id=11)
+    self.assertTrue(self.safety.safety_rx_hook(enabled))
+    self.assertTrue(self.safety.get_controls_allowed())
+
+    disabled = bytearray(bytes(enabled[0].data)[:32])
+    disabled[3] &= ~0x08
+    disabled_msg = libsafety_py.make_CANPacket(0x08A, 2, bytes(disabled))
+    disabled_msg[0].fd = 1
+    self.assertTrue(self.safety.safety_rx_hook(disabled_msg))
+    self.assertFalse(self.safety.get_controls_allowed())
+
+
   def test_oracle_transport_is_exact_and_sequential(self):
     self.assertFalse(self.safety.safety_tx_hook(self.oracle_cf(1)))
     self.assertTrue(self.safety.safety_tx_hook(self.oracle_ff(9)))

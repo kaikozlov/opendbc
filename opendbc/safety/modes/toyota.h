@@ -128,6 +128,10 @@ static void toyota_rx_hook(const CANPacket_t *msg) {
       }
       toyota_tss3_08a_native_valid = true;
       toyota_tss3_08a_native_last_rx_ts = microsecond_timer_get();
+      // In relay-open host mode, authoritative 0x08A is native on source bus2.
+      // Its cruise operating latch is therefore the controls_allowed source;
+      // do not look for a bus0 RX copy that only exists as forwarding/TX echo.
+      pcm_cruise_check(GET_BIT(msg, 27U));
     }
   }
 
@@ -159,7 +163,7 @@ static void toyota_rx_hook(const CANPacket_t *msg) {
         vehicle_moving = speed != 0;
         UPDATE_VEHICLE_SPEED(speed / 4.0 * 0.01 * KPH_TO_MS);
       }
-      if (!toyota_corolla_hf && (msg->addr == 0x8AU)) {
+      if (!toyota_corolla_hf && !toyota_tss3_08a_host && (msg->addr == 0x8AU)) {
         pcm_cruise_check(GET_BIT(msg, 27U));
       }
       if (toyota_corolla_hf && (msg->addr == 0x8AU)) {
