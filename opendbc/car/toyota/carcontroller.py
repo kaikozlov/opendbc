@@ -88,12 +88,11 @@ class CarController(CarControllerBase):
 
       host_request_plane = (self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3 and self.CP.safetyConfigs and
                             bool(self.CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.TSS3_08A_HOST.value))
-      # The F33 request-plane carrier exists for openpilot only while the native
-      # FRC application is ID11 (LTA/LCA). Reset the normal angle limiter to the
-      # measured steering angle across other Toyota request identities so a
-      # later ID11 interval re-enters smoothly rather than jumping to a target
-      # accumulated while Toyota owned another application request.
-      lateral_command_active = CC.latActive and (not host_request_plane or CS.tss3_lateral_request_id == 11)
+      # In F33 request-plane mode, native ID0 is an idle lateral envelope that
+      # the host promotes to ID11 while CC.latActive. Keep the normal openpilot
+      # angle limiter running across both ID0 and ID11; reset to measured angle
+      # only while Toyota owns a different lateral application (LDA/PDA/etc.).
+      lateral_command_active = CC.latActive and (not host_request_plane or CS.tss3_lateral_request_id in (0, 11))
 
       # Run TSS3 lateral at the native 100 Hz openpilot control cadence. The
       # request-plane proxy samples this normal rate-limited target on native

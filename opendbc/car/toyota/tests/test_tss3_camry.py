@@ -369,15 +369,16 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertFalse(any(address == 0x777 for address, _, _ in sends))
     self.assertAlmostEqual(output.steeringAngleDeg, 0.15, delta=0.01)
 
-    # When Toyota leaves ID11, the request-plane target resets to measured
-    # steering instead of accumulating an unsent command behind another app.
+    # Native ID0 is promoted to ID11 by the authenticated request-plane proxy,
+    # so the normal openpilot angle target continues through Toyota's idle
+    # lateral state instead of resetting to measured steering.
     request[21] = request[21] & 0xC0
-    state = update_state(ci, moving=True, control_request=bytes(request), bus=0, source_bus=2, hud=CAMRY_HUD)
+    update_state(ci, moving=True, control_request=bytes(request), bus=0, source_bus=2, hud=CAMRY_HUD)
     output, sends = ci.apply(control(20.0), 2_010_000_000)
     self.assertEqual(ci.CS.tss3_lateral_request_id, 0)
     self.assertFalse(any(address == 0x777 for address, _, _ in sends))
-    self.assertAlmostEqual(output.steeringAngleDeg,
-                           state.steeringAngleDeg + state.steeringAngleOffsetDeg, delta=0.2)
+    self.assertGreater(output.steeringAngleDeg, 0.15)
+    self.assertAlmostEqual(output.steeringAngleDeg, 0.30, delta=0.02)
 
   def test_inactive_c7_tracks_measured_angle_with_neutral_sequence(self):
     ci = CarInterface(self.CP)
@@ -543,10 +544,12 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     return libsafety_py.make_CANPacket(0x7A1, 0, bytes((0x20 | sn, fill, fill, fill, fill, fill, fill, fill)))
 
   @staticmethod
-  def host_frame(source: bytes, *, angle_raw: int | None = None, mutate_mac: bool = False):
+  def host_frame(source: bytes, *, angle_raw: int | None = None, target_id: int | None = None, mutate_mac: bool = False):
     data = bytearray(source)
     if angle_raw is not None:
       data[18:20] = angle_raw.to_bytes(2, "big", signed=True)
+    if target_id is not None:
+      data[21] = (data[21] & 0xC0) | (target_id & 0x3F)
     if mutate_mac:
       data[28] ^= 0x0F  # MAC28 only; preserve FV4 high nibble
       data[29] ^= 0xA5
@@ -582,7 +585,6 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x00F, 0, bytes(8))))
     self.assertTrue(self.safety.safety_config_valid())
 
-
   def test_relay_open_native_08a_owns_controls_allowed(self):
     self.assertFalse(self.safety.get_controls_allowed())
 
@@ -596,7 +598,6 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     disabled_msg[0].fd = 1
     self.assertTrue(self.safety.safety_rx_hook(disabled_msg))
     self.assertFalse(self.safety.get_controls_allowed())
-
 
   def test_oracle_transport_is_exact_and_sequential(self):
     self.assertFalse(self.safety.safety_tx_hook(self.oracle_cf(1)))
@@ -628,6 +629,21 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.safety.set_timer(75_001)
     self.assertFalse(self.safety.safety_tx_hook(self.admin(1)))
 
+  def test_first_handoff_clone_seeds_angle_rate_from_measured_steering(self):
+    # init_tests() leaves the sampled measured steering baseline at zero. The
+    # first exact handoff clone must keep that measured baseline instead of
+    # adopting Toyota's unrelated native ID11 request angle.
+    source = self.observe_source(target_id=11, angle_raw=50, b26=0x20)
+    self.arm()
+    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(source)))
+    self.assertEqual(self.safety.get_desired_angle_last(), 0)
+
+    # After the handoff witness, ordinary exact ID11 clones again track their
+    # native request angle when they are actually the commanded output.
+    next_source = self.observe_source(target_id=11, angle_raw=60, b26=0x21)
+    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(next_source)))
+    self.assertEqual(self.safety.get_desired_angle_last(), 60)
+
   def test_exact_clone_preserves_non_id11_requests_and_is_single_use(self):
     source = self.observe_source(target_id=18, b26=0x12, semantic=0x51)
     self.arm()
@@ -637,6 +653,30 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
 
     # A source generation is consumed once. Replay is rejected and fails open.
     self.assertFalse(self.safety.safety_tx_hook(clone))
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
+
+  def test_native_id0_can_promote_to_id11_with_angle_and_mac_only(self):
+    source = self.observe_source(target_id=0, angle_raw=-100, b26=0x21, semantic=0x60, fv4=8)
+    self.arm()
+    self.safety.set_controls_allowed(True)
+    self.safety.set_desired_angle_last(-100)
+
+    promoted = self.host_frame(source, angle_raw=-95, target_id=11, mutate_mac=True)
+    self.assertTrue(self.safety.safety_tx_hook(promoted))
+
+    # Any companion edit outside B18:B19/B21-low6/MAC remains forbidden.
+    next_source = self.observe_source(target_id=0, angle_raw=-95, b26=0x22, semantic=0x61, fv4=9)
+    bad = bytearray(next_source)
+    bad[18:20] = (-90).to_bytes(2, "big", signed=True)
+    bad[21] = (bad[21] & 0xC0) | 11
+    bad[28] ^= 0x0F
+    bad[29] ^= 0xA5
+    bad[30] ^= 0x5A
+    bad[31] ^= 0xFF
+    bad[7] ^= 1
+    bad_msg = libsafety_py.make_CANPacket(0x08A, 0, bytes(bad))
+    bad_msg[0].fd = 1
+    self.assertFalse(self.safety.safety_tx_hook(bad_msg))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
 
   def test_modified_frame_is_id11_angle_only(self):
@@ -709,7 +749,6 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     next_source = self.observe_source(target_id=11, angle_raw=105, b26=0x31, fv4=new_fv4)
     self.assertTrue(self.safety.safety_tx_hook(self.host_frame(next_source, angle_raw=110, mutate_mac=True)))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
-
 
   def test_modified_id11_preserves_exact_fv4(self):
     source = self.observe_source(target_id=11, angle_raw=100, fv4=9)
