@@ -365,20 +365,32 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertTrue(state.canValid)
     self.assertEqual(ci.CS.tss3_lateral_request_id, 11)
 
+    # Before the authenticated proxy actually owns 0x08A, do not accumulate a
+    # hidden steering target. Keep CarController on the same measured baseline
+    # Panda uses for the eventual handoff.
     output, sends = ci.apply(control(5.0), 2_000_000_000)
     self.assertFalse(any(address == 0x777 for address, _, _ in sends))
-    self.assertAlmostEqual(output.steeringAngleDeg, 0.15, delta=0.01)
+    self.assertAlmostEqual(output.steeringAngleDeg,
+                           state.steeringAngleDeg + state.steeringAngleOffsetDeg, delta=0.01)
+
+    # Once the existing proxy completes ownership, normal 100-Hz angle limiting
+    # begins from that measured baseline.
+    ci.CC.tss3_request_plane_active = True
+    output, sends = ci.apply(control(5.0), 2_010_000_000)
+    self.assertFalse(any(address == 0x777 for address, _, _ in sends))
+    measured = state.steeringAngleDeg + state.steeringAngleOffsetDeg
+    self.assertAlmostEqual(output.steeringAngleDeg, measured + 0.15, delta=0.01)
 
     # Native ID0 is promoted to ID11 by the authenticated request-plane proxy,
     # so the normal openpilot angle target continues through Toyota's idle
-    # lateral state instead of resetting to measured steering.
+    # lateral state after ownership is real.
     request[21] = request[21] & 0xC0
     update_state(ci, moving=True, control_request=bytes(request), bus=0, source_bus=2, hud=CAMRY_HUD)
-    output, sends = ci.apply(control(20.0), 2_010_000_000)
+    output, sends = ci.apply(control(20.0), 2_020_000_000)
     self.assertEqual(ci.CS.tss3_lateral_request_id, 0)
     self.assertFalse(any(address == 0x777 for address, _, _ in sends))
-    self.assertGreater(output.steeringAngleDeg, 0.15)
-    self.assertAlmostEqual(output.steeringAngleDeg, 0.30, delta=0.02)
+    self.assertGreater(output.steeringAngleDeg, measured + 0.15)
+    self.assertAlmostEqual(output.steeringAngleDeg, measured + 0.30, delta=0.02)
 
   def test_inactive_c7_tracks_measured_angle_with_neutral_sequence(self):
     ci = CarInterface(self.CP)

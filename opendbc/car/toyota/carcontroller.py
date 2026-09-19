@@ -76,6 +76,7 @@ class CarController(CarControllerBase):
     self.secoc_prev_reset_counter = 0
 
     self.tss3_control_sequence = 0
+    self.tss3_request_plane_active = False
 
   def update(self, CC, CS, now_nanos):
     if self.CP.flags & ToyotaFlags.TSS3:
@@ -88,11 +89,13 @@ class CarController(CarControllerBase):
 
       host_request_plane = (self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3 and self.CP.safetyConfigs and
                             bool(self.CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.TSS3_08A_HOST.value))
-      # In F33 request-plane mode, native ID0 is an idle lateral envelope that
-      # the host promotes to ID11 while CC.latActive. Keep the normal openpilot
-      # angle limiter running across both ID0 and ID11; reset to measured angle
-      # only while Toyota owns a different lateral application (LDA/PDA/etc.).
-      lateral_command_active = CC.latActive and (not host_request_plane or CS.tss3_lateral_request_id in (0, 11))
+      # In F33 request-plane mode, do not accumulate a hidden steering target
+      # before the authenticated proxy actually owns 0x08A. Panda seeds the
+      # handoff baseline from measured steering, so CarController must remain on
+      # that same baseline until ownership is confirmed. Once active, native ID0
+      # and ID11 are both valid carriers for the normal rate-limited target.
+      lateral_command_active = CC.latActive and (not host_request_plane or
+                                                 (self.tss3_request_plane_active and CS.tss3_lateral_request_id in (0, 11)))
 
       # Run TSS3 lateral at the native 100 Hz openpilot control cadence. The
       # request-plane proxy samples this normal rate-limited target on native
