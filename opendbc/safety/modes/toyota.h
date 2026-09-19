@@ -332,7 +332,9 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
     const bool host_08a = toyota_tss3_08a_host && !toyota_corolla_hf &&
                           (msg->bus == 0U) && (msg->addr == 0x8AU);
     const bool corolla_brake_cancel = toyota_corolla_hf && (msg->bus == 1U) && (msg->addr == 0x101U);
-    tx = signer_control || oracle_transport || host_08a || corolla_brake_cancel;
+    const bool camry_brake_cancel = toyota_tss3_08a_host && !toyota_corolla_hf &&
+                                    (msg->bus == 2U) && (msg->addr == 0x101U);
+    tx = signer_control || oracle_transport || host_08a || corolla_brake_cancel || camry_brake_cancel;
     if (signer_control) {
       const bool c7_header_valid = !msg->fd && (msg->data[0] == 7U) && (msg->data[1] == 0xC7U) &&
                                     (msg->data[2] == 0xC7U) && (msg->data[6] == 0U) && (msg->data[7] == 0U);
@@ -476,13 +478,16 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
         toyota_tss3_08a_first_host_frame = false;
       }
     }
-    if (corolla_brake_cancel) {
-      // Stock-longitudinal cancel follows the normal openpilot policy boundary:
-      // require the native cancel actuation bit and a valid Toyota checksum.
-      // CarController clones every non-cancel field from the live 0x101 frame.
+    if (corolla_brake_cancel || camry_brake_cancel) {
+      // Stock-ACC cancel is ordinary Brake Module traffic with only the native
+      // brake/cancel bit asserted. Exact Camry road data bounds the stable zero
+      // companions; B1/B3 remain live cloned fields and checksum must be valid.
       const bool brake_cancel = GET_BIT(msg, 3U);
       const bool checksum_valid = toyota_compute_checksum(msg) == toyota_get_checksum(msg);
-      tx = brake_cancel && checksum_valid;
+      const bool camry_shape = !camry_brake_cancel || ((msg->data[0] == 0x88U) &&
+                               (msg->data[2] == 0U) && (msg->data[4] == 0U) &&
+                               (msg->data[5] == 0U) && (msg->data[6] == 0U));
+      tx = brake_cancel && checksum_valid && camry_shape;
     }
     return tx;
   }
@@ -708,6 +713,7 @@ static safety_config toyota_init(uint16_t param) {
         {0x777, 1, 8, .check_relay = false},
         {0x7A1, 0, 8, .check_relay = false},
         {0x08A, 0, 32, .check_relay = false},
+        {0x101, 2, 8, .check_relay = false},
       };
       SET_TX_MSGS(toyota_f33_tss3_tx_msgs, ret);
       static RxCheck toyota_f33_rx_checks[] = {
