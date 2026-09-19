@@ -137,7 +137,6 @@ class TestToyotaCamryTSS3(unittest.TestCase):
 
     relay = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, relay_fingerprint(), [], True, False, False)
     self.assertTrue(relay.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.TSS3_08A_HOST.value)
-    self.assertTrue(relay.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.TSS3_08A_SIGNED.value)
     self.assertTrue(relay.enableBsm)
 
   def test_unqualified_camry_longitudinal_is_not_advertised(self):
@@ -356,38 +355,32 @@ class TestToyotaCamryTSS3(unittest.TestCase):
       sequences.append(data[3])
     self.assertEqual(sequences, [1, 2, 3, 4])
 
-  def test_host_request_plane_uses_native_id11_without_emitting_c7(self):
+  def test_host_request_plane_uses_normal_angle_control_without_emitting_c7(self):
     cp = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, relay_fingerprint(), [], True, False, False)
     ci = CarInterface(cp)
     request = bytearray(CAMRY_COMMON[0x08A])
     request[21] = (request[21] & 0xC0) | 11
     state = update_state(ci, moving=True, control_request=bytes(request), bus=0, source_bus=2, hud=CAMRY_HUD)
     self.assertTrue(state.canValid)
-    self.assertEqual(ci.CS.tss3_lateral_request_id, 11)
 
-    # Before the authenticated proxy actually owns 0x08A, do not accumulate a
-    # hidden steering target. Keep CarController on the same measured baseline
-    # Panda uses for the eventual handoff.
+    measured = state.steeringAngleDeg + state.steeringAngleOffsetDeg
     output, sends = ci.apply(control(5.0), 2_000_000_000)
     self.assertFalse(any(address == 0x777 for address, _, _ in sends))
-    self.assertAlmostEqual(output.steeringAngleDeg,
-                           state.steeringAngleDeg + state.steeringAngleOffsetDeg, delta=0.01)
+    self.assertAlmostEqual(output.steeringAngleDeg, 0.15, delta=0.01)
 
-    # Once the existing proxy completes ownership, normal 100-Hz angle limiting
-    # begins from that measured baseline.
-    ci.CC.tss3_request_plane_active = True
+    # The pre-handoff controller output is not transmitted. The request-plane
+    # handoff uses a one-shot baseline reset when ownership actually becomes
+    # real; there is no persistent proxy-active permission input.
+    # persistent proxy-active permission input in CarController.
+    ci.CC.reset_tss3_lateral_target(measured)
     output, sends = ci.apply(control(5.0), 2_010_000_000)
     self.assertFalse(any(address == 0x777 for address, _, _ in sends))
-    measured = state.steeringAngleDeg + state.steeringAngleOffsetDeg
     self.assertAlmostEqual(output.steeringAngleDeg, measured + 0.15, delta=0.01)
 
-    # Native ID0 is promoted to ID11 by the authenticated request-plane proxy,
-    # so the normal openpilot angle target continues through Toyota's idle
-    # lateral state after ownership is real.
+    # Toyota's currently selected source application is not a controller veto.
     request[21] = request[21] & 0xC0
     update_state(ci, moving=True, control_request=bytes(request), bus=0, source_bus=2, hud=CAMRY_HUD)
     output, sends = ci.apply(control(20.0), 2_020_000_000)
-    self.assertEqual(ci.CS.tss3_lateral_request_id, 0)
     self.assertFalse(any(address == 0x777 for address, _, _ in sends))
     self.assertGreater(output.steeringAngleDeg, measured + 0.15)
     self.assertAlmostEqual(output.steeringAngleDeg, measured + 0.30, delta=0.02)
@@ -506,11 +499,10 @@ class TestToyotaCamryTSS3Safety(unittest.TestCase):
 class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
   PARAM = (EPS_SCALE[CAR.TOYOTA_CAMRY_TSS3] | ToyotaSafetyFlags.F33 |
            ToyotaSafetyFlags.STOCK_LONGITUDINAL | ToyotaSafetyFlags.TSS3_08A_HOST)
-  SIGNED_PARAM = PARAM | ToyotaSafetyFlags.TSS3_08A_SIGNED
 
   def setUp(self):
     self.safety = libsafety_py.libsafety
-    self.assertEqual(self.safety.set_safety_hooks(structs.CarParams.SafetyModel.toyota, self.SIGNED_PARAM), 0)
+    self.assertEqual(self.safety.set_safety_hooks(structs.CarParams.SafetyModel.toyota, self.PARAM), 0)
     self.safety.init_tests()
     self.safety.set_timer(0)
 
@@ -643,7 +635,7 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.assertTrue(self.safety.safety_tx_hook(self.admin(1)))
 
     self.assertTrue(self.safety.safety_tx_hook(self.admin(0)))
-    self.safety.set_timer(250_001)
+    self.safety.set_timer(100_001)
     self.assertFalse(self.safety.safety_tx_hook(self.admin(1)))
 
   def test_first_handoff_clone_seeds_angle_rate_from_measured_steering(self):
@@ -855,17 +847,6 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.assertTrue(self.safety.safety_tx_hook(self.admin(1)))
     self.assertFalse(self.safety.safety_tx_hook(self.c7()))
 
-  def test_transparent_host_mode_still_allows_exact_clones_only(self):
-    self.assertEqual(self.safety.set_safety_hooks(structs.CarParams.SafetyModel.toyota, self.PARAM), 0)
-    self.safety.init_tests()
-    self.safety.set_timer(0)
-    source = self.observe_source(target_id=11, angle_raw=100)
-    self.arm()
-    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(source)))
-
-    next_source = self.observe_source(target_id=11, angle_raw=100, b26=0x13)
-    self.assertFalse(self.safety.safety_tx_hook(self.host_frame(next_source, angle_raw=101, mutate_mac=True)))
-
   def test_replacement_requires_fd_and_sidebands_require_classic(self):
     source = self.observe_source(target_id=0)
     self.arm()
@@ -887,9 +868,9 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     source = self.observe_source(target_id=0)
     self.arm()
     self.assertTrue(self.safety.safety_tx_hook(self.host_frame(source)))
-    self.safety.set_timer(249_999)
+    self.safety.set_timer(99_999)
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
-    self.safety.set_timer(250_001)
+    self.safety.set_timer(100_001)
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
 
   def test_explicit_release_resumes_stock(self):

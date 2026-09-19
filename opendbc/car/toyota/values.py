@@ -71,7 +71,6 @@ class ToyotaSafetyFlags(IntFlag):
   F33 = TSS3_SIGNER  # compatibility alias
   COROLLA_HF = (32 << 8)
   TSS3_08A_HOST = (64 << 8)
-  TSS3_08A_SIGNED = (128 << 8)
 
 
 class ToyotaFlags(IntFlag):

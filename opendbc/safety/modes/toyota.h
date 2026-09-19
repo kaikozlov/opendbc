@@ -63,10 +63,8 @@ static bool toyota_lta = false;
 static bool toyota_tss3_signer = false;
 static bool toyota_corolla_hf = false;
 static bool toyota_tss3_08a_host = false;
-static bool toyota_tss3_08a_signed = false;
 static bool toyota_tss3_08a_replacement_active = false;
-static bool toyota_tss3_08a_native_valid = false;
-#define TOYOTA_TSS3_08A_NATIVE_HISTORY_LEN 16U
+#define TOYOTA_TSS3_08A_NATIVE_HISTORY_LEN 4U
 static uint8_t toyota_tss3_08a_native_frames[TOYOTA_TSS3_08A_NATIVE_HISTORY_LEN][32] = {{0}};
 static bool toyota_tss3_08a_native_consumed[TOYOTA_TSS3_08A_NATIVE_HISTORY_LEN] = {false};
 static uint8_t toyota_tss3_08a_native_history = 0U;
@@ -76,11 +74,11 @@ static uint8_t toyota_tss3_08a_oracle_next_cf = 0U;
 static uint8_t toyota_tss3_08a_oracle_cf_batches = 0U;
 static bool toyota_tss3_08a_first_host_frame = false;
 
-// Native 0x08A is ~40 Hz. History depth is transport capacity, not an authority
-// policy: exact source generations remain single-use and oldest-unconsumed-first.
-// A 250 ms watchdog covers serialized command-5 retry/catch-up while still
-// failing open if the host stops producing replacement traffic entirely.
-const uint32_t TOYOTA_TSS3_08A_REPLACEMENT_TIMEOUT_US = 250000U;
+// Native 0x08A is ~40 Hz with observed ~20-34 ms source intervals. Four source
+// generations cover the bounded same-session oracle repair without retaining
+// the obsolete serialized-retry backlog. Fail open if host replacement traffic
+// disappears for 100 ms.
+const uint32_t TOYOTA_TSS3_08A_REPLACEMENT_TIMEOUT_US = 100000U;
 static int toyota_dbc_eps_torque_factor = 100;   // conversion factor for STEER_TORQUE_EPS in %: see dbc file
 
 static uint32_t toyota_compute_checksum(const CANPacket_t *msg) {
@@ -139,7 +137,6 @@ static void toyota_rx_hook(const CANPacket_t *msg) {
           toyota_tss3_08a_native_consumed[history_index] = true;
         }
       }
-      toyota_tss3_08a_native_valid = true;
       toyota_tss3_08a_native_last_rx_ts = microsecond_timer_get();
       // In relay-open host mode, authoritative 0x08A is native on source bus2.
       // Its cruise operating latch is therefore the controls_allowed source;
@@ -359,7 +356,7 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
           // permission or target generation: controls_allowed remains the
           // ordinary openpilot actuation boundary for modified ID11 frames.
           const uint32_t native_age = safety_get_ts_elapsed(microsecond_timer_get(), toyota_tss3_08a_native_last_rx_ts);
-          tx = toyota_tss3_08a_native_valid && (native_age <= TOYOTA_TSS3_08A_REPLACEMENT_TIMEOUT_US);
+          tx = (toyota_tss3_08a_native_history > 0U) && (native_age <= TOYOTA_TSS3_08A_REPLACEMENT_TIMEOUT_US);
           if (tx) {
             toyota_tss3_08a_replacement_active = true;
             toyota_tss3_08a_first_host_frame = true;
@@ -411,7 +408,7 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
       tx = false;
       int matched_index = -1;
 
-      if (toyota_tss3_08a_replacement_active && toyota_tss3_08a_native_valid &&
+      if (toyota_tss3_08a_replacement_active && (toyota_tss3_08a_native_history > 0U) &&
           msg->fd && (GET_LEN(msg) == 32U)) {
         int oldest_unconsumed_index = -1;
         for (uint8_t history_index = 0U; history_index < toyota_tss3_08a_native_history; history_index++) {
@@ -439,7 +436,7 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
           } else {
             // Every post-handoff owned generation is validated only as comma's
             // ID11 request. There is no exact-clone/pass-through category.
-            bool lateral_replacement = toyota_tss3_08a_signed;
+            bool lateral_replacement = true;
             for (uint8_t i = 0U; i < 32U; i++) {
               const bool equal = msg->data[i] == toyota_tss3_08a_native_frames[history_index][i];
               const bool lateral_angle_byte = (i == 18U) || (i == 19U);
@@ -679,7 +676,6 @@ static safety_config toyota_init(uint16_t param) {
   const uint32_t TOYOTA_PARAM_TSS3_SIGNER = 16UL << TOYOTA_PARAM_OFFSET;
   const uint32_t TOYOTA_PARAM_COROLLA_HF = 32UL << TOYOTA_PARAM_OFFSET;
   const uint32_t TOYOTA_PARAM_TSS3_08A_HOST = 64UL << TOYOTA_PARAM_OFFSET;
-  const uint32_t TOYOTA_PARAM_TSS3_08A_SIGNED = 128UL << TOYOTA_PARAM_OFFSET;
 
 #ifdef ALLOW_DEBUG
   const uint32_t TOYOTA_PARAM_SECOC = 8UL << TOYOTA_PARAM_OFFSET;
@@ -692,9 +688,7 @@ static safety_config toyota_init(uint16_t param) {
   toyota_tss3_signer = GET_FLAG(param, TOYOTA_PARAM_TSS3_SIGNER);
   toyota_corolla_hf = GET_FLAG(param, TOYOTA_PARAM_COROLLA_HF);
   toyota_tss3_08a_host = GET_FLAG(param, TOYOTA_PARAM_TSS3_08A_HOST);
-  toyota_tss3_08a_signed = GET_FLAG(param, TOYOTA_PARAM_TSS3_08A_SIGNED);
   toyota_tss3_08a_replacement_active = false;
-  toyota_tss3_08a_native_valid = false;
   toyota_tss3_08a_native_history = 0U;
   toyota_tss3_08a_native_last_rx_ts = 0U;
   for (uint8_t i = 0U; i < TOYOTA_TSS3_08A_NATIVE_HISTORY_LEN; i++) {
