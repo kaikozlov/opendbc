@@ -614,11 +614,13 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.assertTrue(self.safety.safety_rx_hook(disabled_msg))
     self.assertFalse(self.safety.get_controls_allowed())
 
-  def test_oracle_transport_is_exact_and_sequential(self):
+  def test_oracle_transport_allows_one_bounded_same_session_cf_repair(self):
     self.assertFalse(self.safety.safety_tx_hook(self.oracle_cf(1)))
     self.assertTrue(self.safety.safety_tx_hook(self.oracle_ff(9)))
-    for sn in range(1, 6):
-      self.assertTrue(self.safety.safety_tx_hook(self.oracle_cf(sn, fill=sn)))
+    for _ in range(2):
+      for sn in range(1, 6):
+        self.assertTrue(self.safety.safety_tx_hook(self.oracle_cf(sn, fill=sn)))
+    self.assertFalse(self.safety.safety_tx_hook(self.oracle_cf(1)))
     self.assertFalse(self.safety.safety_tx_hook(self.oracle_cf(6)))
 
     bad = bytearray(self.oracle_ff()[0].data)
@@ -701,8 +703,10 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
 
   def test_native_id0_can_promote_to_id11_with_lta_gain(self):
-    source = self.observe_source(target_id=0, angle_raw=-100, b26=0x21, semantic=0x60, fv4=8)
+    handoff = self.observe_source(target_id=0, angle_raw=-100, b26=0x20, semantic=0x5F, fv4=7)
     self.arm()
+    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(handoff)))
+    source = self.observe_source(target_id=0, angle_raw=-100, b26=0x21, semantic=0x60, fv4=8)
     self.safety.set_controls_allowed(True)
     self.safety.set_desired_angle_last(-100)
 
@@ -732,8 +736,10 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
 
   def test_modified_frame_is_id11_angle_only(self):
-    source = self.observe_source(target_id=11, angle_raw=100, b26=0x22, semantic=0x61, fv4=9)
+    handoff = self.observe_source(target_id=11, angle_raw=100, b26=0x21, semantic=0x60, fv4=8)
     self.arm()
+    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(handoff)))
+    source = self.observe_source(target_id=11, angle_raw=100, b26=0x22, semantic=0x61, fv4=9)
     self.safety.set_controls_allowed(True)
     self.safety.set_desired_angle_last(100)
 
@@ -750,28 +756,40 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.assertFalse(self.safety.safety_tx_hook(bad_msg))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
 
-  def test_exact_non_id11_clone_resets_angle_rate_baseline_for_id11_reentry(self):
-    source = self.observe_source(target_id=11, angle_raw=100, b26=0x20)
+  def test_id4_and_id18_are_replaced_by_comma_id11_not_passed_through(self):
+    handoff = self.observe_source(target_id=11, angle_raw=100, b26=0x20)
     self.arm()
+    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(handoff)))
     self.safety.set_controls_allowed(True)
     self.safety.set_desired_angle_last(100)
-    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(source, angle_raw=105, mutate_mac=True)))
 
-    # Toyota owns a different application for a while. Its exact clone resets
-    # the openpilot angle-rate baseline to measured steering.
-    self.safety.set_angle_meas(0, 0)
-    non_id11 = self.observe_source(target_id=18, angle_raw=500, b26=0x21)
-    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(non_id11)))
+    for b26, native_id, gain in ((0x21, 4, 100), (0x22, 18, 50)):
+      source = self.observe_source(target_id=native_id, angle_raw=100, b26=b26)
+      promoted = self.host_frame(source, angle_raw=102, target_id=11, assist_gain_raw=100, mutate_mac=True)
+      self.assertTrue(self.safety.safety_tx_hook(promoted))
+      self.safety.set_desired_angle_last(102)
 
-    reentry = self.observe_source(target_id=11, angle_raw=0, b26=0x22)
-    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(reentry, angle_raw=5, mutate_mac=True)))
+      # The same Toyota owner is not allowed through exactly once comma owns.
+      next_source = self.observe_source(target_id=native_id, angle_raw=100, b26=b26 + 2)
+      self.assertFalse(self.safety.safety_tx_hook(self.host_frame(next_source)))
+      self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
+      if native_id == 4:
+        # Re-arm for the second independent source-owner case.
+        self.setUp()
+        handoff = self.observe_source(target_id=11, angle_raw=100, b26=0x30)
+        self.arm()
+        self.assertTrue(self.safety.safety_tx_hook(self.host_frame(handoff)))
+        self.safety.set_controls_allowed(True)
+        self.safety.set_desired_angle_last(100)
 
   def test_modified_non_id11_is_rejected(self):
-    source = self.observe_source(target_id=18, angle_raw=100)
+    handoff = self.observe_source(target_id=11, angle_raw=100, b26=0x20)
     self.arm()
+    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(handoff)))
+    source = self.observe_source(target_id=18, angle_raw=100, b26=0x21)
     self.safety.set_controls_allowed(True)
     self.safety.set_desired_angle_last(100)
-    self.assertFalse(self.safety.safety_tx_hook(self.host_frame(source, angle_raw=101, mutate_mac=True)))
+    self.assertFalse(self.safety.safety_tx_hook(self.host_frame(source, angle_raw=101, target_id=18, mutate_mac=True)))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
 
   def test_modified_id11_requires_controls_allowed(self):
@@ -785,8 +803,10 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     old_reset = 0x12345
     new_reset = old_reset + 1
     old_fv4 = ((2 & 0x3) << 2) | (old_reset & 0x3)
-    source = self.observe_source(target_id=11, angle_raw=100, b26=0x30, fv4=old_fv4)
+    handoff = self.observe_source(target_id=11, angle_raw=100, b26=0x2F, fv4=old_fv4)
     self.arm()
+    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(handoff)))
+    source = self.observe_source(target_id=11, angle_raw=100, b26=0x30, fv4=old_fv4)
 
     # 0x00F advances first. Safety must still accept the exact source generation
     # (or its bounded ID11 angle substitution) by matching native 0x08A itself.
@@ -803,8 +823,10 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
 
   def test_modified_id11_preserves_exact_fv4(self):
-    source = self.observe_source(target_id=11, angle_raw=100, fv4=9)
+    handoff = self.observe_source(target_id=11, angle_raw=100, b26=0x11, fv4=8)
     self.arm()
+    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(handoff)))
+    source = self.observe_source(target_id=11, angle_raw=100, b26=0x12, fv4=9)
     self.safety.set_controls_allowed(True)
     self.safety.set_desired_angle_last(100)
     data = bytearray(self.host_frame(source, angle_raw=101, mutate_mac=True)[0].data)[:32]
