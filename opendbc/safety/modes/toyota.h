@@ -66,8 +66,9 @@ static bool toyota_tss3_08a_host = false;
 static bool toyota_tss3_08a_signed = false;
 static bool toyota_tss3_08a_replacement_active = false;
 static bool toyota_tss3_08a_native_valid = false;
-static uint8_t toyota_tss3_08a_native_frames[3][32] = {{0}};
-static bool toyota_tss3_08a_native_consumed[3] = {false, false, false};
+#define TOYOTA_TSS3_08A_NATIVE_HISTORY_LEN 6U
+static uint8_t toyota_tss3_08a_native_frames[TOYOTA_TSS3_08A_NATIVE_HISTORY_LEN][32] = {{0}};
+static bool toyota_tss3_08a_native_consumed[TOYOTA_TSS3_08A_NATIVE_HISTORY_LEN] = {false};
 static uint8_t toyota_tss3_08a_native_history = 0U;
 static uint32_t toyota_tss3_08a_native_last_rx_ts = 0U;
 static uint32_t toyota_tss3_08a_last_tx_ts = 0U;
@@ -78,7 +79,7 @@ static bool toyota_tss3_08a_first_host_frame = false;
 // source-ordered host-output gap of 46.24 ms, so keep ownership for three native
 // periods. The host/oracle worker still fails open independently on signing error
 // or its 120 ms oracle timeout.
-const uint32_t TOYOTA_TSS3_08A_REPLACEMENT_TIMEOUT_US = 75000U;
+const uint32_t TOYOTA_TSS3_08A_REPLACEMENT_TIMEOUT_US = 100000U;
 static int toyota_dbc_eps_torque_factor = 100;   // conversion factor for STEER_TORQUE_EPS in %: see dbc file
 
 static uint32_t toyota_compute_checksum(const CANPacket_t *msg) {
@@ -116,16 +117,26 @@ static bool toyota_get_quality_flag_valid(const CANPacket_t *msg) {
 static void toyota_rx_hook(const CANPacket_t *msg) {
   if (toyota_tss3_08a_host && !toyota_corolla_hf) {
     if ((msg->bus == 2U) && (msg->addr == 0x8AU) && (GET_LEN(msg) == 32U)) {
+      for (uint8_t history_index = TOYOTA_TSS3_08A_NATIVE_HISTORY_LEN - 1U; history_index > 0U; history_index--) {
+        for (uint8_t i = 0U; i < 32U; i++) {
+          toyota_tss3_08a_native_frames[history_index][i] = toyota_tss3_08a_native_frames[history_index - 1U][i];
+        }
+        toyota_tss3_08a_native_consumed[history_index] = toyota_tss3_08a_native_consumed[history_index - 1U];
+      }
       for (uint8_t i = 0U; i < 32U; i++) {
-        toyota_tss3_08a_native_frames[2][i] = toyota_tss3_08a_native_frames[1][i];
-        toyota_tss3_08a_native_frames[1][i] = toyota_tss3_08a_native_frames[0][i];
         toyota_tss3_08a_native_frames[0][i] = msg->data[i];
       }
-      toyota_tss3_08a_native_consumed[2] = toyota_tss3_08a_native_consumed[1];
-      toyota_tss3_08a_native_consumed[1] = toyota_tss3_08a_native_consumed[0];
       toyota_tss3_08a_native_consumed[0] = false;
-      if (toyota_tss3_08a_native_history < 3U) {
+      if (toyota_tss3_08a_native_history < TOYOTA_TSS3_08A_NATIVE_HISTORY_LEN) {
         toyota_tss3_08a_native_history++;
+      }
+      if (toyota_tss3_08a_replacement_active && toyota_tss3_08a_first_host_frame) {
+        // If a newer source generation arrives before the atomic handoff clone,
+        // the previously latest pre-arm generation is no longer eligible.
+        // Keep only the newest native generation available as the handoff witness.
+        for (uint8_t history_index = 1U; history_index < toyota_tss3_08a_native_history; history_index++) {
+          toyota_tss3_08a_native_consumed[history_index] = true;
+        }
       }
       toyota_tss3_08a_native_valid = true;
       toyota_tss3_08a_native_last_rx_ts = microsecond_timer_get();
@@ -351,10 +362,13 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
             toyota_tss3_08a_replacement_active = true;
             toyota_tss3_08a_first_host_frame = true;
             toyota_tss3_08a_last_tx_ts = microsecond_timer_get();
-            // Do not permit replay of source frames that predate this handoff.
-            toyota_tss3_08a_native_consumed[0] = false;
-            toyota_tss3_08a_native_consumed[1] = true;
-            toyota_tss3_08a_native_consumed[2] = true;
+            // The latest source generation may be cloned immediately as the
+            // atomic handoff witness. Older pre-arm generations are ineligible.
+            // If a newer native generation arrives first, rx_hook retires this
+            // pre-arm candidate and makes only that newer generation eligible.
+            for (uint8_t history_index = 0U; history_index < toyota_tss3_08a_native_history; history_index++) {
+              toyota_tss3_08a_native_consumed[history_index] = history_index != 0U;
+            }
           }
         }
       } else if (toyota_tss3_08a_host && !toyota_corolla_hf) {
@@ -393,8 +407,15 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
 
       if (toyota_tss3_08a_replacement_active && toyota_tss3_08a_native_valid &&
           msg->fd && (GET_LEN(msg) == 32U)) {
+        int oldest_unconsumed_index = -1;
         for (uint8_t history_index = 0U; history_index < toyota_tss3_08a_native_history; history_index++) {
-          if (toyota_tss3_08a_native_consumed[history_index]) {
+          if (!toyota_tss3_08a_native_consumed[history_index]) {
+            oldest_unconsumed_index = history_index;
+          }
+        }
+
+        for (uint8_t history_index = 0U; history_index < toyota_tss3_08a_native_history; history_index++) {
+          if ((int)history_index != oldest_unconsumed_index) {
             continue;
           }
 
@@ -407,12 +428,13 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
 
             // A signed lateral replacement may differ only in B18:B19, the
             // low-six-bit lateral request ID (native ID0 may promote to ID11),
-            // and the 28 MAC bits. FV4 and every other native application byte
-            // remain exact for the source generation.
+            // B24 assist gain for ID0->ID11 promotion, and the 28 MAC bits.
+            // FV4 and every other native application byte remain exact.
             const bool lateral_angle_byte = (i == 18U) || (i == 19U);
             const bool lateral_id_byte = i == 21U;
+            const bool assist_gain_byte = i == 24U;
             const bool mac_bit_byte = i >= 28U;
-            if (!lateral_angle_byte && !lateral_id_byte && !mac_bit_byte) {
+            if (!lateral_angle_byte && !lateral_id_byte && !assist_gain_byte && !mac_bit_byte) {
               lateral_replacement &= equal;
             }
             if (lateral_angle_byte && !equal) {
@@ -428,6 +450,11 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
                                     ((msg->data[21] & 0xC0U) == (toyota_tss3_08a_native_frames[history_index][21] & 0xC0U));
           lateral_replacement &= toyota_tss3_08a_signed;
           lateral_replacement &= native_id11 || id0_promoted;
+          // Native ID11 keeps its source-real assist gain. Promoted ID0 must
+          // carry Toyota's observed LTA/LCA B24 raw 100 (1.00 assist gain).
+          lateral_replacement &= native_id11 ?
+                                 (msg->data[24] == toyota_tss3_08a_native_frames[history_index][24]) :
+                                 (msg->data[24] == 100U);
           // FV4 belongs to the native generation being replaced. Do not compare
           // it with latest 0x00F: those two publishers legitimately straddle
           // normal reset-counter transitions.
@@ -694,7 +721,7 @@ static safety_config toyota_init(uint16_t param) {
   toyota_tss3_08a_native_valid = false;
   toyota_tss3_08a_native_history = 0U;
   toyota_tss3_08a_native_last_rx_ts = 0U;
-  for (uint8_t i = 0U; i < 3U; i++) {
+  for (uint8_t i = 0U; i < TOYOTA_TSS3_08A_NATIVE_HISTORY_LEN; i++) {
     toyota_tss3_08a_native_consumed[i] = false;
   }
   toyota_tss3_08a_oracle_next_cf = 0U;
