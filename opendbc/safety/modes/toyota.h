@@ -408,15 +408,8 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
 
       if (toyota_tss3_08a_replacement_active && toyota_tss3_08a_native_valid &&
           msg->fd && (GET_LEN(msg) == 32U)) {
-        int oldest_unconsumed_index = -1;
         for (uint8_t history_index = 0U; history_index < toyota_tss3_08a_native_history; history_index++) {
-          if (!toyota_tss3_08a_native_consumed[history_index]) {
-            oldest_unconsumed_index = history_index;
-          }
-        }
-
-        for (uint8_t history_index = 0U; history_index < toyota_tss3_08a_native_history; history_index++) {
-          if ((int)history_index != oldest_unconsumed_index) {
+          if (toyota_tss3_08a_native_consumed[history_index]) {
             continue;
           }
 
@@ -505,7 +498,13 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
 
       if (tx) {
         toyota_tss3_08a_first_host_frame = false;
-        toyota_tss3_08a_native_consumed[matched_index] = true;
+        // A valid host generation may jump forward over source generations the
+        // signer intentionally skipped. Consume the matched generation and all
+        // older unconsumed generations atomically. Newer generations remain
+        // available, so replay/backward traffic is still rejected.
+        for (uint8_t history_index = (uint8_t)matched_index; history_index < toyota_tss3_08a_native_history; history_index++) {
+          toyota_tss3_08a_native_consumed[history_index] = true;
+        }
         toyota_tss3_08a_last_tx_ts = microsecond_timer_get();
       } else if (toyota_tss3_08a_replacement_active) {
         // Any malformed/replayed/mistimed host frame restores stock forwarding.

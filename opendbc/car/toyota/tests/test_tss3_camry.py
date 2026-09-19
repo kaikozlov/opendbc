@@ -659,7 +659,7 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.assertTrue(self.safety.safety_tx_hook(self.host_frame(next_source)))
     self.assertEqual(self.safety.get_desired_angle_last(), 60)
 
-  def test_host_must_consume_native_generations_oldest_first(self):
+  def test_host_can_skip_forward_but_not_replay_older_generations(self):
     handoff = self.observe_source(target_id=0, angle_raw=-110, b26=0x1F, semantic=0x5F, fv4=7)
     self.arm()
     self.assertTrue(self.safety.safety_tx_hook(self.host_frame(handoff)))
@@ -670,11 +670,19 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.safety.set_controls_allowed(True)
     self.safety.set_desired_angle_last(-110)
 
-    # A newer source-real generation cannot skip older unconsumed generations.
-    newest_host = self.host_frame(newest, angle_raw=-85, target_id=11, assist_gain_raw=100, mutate_mac=True)
-    self.assertFalse(self.safety.safety_tx_hook(newest_host))
+    # The signer may intentionally skip obsolete unsigned generations and send
+    # the newest exact source generation. This consumes the matched generation
+    # and every older generation atomically.
+    newest_host = self.host_frame(newest, angle_raw=-104, target_id=11, assist_gain_raw=100, mutate_mac=True)
+    self.assertTrue(self.safety.safety_tx_hook(newest_host))
+
+    # Older skipped generations are now permanently consumed: no replay/backward
+    # movement is permitted even though their source bytes remain in history.
+    oldest_host = self.host_frame(oldest, angle_raw=-106, target_id=11, assist_gain_raw=100, mutate_mac=True)
+    self.assertFalse(self.safety.safety_tx_hook(oldest_host))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
 
+    # Recreate authority and show a smaller forward skip also remains monotonic.
     self.setUp()
     handoff = self.observe_source(target_id=0, angle_raw=-110, b26=0x1F, semantic=0x5F, fv4=7)
     self.arm()
@@ -684,7 +692,6 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     newest = self.observe_source(target_id=0, angle_raw=-90, b26=0x22, semantic=0x62, fv4=10)
     self.safety.set_controls_allowed(True)
     self.safety.set_desired_angle_last(-110)
-    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(oldest, angle_raw=-108, target_id=11, assist_gain_raw=100, mutate_mac=True)))
     self.assertTrue(self.safety.safety_tx_hook(self.host_frame(middle, angle_raw=-106, target_id=11, assist_gain_raw=100, mutate_mac=True)))
     self.assertTrue(self.safety.safety_tx_hook(self.host_frame(newest, angle_raw=-104, target_id=11, assist_gain_raw=100, mutate_mac=True)))
 
