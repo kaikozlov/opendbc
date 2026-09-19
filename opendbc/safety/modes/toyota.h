@@ -162,10 +162,37 @@ static void toyota_rx_hook(const CANPacket_t *msg) {
         }
       }
       toyota_tss3_08a_native_last_rx_ts = microsecond_timer_get();
-      // In relay-open host mode, authoritative 0x08A is native on source bus2.
-      // Its cruise operating latch is therefore the controls_allowed source;
-      // do not look for a bus0 RX copy that only exists as forwarding/TX echo.
-      pcm_cruise_check(GET_BIT(msg, 27U));
+      // Stock longitudinal follows Toyota's cruise latch. With openpilot
+      // longitudinal, engagement is button-owned like other pcmCruise=False
+      // ports; native DRCC may transition through idle at a long standstill
+      // without revoking openpilot's actuation permission.
+      if (toyota_stock_longitudinal) {
+        pcm_cruise_check(GET_BIT(msg, 27U));
+      }
+    }
+
+    if (!toyota_stock_longitudinal && (msg->bus == 0U) && (msg->addr == 0xFEU) && (GET_LEN(msg) == 32U)) {
+      enum { TOYOTA_BTN_NONE, TOYOTA_BTN_CANCEL, TOYOTA_BTN_SET, TOYOTA_BTN_RESUME, TOYOTA_BTN_MAIN };
+      int button = TOYOTA_BTN_NONE;
+      if (GET_BIT(msg, 38U)) {
+        button = TOYOTA_BTN_CANCEL;
+      } else if (GET_BIT(msg, 39U)) {
+        button = TOYOTA_BTN_SET;
+      } else if (GET_BIT(msg, 31U)) {
+        button = TOYOTA_BTN_RESUME;
+      } else if (GET_BIT(msg, 58U)) {
+        button = TOYOTA_BTN_MAIN;
+      }
+
+      const bool set_release = (button != TOYOTA_BTN_SET) && (cruise_button_prev == TOYOTA_BTN_SET);
+      const bool resume_release = (button != TOYOTA_BTN_RESUME) && (cruise_button_prev == TOYOTA_BTN_RESUME);
+      if (set_release || resume_release) {
+        controls_allowed = true;
+      }
+      if ((button == TOYOTA_BTN_CANCEL) || (button == TOYOTA_BTN_MAIN)) {
+        controls_allowed = false;
+      }
+      cruise_button_prev = button;
     }
   }
 
@@ -458,7 +485,6 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
       tx = false;
       int matched_index = -1;
       int gas_override_drop_index = -1;
-      const int desired_angle_previous = desired_angle_last;
 
       if (toyota_tss3_08a_replacement_active && (toyota_tss3_08a_native_history > 0U) &&
           msg->fd && (GET_LEN(msg) == 32U)) {
@@ -576,10 +602,10 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
         toyota_tss3_08a_native_consumed[matched_index] = true;
         toyota_tss3_08a_last_tx_ts = microsecond_timer_get();
       } else if (gas_override_drop_index >= 0) {
-        // No command reached the car, so keep the last transmitted angle as
-        // the safety baseline. The following inactive generation remains in
-        // the same relay ownership session.
-        desired_angle_last = desired_angle_previous;
+        // The ordinary steering safety check has already advanced its desired
+        // angle for this source generation. Keep that progression: 0x08A
+        // carries both axes, and rewinding it makes the following generation's
+        // valid lateral request look like a rate violation.
         toyota_tss3_08a_native_consumed[gas_override_drop_index] = true;
       } else if (toyota_tss3_08a_replacement_active) {
         // Any malformed/replayed/mistimed host frame restores stock forwarding.
@@ -838,6 +864,7 @@ static safety_config toyota_init(uint16_t param) {
         {.msg = {{0x0AA, 0, 8, 100U, .ignore_checksum = true, .ignore_counter = true}, {0}, {0}}},
         {.msg = {{0x116, 0, 8, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
         {.msg = {{0x101, 0, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
+        {.msg = {{0x0FE, 0, 32, 30U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
         // Relay-open F33 has authoritative native 0x08A only on source bus2.
         // Its downstream bus0 copy is Panda forwarding/TX echo, not an
         // independent RX source and must not be required for safety validity.

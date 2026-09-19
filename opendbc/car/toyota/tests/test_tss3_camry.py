@@ -145,7 +145,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertTrue(relay.alphaLongitudinalAvailable)
     self.assertTrue(relay.openpilotLongitudinalControl)
     self.assertTrue(relay.autoResumeSng)
-    self.assertTrue(relay.pcmCruise)
+    self.assertFalse(relay.pcmCruise)
     self.assertFalse(relay.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.STOCK_LONGITUDINAL.value)
 
     relay_stock_long = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, relay_fingerprint(), [], False, False, False)
@@ -620,6 +620,21 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     return libsafety_py.make_CANPacket(0x777, 1, data)
 
   @staticmethod
+  def cruise_switch(button: str | None = None):
+    data = bytearray(32)
+    if button == "resume":
+      data[3] |= 0x80
+    elif button == "set":
+      data[4] |= 0x80
+    elif button == "cancel":
+      data[4] |= 0x40
+    elif button == "main":
+      data[7] |= 0x04
+    msg = libsafety_py.make_CANPacket(0x0FE, 0, bytes(data))
+    msg[0].fd = 1
+    return msg
+
+  @staticmethod
   def oracle_fragment(fragment: int, seq: int = 1, fill: int = 0):
     header = ((fragment & 0x7) << 5) | (seq & 0x1F)
     if fragment == 4:
@@ -690,6 +705,7 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x0AA, 0, CAMRY_COMMON[0x0AA])))
     self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x116, 0, CAMRY_COMMON[0x116])))
     self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x101, 0, CAMRY_COMMON[0x101])))
+    self.assertTrue(self.safety.safety_rx_hook(self.cruise_switch()))
     self.assertTrue(self.safety.safety_rx_hook(self.source_08a()))
     self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x00F, 0, bytes(8))))
     self.assertTrue(self.safety.safety_config_valid())
@@ -706,6 +722,31 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     disabled_msg = libsafety_py.make_CANPacket(0x08A, 2, bytes(disabled))
     disabled_msg[0].fd = 1
     self.assertTrue(self.safety.safety_rx_hook(disabled_msg))
+    self.assertFalse(self.safety.get_controls_allowed())
+
+  def test_alpha_long_controls_allowed_follows_buttons_not_native_drcc(self):
+    self.use_alpha_long_safety()
+
+    self.assertTrue(self.safety.safety_rx_hook(self.source_08a(target_id=11)))
+    self.assertFalse(self.safety.get_controls_allowed())
+
+    for button in ("set", "resume"):
+      self.assertTrue(self.safety.safety_rx_hook(self.cruise_switch(button)))
+      self.assertFalse(self.safety.get_controls_allowed())
+      self.assertTrue(self.safety.safety_rx_hook(self.cruise_switch()))
+      self.assertTrue(self.safety.get_controls_allowed())
+
+      # Native Toyota idle is not an openpilot disengagement input.
+      idle = self.source_08a(target_id=0)
+      idle[0].data[3] &= ~0x08
+      self.assertTrue(self.safety.safety_rx_hook(idle))
+      self.assertTrue(self.safety.get_controls_allowed())
+
+      self.assertTrue(self.safety.safety_rx_hook(self.cruise_switch("cancel")))
+      self.assertFalse(self.safety.get_controls_allowed())
+
+    self.safety.set_controls_allowed(True)
+    self.assertTrue(self.safety.safety_rx_hook(self.cruise_switch("main")))
     self.assertFalse(self.safety.get_controls_allowed())
 
   def test_camry_brake_cancel_safety_is_stock_shaped_and_checksum_valid(self):
@@ -933,22 +974,34 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
 
   def test_alpha_long_gas_override_drops_stale_generation_without_releasing(self):
     self.use_alpha_long_safety()
-    handoff = self.observe_source(target_id=0, b26=0x20)
+    handoff = self.observe_source(target_id=11, angle_raw=0, b26=0x20)
     self.arm()
     self.assertTrue(self.safety.safety_tx_hook(self.host_frame(handoff)))
     self.safety.set_controls_allowed(True)
+    self.safety.set_desired_angle_last(0)
 
-    stale_source = self.observe_source(target_id=0, b26=0x21)
+    stale_source = self.observe_source(target_id=11, angle_raw=0, b26=0x21)
     self.safety.set_gas_pressed_prev(True)
     self.assertFalse(self.safety.safety_tx_hook(
-      self.host_frame(stale_source, accel_a=-500, accel_b=-500, mutate_mac=True)))
+      self.host_frame(stale_source, angle_raw=16, accel_a=-500, accel_b=-500, mutate_mac=True)))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
+    self.assertEqual(self.safety.get_desired_angle_last(), 16)
 
-    # The stale source was consumed. The next openpilot-shaped inactive command
-    # is accepted in the same request-plane ownership session.
-    inactive_source = self.observe_source(target_id=0, b26=0x22)
+    # A second command may already have been created before card observes the
+    # gas edge. It is dropped on the longitudinal axis while its valid lateral
+    # progression remains the baseline for the next combined generation.
+    next_stale_source = self.observe_source(target_id=11, angle_raw=0, b26=0x22)
+    self.safety.set_gas_pressed_prev(True)
+    self.assertFalse(self.safety.safety_tx_hook(
+      self.host_frame(next_stale_source, angle_raw=28, accel_a=-500, accel_b=-500, mutate_mac=True)))
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
+    self.assertEqual(self.safety.get_desired_angle_last(), 28)
+
+    # Both stale sources were consumed. The next openpilot-shaped inactive
+    # command is accepted in the same request-plane ownership session.
+    inactive_source = self.observe_source(target_id=11, angle_raw=0, b26=0x23)
     self.assertTrue(self.safety.safety_tx_hook(
-      self.host_frame(inactive_source, accel_a=0, accel_b=0, mutate_mac=True)))
+      self.host_frame(inactive_source, angle_raw=40, accel_a=0, accel_b=0, mutate_mac=True)))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
 
   def test_alpha_long_rejects_unequal_or_out_of_range_bounds(self):
