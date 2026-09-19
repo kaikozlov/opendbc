@@ -436,8 +436,9 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
       } else if (base_valid && (seq == toyota_tss3_08a_oracle_seq) &&
                  (fragment == toyota_tss3_08a_oracle_next_fragment)) {
         if (fragment == 4U) {
+          const uint8_t inverted_seq = (uint8_t)(seq ^ 0xFFU);
           tx = (msg->data[3] == 0xC9U) && (msg->data[4] == 0xA8U) &&
-               (msg->data[5] == (uint8_t)(seq ^ 0xFFU)) &&
+               (msg->data[5] == inverted_seq) &&
                (msg->data[6] == 0x5AU) && (msg->data[7] == 0xA5U);
           toyota_tss3_08a_oracle_next_fragment = 0U;
         } else {
