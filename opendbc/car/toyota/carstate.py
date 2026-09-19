@@ -58,7 +58,6 @@ class CarState(CarStateBase):
     self.gvc = 0.0
     self.secoc_synchronization = None
     self.tss3_brake_module = None
-    self.tss3_lateral_request_id = 0
     self.tss3_lkas_hud = {}
 
   def _update_tss3(self, cp: CANParser, cp_src: CANParser) -> structs.CarState:
@@ -140,7 +139,6 @@ class CarState(CarStateBase):
       ret.rightBlindspot = bool(source_cp.vl["BSM"]["R_ADJACENT"] or source_cp.vl["BSM"]["R_APPROACHING"])
 
     request = source_cp.vl["TSS3_CONTROL_REQUEST"]
-    self.tss3_lateral_request_id = int(request["LATERAL_REQUEST_ID"])
     ret.cruiseState.enabled = bool(request["CRUISE_OPERATING_LATCH"])
     # Source-real B4[5] is an exact delayed-hold discriminator in retained Camry
     # routes. The parallel request-B state is ID25/allocation2-or-3.
@@ -205,7 +203,6 @@ class CarState(CarStateBase):
     ret.steerFaultPermanent = False
 
     request = cp.vl["TSS3_CONTROL_REQUEST"]
-    self.tss3_lateral_request_id = int(request["LATERAL_REQUEST_ID"])
     longitudinal_id_b = int(request["LONGITUDINAL_REQUEST_ID_B"])
     allocation_b = int(request["LONGITUDINAL_ALLOCATION_METHOD_B"])
     ret.cruiseState.enabled = bool(request["COROLLA_ACC_ENGAGED"])

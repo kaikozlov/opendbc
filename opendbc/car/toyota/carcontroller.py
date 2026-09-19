@@ -76,7 +76,9 @@ class CarController(CarControllerBase):
     self.secoc_prev_reset_counter = 0
 
     self.tss3_control_sequence = 0
-    self.tss3_request_plane_active = False
+
+  def reset_tss3_lateral_target(self, steering_angle_deg: float) -> None:
+    self.last_angle = steering_angle_deg
 
   def update(self, CC, CS, now_nanos):
     if self.CP.flags & ToyotaFlags.TSS3:
@@ -89,14 +91,7 @@ class CarController(CarControllerBase):
 
       host_request_plane = (self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3 and self.CP.safetyConfigs and
                             bool(self.CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.TSS3_08A_HOST.value))
-      # In F33 request-plane mode, do not accumulate a hidden steering target
-      # before the authenticated proxy actually owns 0x08A. Panda seeds the
-      # handoff baseline from measured steering, so CarController must remain on
-      # that same baseline until ownership is confirmed. Once active, every
-      # observed FRC lateral owner (ID0/4/11/18) is a source-generation carrier
-      # for comma's normal rate-limited ID11 target.
-      lateral_command_active = CC.latActive and (not host_request_plane or
-                                                 (self.tss3_request_plane_active and CS.tss3_lateral_request_id in (0, 4, 11, 18)))
+      lateral_command_active = CC.latActive
 
       # Run TSS3 lateral at the native 100 Hz openpilot control cadence. The
       # request-plane proxy samples this normal rate-limited target on native
