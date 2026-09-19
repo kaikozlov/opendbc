@@ -6,6 +6,7 @@ TSS3_SIGNER_CONTROL_MAGIC = b"\x07\xC7\xC7"
 TSS3_SIGNER_BUS = 1
 
 TSS3_LATERAL_SOURCE_IDS = (0, 4, 11, 18)  # No Request, LDA, LTA/LCA, SDG
+TSS3_NO_LATERAL_REQUEST_ID = 0
 TSS3_LTA_LCA_ID = 11
 TSS3_LTA_ASSIST_GAIN_RAW = 100
 TSS3_REPLACEABLE_LONGITUDINAL_REQUESTS = ((0x00, 0x12), (0x2D, 0x47), (0x2D, 0x67))
@@ -38,7 +39,10 @@ def build_request_application(native_application: bytes, *, lat_active: bool, ta
   """Merge openpilot actuation into one source-real TSS3 0x08A application.
 
   The native generation retains unowned lifecycle, set-speed and arbitration
-  metadata. Engaged openpilot longitudinal promotes the known no-request,
+  metadata. While openpilot is engaged, known ordinary lateral requests are
+  encoded as ID11/gain100 when active and ID0 at the measured angle when
+  inactive. The inactive request preserves Toyota's source gain companion.
+  Engaged openpilot longitudinal promotes the known no-request,
   ordinary-DRCC and delayed-hold states to the normal ID11/ID17 request and
   owns both acceleration bounds. ``accel`` is zero while longitudinal is
   inactive, matching openpilot's normal driver-override contract. Other Toyota
@@ -48,14 +52,16 @@ def build_request_application(native_application: bytes, *, lat_active: bool, ta
     raise ValueError("native 0x08A application must be 28 bytes")
 
   application = bytearray(native_application)
-  if lat_active:
-    native_id = application[21] & 0x3F
-    if native_id not in TSS3_LATERAL_SOURCE_IDS:
-      raise ValueError(f"unsupported native lateral request ID {native_id}")
+  native_id = application[21] & 0x3F
+  if native_id in TSS3_LATERAL_SOURCE_IDS:
     application[18:20] = target_angle_raw.to_bytes(2, "big", signed=True)
-    application[21] = (application[21] & 0xC0) | TSS3_LTA_LCA_ID
-    if native_id != TSS3_LTA_LCA_ID:
+    application[21] = (application[21] & 0xC0) | (TSS3_LTA_LCA_ID if lat_active else TSS3_NO_LATERAL_REQUEST_ID)
+    if lat_active:
       application[24] = TSS3_LTA_ASSIST_GAIN_RAW
+  elif lat_active:
+    # Unknown request identities can represent Toyota interventions. Never
+    # overwrite one with ordinary openpilot lateral control.
+    raise ValueError(f"unsupported native lateral request ID {native_id}")
 
   if long_control and (application[6], application[7]) in TSS3_REPLACEABLE_LONGITUDINAL_REQUESTS:
     application[4] &= ~0x20  # leave Toyota's delayed-hold substate

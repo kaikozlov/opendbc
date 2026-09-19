@@ -384,10 +384,8 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertFalse(any(address == 0x777 for address, _, _ in sends))
     self.assertAlmostEqual(output.steeringAngleDeg, max_delta, delta=0.01)
 
-    # The pre-handoff controller output is not transmitted. The request-plane
-    # handoff uses a one-shot baseline reset when ownership actually becomes
-    # real; there is no persistent proxy-active permission input.
-    # persistent proxy-active permission input in CarController.
+    # The asynchronous transport aligns the controller's existing limiter once
+    # when the exact-clone handoff completes. It does not add an actuation gate.
     ci.CC.reset_tss3_lateral_target(measured)
     output, sends = ci.apply(control(5.0), 2_010_000_000)
     self.assertFalse(any(address == 0x777 for address, _, _ in sends))
@@ -824,11 +822,12 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.assertTrue(self.safety.safety_tx_hook(self.host_frame(source)))
     self.assertEqual(self.safety.get_desired_angle_last(), 0)
 
-    # A byte-identical post-handoff generation is safe to preserve when only
-    # the other axis is controlled; it still consumes this source exactly once.
+    # While the shared request plane remains owned for the other axis, lateral
+    # is explicitly inactive rather than passing Toyota's ID11 through.
     next_source = self.observe_source(target_id=11, angle_raw=0, b26=0x21)
-    self.safety.set_controls_allowed(True)
-    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(next_source)))
+    self.safety.set_controls_allowed(False)
+    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(
+      next_source, angle_raw=0, target_id=0, assist_gain_raw=100, mutate_mac=True)))
     self.assertEqual(self.safety.get_desired_angle_last(), 0)
 
   def test_request_plane_allows_four_vehicle_model_controller_deltas(self):
@@ -887,6 +886,18 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.assertFalse(self.safety.safety_tx_hook(clone))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
 
+  def test_unknown_toyota_intervention_id_remains_source_exact(self):
+    handoff = self.observe_source(target_id=0, b26=0x20)
+    self.arm()
+    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(handoff)))
+
+    intervention = self.observe_source(target_id=1, angle_raw=100, b26=0x21)
+    self.safety.set_controls_allowed(False)
+    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(intervention)))
+
+    changed = self.observe_source(target_id=1, angle_raw=100, b26=0x22)
+    self.assertFalse(self.safety.safety_tx_hook(self.host_frame(changed, angle_raw=101, mutate_mac=True)))
+
   def test_native_id0_can_promote_to_id11_with_lta_gain(self):
     handoff = self.observe_source(target_id=0, angle_raw=-100, b26=0x20, semantic=0x5F, fv4=7)
     self.arm()
@@ -941,7 +952,7 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.assertFalse(self.safety.safety_tx_hook(bad_msg))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
 
-  def test_id4_and_id18_can_be_replaced_or_preserved_source_exact(self):
+  def test_id4_and_id18_can_be_replaced_or_explicitly_disabled(self):
     handoff = self.observe_source(target_id=11, angle_raw=100, b26=0x20)
     self.arm()
     self.assertTrue(self.safety.safety_tx_hook(self.host_frame(handoff)))
@@ -949,14 +960,17 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.safety.set_desired_angle_last(100)
 
     for b26, native_id in ((0x21, 4), (0x22, 18)):
+      self.safety.set_desired_angle_last(100)
       source = self.observe_source(target_id=native_id, angle_raw=100, b26=b26)
       promoted = self.host_frame(source, angle_raw=102, target_id=11, assist_gain_raw=100, mutate_mac=True)
       self.assertTrue(self.safety.safety_tx_hook(promoted))
       self.safety.set_desired_angle_last(102)
 
-      # A source-exact owner is also valid for longitudinal-only operation.
-      next_source = self.observe_source(target_id=native_id, angle_raw=100, b26=b26 + 2)
-      self.assertTrue(self.safety.safety_tx_hook(self.host_frame(next_source)))
+      # Longitudinal-only operation commands the measured inactive angle and
+      # ID0 instead of preserving a stock lateral request.
+      next_source = self.observe_source(target_id=native_id, angle_raw=102, b26=b26 + 2)
+      self.assertTrue(self.safety.safety_tx_hook(self.host_frame(
+        next_source, angle_raw=0, target_id=0, assist_gain_raw=100, mutate_mac=True)))
 
   def test_alpha_long_promotes_longitudinal_ids_and_replaces_equal_bounds(self):
     self.use_alpha_long_safety()
@@ -1080,12 +1094,14 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.assertFalse(self.safety.safety_tx_hook(self.host_frame(source, angle_raw=101, target_id=18, mutate_mac=True)))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
 
-  def test_modified_id11_requires_controls_allowed(self):
-    source = self.observe_source(target_id=11, angle_raw=100)
+  def test_source_exact_id11_still_requires_controls_allowed(self):
+    handoff = self.observe_source(target_id=11, angle_raw=100, b26=0x20)
     self.arm()
+    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(handoff)))
+    source = self.observe_source(target_id=11, angle_raw=100, b26=0x21)
     self.safety.set_controls_allowed(False)
     self.safety.set_desired_angle_last(100)
-    self.assertFalse(self.safety.safety_tx_hook(self.host_frame(source, angle_raw=101, mutate_mac=True)))
+    self.assertFalse(self.safety.safety_tx_hook(self.host_frame(source)))
 
   def test_latest_00f_cannot_veto_a_matched_native_08a_generation(self):
     old_reset = 0x12345

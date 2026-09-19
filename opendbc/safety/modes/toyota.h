@@ -543,19 +543,33 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
             application_shape &= (msg->data[28] & 0xF0U) ==
                                  (toyota_tss3_08a_native_frames[history_index][28] & 0xF0U);
 
-            if (application_shape && lateral_replacement) {
+            if (application_shape) {
               const uint8_t native_id = toyota_tss3_08a_native_frames[history_index][21] & 0x3FU;
               const uint8_t host_id = msg->data[21] & 0x3FU;
               const bool native_lateral_owner = (native_id == 0U) || (native_id == 4U) ||
                                                 (native_id == 11U) || (native_id == 18U);
-              const bool host_id11 = (host_id == 11U) &&
-                                     ((msg->data[21] & 0xC0U) == (toyota_tss3_08a_native_frames[history_index][21] & 0xC0U));
+              const bool lateral_selector_shape = (msg->data[21] & 0xC0U) ==
+                                                  (toyota_tss3_08a_native_frames[history_index][21] & 0xC0U);
+              const bool host_lateral_active = (host_id == 11U) && (msg->data[24] == 100U);
+              const bool host_lateral_inactive = (host_id == 0U) &&
+                                                 (msg->data[24] == toyota_tss3_08a_native_frames[history_index][24]);
               int target_angle = (msg->data[18] << 8U) | msg->data[19];
               target_angle = to_signed(target_angle, 16);
-              application_shape &= native_lateral_owner && host_id11 && (msg->data[24] == 100U) &&
-                                   controls_allowed &&
-                                   !toyota_f33_angle_cmd_checks(target_angle, true, TOYOTA_F33_08A_ANGLE_STEERING_LIMITS,
-                                                                TOYOTA_F33_ANGLE_STEERING_PARAMS);
+              if (native_lateral_owner && lateral_selector_shape && host_lateral_active) {
+                application_shape &= controls_allowed &&
+                                     !toyota_f33_angle_cmd_checks(target_angle, true, TOYOTA_F33_08A_ANGLE_STEERING_LIMITS,
+                                                                  TOYOTA_F33_ANGLE_STEERING_PARAMS);
+              } else if (native_lateral_owner && lateral_selector_shape && host_lateral_inactive) {
+                application_shape &= !toyota_f33_angle_cmd_checks(target_angle, false, TOYOTA_F33_08A_ANGLE_STEERING_LIMITS,
+                                                                   TOYOTA_F33_ANGLE_STEERING_PARAMS);
+              } else if (!native_lateral_owner) {
+                // Unknown Toyota intervention IDs remain source-exact. Known
+                // ordinary owners must always use openpilot's active or
+                // inactive lateral command shape while replacement is active.
+                application_shape &= !lateral_replacement;
+              } else {
+                application_shape = false;
+              }
             }
 
             if (application_shape && longitudinal_replacement) {

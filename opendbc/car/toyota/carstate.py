@@ -144,9 +144,10 @@ class CarState(CarStateBase):
     # routes. The parallel request-B state is ID25/allocation2-or-3.
     ret.cruiseState.standstill = ret.cruiseState.enabled and bool(request["DELAYED_HOLD_STATE"])
     ret.cruiseState.available = bool(source_cp.vl["TSS3_CRUISE_DISPLAY"]["CRUISE_MAIN_STATE"])
-    # Retained Camry conventional-cruise available/active states. Expose this
-    # through the standard CarState field, not a controller-specific veto.
-    ret.cruiseState.nonAdaptive = int(source_cp.vl["TSS3_CRUISE_DISPLAY"]["MODE_BYTE"]) in (0x88, 0x90)
+    # Conventional cruise is not an incompatible control mode on this platform:
+    # lateral remains available, and pcmCruise=False makes longitudinal
+    # openpilot-owned. Leave nonAdaptive false so the generic event contract
+    # reflects control compatibility rather than raw cluster presentation.
     set_speed_kph = float(request["SET_SPEED"])
     ret.cruiseState.speed = set_speed_kph * CV.KPH_TO_MS if set_speed_kph > 0 else 0.0
     cluster_set_speed = float(source_cp.vl["TSS3_CRUISE_DISPLAY"]["UI_SET_SPEED"])
