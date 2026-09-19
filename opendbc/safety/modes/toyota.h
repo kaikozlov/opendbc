@@ -70,7 +70,8 @@ static bool toyota_tss3_08a_native_consumed[TOYOTA_TSS3_08A_NATIVE_HISTORY_LEN] 
 static uint8_t toyota_tss3_08a_native_history = 0U;
 static uint32_t toyota_tss3_08a_native_last_rx_ts = 0U;
 static uint32_t toyota_tss3_08a_last_tx_ts = 0U;
-static uint8_t toyota_tss3_08a_oracle_next_cf = 0U;
+static uint8_t toyota_tss3_08a_oracle_seq = 0U;
+static uint8_t toyota_tss3_08a_oracle_next_fragment = 0U;
 static bool toyota_tss3_08a_first_host_frame = false;
 
 // Native 0x08A is ~40 Hz with observed ~20-34 ms source intervals. Four source
@@ -330,7 +331,7 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
 
     const bool signer_control = (msg->bus == 1U) && (msg->addr == 0x777U);
     const bool oracle_transport = toyota_tss3_08a_host && !toyota_corolla_hf &&
-                                  (msg->bus == 0U) && (msg->addr == 0x7A1U);
+                                  (msg->bus == 0U) && (msg->addr == 0x1FDC0002U);
     const bool host_08a = toyota_tss3_08a_host && !toyota_corolla_hf &&
                           (msg->bus == 0U) && (msg->addr == 0x8AU);
     const bool corolla_brake_cancel = toyota_corolla_hf && (msg->bus == 1U) && (msg->addr == 0x101U);
@@ -384,19 +385,31 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
       }
     }
     if (oracle_transport) {
-      const bool first_frame = !msg->fd && (msg->data[0] == 0x10U) && (msg->data[1] == 40U) &&
-                               (msg->data[2] == 0xC9U) && (msg->data[3] == 0xC9U) &&
-                               (msg->data[5] == 0U) && (msg->data[6] == 0x8AU);
-      const bool consecutive_frame = !msg->fd && (toyota_tss3_08a_oracle_next_cf != 0U) &&
-                                     (msg->data[0] == (0x20U | toyota_tss3_08a_oracle_next_cf));
-      tx = first_frame || consecutive_frame;
-      if (first_frame) {
-        toyota_tss3_08a_oracle_next_cf = 1U;
-      } else if (consecutive_frame) {
-        toyota_tss3_08a_oracle_next_cf++;
-        if (toyota_tss3_08a_oracle_next_cf > 5U) {
-          toyota_tss3_08a_oracle_next_cf = 0U;
+      const uint8_t header = msg->data[0];
+      const uint8_t fragment = header >> 5U;
+      const uint8_t seq = header & 0x1FU;
+      const bool base_valid = !msg->fd && (GET_LEN(msg) == 8U) && (seq != 0U) && (fragment <= 4U);
+      tx = false;
+
+      if (base_valid && (fragment == 0U)) {
+        // Fragment zero always restarts the bounded transaction. A later source
+        // generation therefore recovers naturally from a partial host batch.
+        toyota_tss3_08a_oracle_seq = seq;
+        toyota_tss3_08a_oracle_next_fragment = 1U;
+        tx = true;
+      } else if (base_valid && (seq == toyota_tss3_08a_oracle_seq) &&
+                 (fragment == toyota_tss3_08a_oracle_next_fragment)) {
+        if (fragment == 4U) {
+          tx = (msg->data[3] == 0xC9U) && (msg->data[4] == 0xA8U) &&
+               (msg->data[5] == (uint8_t)(seq ^ 0xFFU)) &&
+               (msg->data[6] == 0x5AU) && (msg->data[7] == 0xA5U);
+          toyota_tss3_08a_oracle_next_fragment = 0U;
+        } else {
+          toyota_tss3_08a_oracle_next_fragment++;
+          tx = true;
         }
+      } else {
+        toyota_tss3_08a_oracle_next_fragment = 0U;
       }
     }
     if (host_08a) {
@@ -692,7 +705,8 @@ static safety_config toyota_init(uint16_t param) {
   for (uint8_t i = 0U; i < TOYOTA_TSS3_08A_NATIVE_HISTORY_LEN; i++) {
     toyota_tss3_08a_native_consumed[i] = false;
   }
-  toyota_tss3_08a_oracle_next_cf = 0U;
+  toyota_tss3_08a_oracle_seq = 0U;
+  toyota_tss3_08a_oracle_next_fragment = 0U;
   toyota_tss3_08a_first_host_frame = false;
   toyota_dbc_eps_torque_factor = param & TOYOTA_EPS_FACTOR;
 
@@ -715,7 +729,7 @@ static safety_config toyota_init(uint16_t param) {
     } else {
       static const CanMsg toyota_f33_tss3_tx_msgs[] = {
         {0x777, 1, 8, .check_relay = false},
-        {0x7A1, 0, 8, .check_relay = false},
+        {0x1FDC0002, 0, 8, .check_relay = false},
         {0x08A, 0, 32, .check_relay = false},
         {0x101, 2, 8, .check_relay = false},
       };

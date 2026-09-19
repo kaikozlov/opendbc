@@ -547,12 +547,13 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     return libsafety_py.make_CANPacket(0x777, 1, data)
 
   @staticmethod
-  def oracle_ff(seq: int = 1):
-    return libsafety_py.make_CANPacket(0x7A1, 0, bytes((0x10, 40, 0xC9, 0xC9, seq, 0x00, 0x8A, 0x00)))
-
-  @staticmethod
-  def oracle_cf(sn: int, fill: int = 0):
-    return libsafety_py.make_CANPacket(0x7A1, 0, bytes((0x20 | sn, fill, fill, fill, fill, fill, fill, fill)))
+  def oracle_fragment(fragment: int, seq: int = 1, fill: int = 0):
+    header = ((fragment & 0x7) << 5) | (seq & 0x1F)
+    if fragment == 4:
+      data = bytes((header, 0x08, 0x55, 0xC9, 0xA8, seq ^ 0xFF, 0x5A, 0xA5))
+    else:
+      data = bytes((header, fill, fill, fill, fill, fill, fill, fill))
+    return libsafety_py.make_CANPacket(0x1FDC0002, 0, data)
 
   @staticmethod
   def host_frame(source: bytes, *, angle_raw: int | None = None, target_id: int | None = None,
@@ -632,18 +633,34 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x101, 2, bytes(bad_checksum))))
     self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x101, 0, good)))
 
-  def test_oracle_transport_is_one_normal_ff_cf_sequence(self):
-    self.assertFalse(self.safety.safety_tx_hook(self.oracle_cf(1)))
-    self.assertTrue(self.safety.safety_tx_hook(self.oracle_ff(9)))
-    for sn in range(1, 6):
-      self.assertTrue(self.safety.safety_tx_hook(self.oracle_cf(sn, fill=sn)))
-    self.assertFalse(self.safety.safety_tx_hook(self.oracle_cf(1)))
-    self.assertFalse(self.safety.safety_tx_hook(self.oracle_cf(6)))
+  def test_oracle_transport_is_one_ordered_raw_classic_transaction(self):
+    # Continuations are never valid without a fresh fragment zero.
+    self.assertFalse(self.safety.safety_tx_hook(self.oracle_fragment(1, 9)))
 
-    bad = bytearray(self.oracle_ff()[0].data)
-    bad[6] = 0xB6
-    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x7A1, 0, bytes(bad))))
-    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x7A1, 1, bytes(self.oracle_ff()[0].data))))
+    for fragment in range(5):
+      self.assertTrue(self.safety.safety_tx_hook(self.oracle_fragment(fragment, 9, fill=fragment)))
+
+    # Completion closes the transaction; only a new fragment zero can restart it.
+    self.assertFalse(self.safety.safety_tx_hook(self.oracle_fragment(1, 9)))
+    self.assertTrue(self.safety.safety_tx_hook(self.oracle_fragment(0, 10)))
+    self.assertFalse(self.safety.safety_tx_hook(self.oracle_fragment(1, 11)))
+
+    # Fragment zero is an explicit restart after any partial/malformed sequence.
+    self.assertTrue(self.safety.safety_tx_hook(self.oracle_fragment(0, 11)))
+    for fragment in range(1, 4):
+      self.assertTrue(self.safety.safety_tx_hook(self.oracle_fragment(fragment, 11, fill=fragment)))
+    bad_tail = bytearray(self.oracle_fragment(4, 11)[0].data)
+    bad_tail[6] ^= 1
+    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x1FDC0002, 0, bytes(bad_tail))))
+    self.assertTrue(self.safety.safety_tx_hook(self.oracle_fragment(0, 12)))
+
+    # No FD form, wrong bus, zero sequence, or legacy diagnostic carrier is admitted.
+    fd = self.oracle_fragment(0, 13)
+    fd[0].fd = 1
+    self.assertFalse(self.safety.safety_tx_hook(fd))
+    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x1FDC0002, 1, bytes(self.oracle_fragment(0, 13)[0].data))))
+    self.assertFalse(self.safety.safety_tx_hook(self.oracle_fragment(0, 0)))
+    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x7A1, 0, bytes.fromhex("1028c9c901008a00"))))
 
   def test_arm_is_fresh_source_ownership_not_id_or_motion_policy(self):
     self.assertFalse(self.safety.safety_tx_hook(self.admin(1)))
@@ -885,9 +902,9 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     fd_admin = self.admin(0)
     fd_admin[0].fd = 1
     self.assertFalse(self.safety.safety_tx_hook(fd_admin))
-    fd_ff = self.oracle_ff()
-    fd_ff[0].fd = 1
-    self.assertFalse(self.safety.safety_tx_hook(fd_ff))
+    fd_oracle = self.oracle_fragment(0, 1)
+    fd_oracle[0].fd = 1
+    self.assertFalse(self.safety.safety_tx_hook(fd_oracle))
 
   def test_watchdog_fails_open(self):
     source = self.observe_source(target_id=0)
@@ -910,7 +927,7 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.safety.init_tests()
     self.assertTrue(self.safety.safety_rx_hook(self.source_08a()))
     self.assertFalse(self.safety.safety_tx_hook(self.admin(1)))
-    self.assertFalse(self.safety.safety_tx_hook(self.oracle_ff()))
+    self.assertFalse(self.safety.safety_tx_hook(self.oracle_fragment(0, 1)))
     source = bytes(self.source_08a()[0].data)[:32]
     self.assertFalse(self.safety.safety_tx_hook(self.host_frame(source)))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
