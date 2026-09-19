@@ -8,7 +8,7 @@ from opendbc.car.toyota.fingerprints import FW_VERSIONS
 from opendbc.car.toyota.interface import CarInterface
 from opendbc.car.toyota.radar_interface import RadarInterface
 from opendbc.car.toyota.toyotacan import toyota_e2e_p05_checksum
-from opendbc.car.toyota.values import CAR, DBC, EPS_SCALE, ToyotaFlags, ToyotaSafetyFlags, resolve_platform
+from opendbc.car.toyota.values import CAR, DBC, EPS_SCALE, CarControllerParams, ToyotaFlags, ToyotaSafetyFlags, resolve_platform
 from opendbc.safety.tests.libsafety import libsafety_py
 
 
@@ -64,7 +64,8 @@ def relay_fingerprint() -> dict[int, dict[int, int]]:
 
 def update_state(ci: CarInterface, moving: bool = False, counter_offset: int = 0, hud: bytes | None = None,
                  eps_status: int | None = None, eps_telemetry: bytes | None = None,
-                 control_request: bytes | None = None, bus: int = 1, source_bus: int | None = None):
+                 control_request: bytes | None = None, bus: int = 1, source_bus: int | None = None,
+                 speed_ms: float | None = None):
   state = None
   for i in range(20):
     frames = dict(CAMRY_COMMON)
@@ -79,6 +80,9 @@ def update_state(ci: CarInterface, moving: bool = False, counter_offset: int = 0
       frames[0x030] = bytes(eps)
     if moving:
       frames[0x0AA] = bytes.fromhex("1c001c001c001c00")
+    if speed_ms is not None:
+      wheel_raw = 6767 + round(speed_ms * 3.6 / 0.01)
+      frames[0x0AA] = wheel_raw.to_bytes(2, "big") * 4
     source_ids = {0x08A, 0x251, 0x3F6, 0x412}
     packets = [CanData(address, data, source_bus if source_bus is not None and address in source_ids else bus)
                for address, data in frames.items()]
@@ -364,9 +368,10 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertTrue(state.canValid)
 
     measured = state.steeringAngleDeg + state.steeringAngleOffsetDeg
+    max_delta = CarControllerParams.F33_ANGLE_LIMITS.MAX_ANGLE_RATE
     output, sends = ci.apply(control(5.0), 2_000_000_000)
     self.assertFalse(any(address == 0x777 for address, _, _ in sends))
-    self.assertAlmostEqual(output.steeringAngleDeg, 0.15, delta=0.01)
+    self.assertAlmostEqual(output.steeringAngleDeg, max_delta, delta=0.01)
 
     # The pre-handoff controller output is not transmitted. The request-plane
     # handoff uses a one-shot baseline reset when ownership actually becomes
@@ -375,15 +380,26 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     ci.CC.reset_tss3_lateral_target(measured)
     output, sends = ci.apply(control(5.0), 2_010_000_000)
     self.assertFalse(any(address == 0x777 for address, _, _ in sends))
-    self.assertAlmostEqual(output.steeringAngleDeg, measured + 0.15, delta=0.01)
+    self.assertAlmostEqual(output.steeringAngleDeg, measured + max_delta, delta=0.01)
 
     # Toyota's currently selected source application is not a controller veto.
     request[21] = request[21] & 0xC0
     update_state(ci, moving=True, control_request=bytes(request), bus=0, source_bus=2, hud=CAMRY_HUD)
     output, sends = ci.apply(control(20.0), 2_020_000_000)
     self.assertFalse(any(address == 0x777 for address, _, _ in sends))
-    self.assertGreater(output.steeringAngleDeg, measured + 0.15)
-    self.assertAlmostEqual(output.steeringAngleDeg, measured + 0.30, delta=0.02)
+    self.assertGreater(output.steeringAngleDeg, measured + max_delta)
+    self.assertAlmostEqual(output.steeringAngleDeg, measured + 2 * max_delta, delta=0.02)
+
+  def test_f33_uses_vehicle_model_limits_instead_of_tss2_rate_curve(self):
+    ci = CarInterface(self.CP)
+    state = update_state(ci, speed_ms=25.0)
+    self.assertAlmostEqual(state.vEgoRaw, 25.0, delta=0.05)
+
+    output, _ = ci.apply(control(20.0), 2_000_000_000)
+    # The exact value comes from the Camry vehicle model's common lateral-jerk
+    # envelope. It is deliberately above the inherited TSS2 0.075 deg/tick.
+    self.assertGreater(output.steeringAngleDeg, 0.19)
+    self.assertLess(output.steeringAngleDeg, 0.23)
 
   def test_host_request_plane_cancel_clones_native_brake_status_to_source_side(self):
     cp = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, relay_fingerprint(), [], True, False, False)
@@ -438,6 +454,12 @@ class TestToyotaCamryTSS3Safety(unittest.TestCase):
     data = b"\x07\xC7\xC7" + bytes((sequence,)) + angle_raw.to_bytes(2, "big", signed=True) + b"\x00\x00"
     return libsafety_py.make_CANPacket(0x777, bus, data)
 
+  def set_speed(self, speed_ms: float):
+    wheel_raw = 6767 + round(speed_ms * 3.6 / 0.01)
+    msg = libsafety_py.make_CANPacket(0x0AA, 1, wheel_raw.to_bytes(2, "big") * 4)
+    for _ in range(6):
+      self.assertTrue(self.safety.safety_rx_hook(msg))
+
   def test_accepts_bounded_c7_only_on_unsplit_bus(self):
     self.assertTrue(self.safety.safety_tx_hook(self.c7()))
     self.assertFalse(self.safety.safety_tx_hook(self.c7(bus=0)))
@@ -483,6 +505,27 @@ class TestToyotaCamryTSS3Safety(unittest.TestCase):
       self.safety.set_controls_allowed(True)
       self.safety.set_desired_angle_last(sign * 1745)
       self.assertFalse(self.safety.safety_tx_hook(self.c7(sign * 1746)))
+
+  def test_f33_conditioner_and_vehicle_model_rate_limits(self):
+    # At a standstill the recovered F33 conditioner is the tighter bound:
+    # seven B6 counts per 10 ms controller tick.
+    self.safety.set_controls_allowed(True)
+    self.safety.set_desired_angle_last(0)
+    self.assertTrue(self.safety.safety_tx_hook(self.c7(7)))
+    self.safety.set_controls_allowed(True)
+    self.safety.set_desired_angle_last(0)
+    self.assertFalse(self.safety.safety_tx_hook(self.c7(8)))
+
+    # At highway speed the common vehicle-model lateral-jerk envelope is
+    # tighter than the actuator conditioner and uses the exact Camry geometry.
+    self.setUp()
+    self.set_speed(25.0)
+    self.safety.set_controls_allowed(True)
+    self.safety.set_desired_angle_last(0)
+    self.assertTrue(self.safety.safety_tx_hook(self.c7(4)))
+    self.safety.set_controls_allowed(True)
+    self.safety.set_desired_angle_last(0)
+    self.assertFalse(self.safety.safety_tx_hook(self.c7(5)))
 
   def test_relay_correct_host_mode_uses_bus0_state_parser(self):
     cp = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint(), [], True, False, False)
@@ -578,6 +621,12 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     msg = self.source_08a(**kwargs)
     self.assertTrue(self.safety.safety_rx_hook(msg))
     return bytes(msg[0].data)[:32]
+
+  def set_speed(self, speed_ms: float):
+    wheel_raw = 6767 + round(speed_ms * 3.6 / 0.01)
+    msg = libsafety_py.make_CANPacket(0x0AA, 0, wheel_raw.to_bytes(2, "big") * 4)
+    for _ in range(6):
+      self.assertTrue(self.safety.safety_rx_hook(msg))
 
   def arm(self):
     self.assertTrue(self.safety.safety_tx_hook(self.admin(1)))
@@ -696,6 +745,22 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.safety.set_controls_allowed(True)
     self.assertTrue(self.safety.safety_tx_hook(self.host_frame(next_source)))
     self.assertEqual(self.safety.get_desired_angle_last(), 0)
+
+  def test_request_plane_allows_four_vehicle_model_controller_deltas(self):
+    handoff = self.observe_source(target_id=11, angle_raw=0, b26=0x20)
+    self.arm()
+    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(handoff)))
+    self.set_speed(25.0)
+
+    source = self.observe_source(target_id=11, angle_raw=0, b26=0x21)
+    self.safety.set_controls_allowed(True)
+    self.safety.set_desired_angle_last(0)
+    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(source, angle_raw=16, mutate_mac=True)))
+
+    next_source = self.observe_source(target_id=11, angle_raw=0, b26=0x22)
+    self.safety.set_controls_allowed(True)
+    self.safety.set_desired_angle_last(0)
+    self.assertFalse(self.safety.safety_tx_hook(self.host_frame(next_source, angle_raw=17, mutate_mac=True)))
 
   def test_host_must_consume_native_generations_oldest_first(self):
     handoff = self.observe_source(target_id=0, angle_raw=-110, b26=0x1F, semantic=0x5F, fv4=7)

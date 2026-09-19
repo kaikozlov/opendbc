@@ -369,7 +369,8 @@ bool steer_angle_cmd_checks_vm(int desired_angle, bool steer_control_enabled, co
     const float max_angle_rate_sec = get_angle_from_curvature(max_curvature_rate_sec, curvature_factor, params);
 
     // finally get max angle delta per frame
-    const float max_angle_delta = max_angle_rate_sec / (float)limits.frequency;
+    const uint32_t angle_rate_delta_frames = SAFETY_MAX(limits.angle_rate_delta_frames, 1U);
+    const float max_angle_delta = (max_angle_rate_sec / (float)limits.frequency) * angle_rate_delta_frames;
     const int max_angle_delta_can = (max_angle_delta * limits.angle_deg_to_can) + 1.;
 
     // NOTE: symmetric up and down limits

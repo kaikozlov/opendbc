@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from enum import Enum, IntFlag
 
 from opendbc.car import Bus, CarSpecs, PlatformConfig, Platforms
-from opendbc.car.lateral import AngleSteeringLimits
+from opendbc.car.lateral import AngleSteeringLimits, AngleSteeringLimitsVM
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.structs import CarParams
 from opendbc.car.docs_definitions import CarFootnote, CarDocs, Column, CarParts, CarHarness, SupportType
@@ -21,6 +21,8 @@ class CarControllerParams:
   STEER_MAX = 1500
   STEER_ERROR_MAX = 350     # max delta between torque cmd and torque motor
 
+  TSS3_TARGET_ANGLE_SCALE_DEG = 1024 / 17870
+
   # Lane Tracing Assist (LTA) control limits
   ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(
     # EPS ignores commands above this angle and causes PCS to fault
@@ -34,18 +36,30 @@ class CarControllerParams:
     ([5, 25], [0.36, 0.26]),
   )
 
-  # Exact F33 accepts roughly +/-100 degrees at the native B6 angle scale.
-  # TSS3 control runs at openpilot's native 100 Hz, so per-command angle deltas
-  # are half the 50 Hz Toyota LTA values while preserving the same deg/s shape.
+  # Retained for TSS3 platforms without a target-native vehicle-model safety
+  # contract. Exact F33 uses F33_ANGLE_LIMITS below.
   TSS3_ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(
-    1745 * (1024 / 17870),
+    1745 * TSS3_TARGET_ANGLE_SCALE_DEG,
     ([5, 25], [0.15, 0.075]),
     ([5, 25], [0.18, 0.13]),
+  )
+
+  # Exact F33 mode-2 (LTA/LCA) firmware clamps the B6 target to +/-1745 raw.
+  # Its 5 ms conditioner permits 7 units in the doubled target domain per
+  # invocation: 3.5 B6 counts/5 ms, or 7 counts per 10 ms openpilot tick.
+  # Vehicle-model limiting supplies the speed-dependent lateral accel/jerk
+  # envelope using this platform's geometry instead of inherited TSS2 curves.
+  F33_ANGLE_LIMITS: AngleSteeringLimitsVM = AngleSteeringLimitsVM(
+    1745 * TSS3_TARGET_ANGLE_SCALE_DEG,
+    MAX_ANGLE_RATE=7 * TSS3_TARGET_ANGLE_SCALE_DEG,
   )
 
   MAX_LTA_DRIVER_TORQUE_ALLOWANCE = 150  # slightly above steering pressed allows some resistance when changing lanes
 
   def __init__(self, CP):
+    if CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:
+      self.ANGLE_LIMITS = self.F33_ANGLE_LIMITS
+
     if CP.flags & ToyotaFlags.TSS3:
       self.ACCEL_MAX = 1.3 if CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3 else 1.5
       self.ACCEL_MIN = -1.5
