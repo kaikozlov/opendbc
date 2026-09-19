@@ -66,7 +66,7 @@ static bool toyota_tss3_08a_host = false;
 static bool toyota_tss3_08a_signed = false;
 static bool toyota_tss3_08a_replacement_active = false;
 static bool toyota_tss3_08a_native_valid = false;
-#define TOYOTA_TSS3_08A_NATIVE_HISTORY_LEN 6U
+#define TOYOTA_TSS3_08A_NATIVE_HISTORY_LEN 16U
 static uint8_t toyota_tss3_08a_native_frames[TOYOTA_TSS3_08A_NATIVE_HISTORY_LEN][32] = {{0}};
 static bool toyota_tss3_08a_native_consumed[TOYOTA_TSS3_08A_NATIVE_HISTORY_LEN] = {false};
 static uint8_t toyota_tss3_08a_native_history = 0U;
@@ -75,11 +75,11 @@ static uint32_t toyota_tss3_08a_last_tx_ts = 0U;
 static uint8_t toyota_tss3_08a_oracle_next_cf = 0U;
 static bool toyota_tss3_08a_first_host_frame = false;
 
-// Native 0x08A is ~40 Hz. The live bus0 command-5 pipeline has one observed
-// source-ordered host-output gap of 46.24 ms, so keep ownership for three native
-// periods. The host/oracle worker still fails open independently on signing error
-// or its 120 ms oracle timeout.
-const uint32_t TOYOTA_TSS3_08A_REPLACEMENT_TIMEOUT_US = 100000U;
+// Native 0x08A is ~40 Hz. History depth is transport capacity, not an authority
+// policy: exact source generations remain single-use and oldest-unconsumed-first.
+// A 250 ms watchdog covers serialized command-5 retry/catch-up while still
+// failing open if the host stops producing replacement traffic entirely.
+const uint32_t TOYOTA_TSS3_08A_REPLACEMENT_TIMEOUT_US = 250000U;
 static int toyota_dbc_eps_torque_factor = 100;   // conversion factor for STEER_TORQUE_EPS in %: see dbc file
 
 static uint32_t toyota_compute_checksum(const CANPacket_t *msg) {
