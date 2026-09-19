@@ -122,19 +122,19 @@ class CarController(CarControllerBase):
         ))
       output.steeringAngleDeg = self.last_angle
 
-      # Stock longitudinal stays Toyota-owned. Cancel through the ordinary
-      # Brake Module carrier observed on each topology; do not spoof protected
-      # cruise/longitudinal request PDUs.
+      # Cancel remains the ordinary Brake Module command observed on each
+      # topology; it is independent of the protected 0x08A actuation plane.
       if CC.cruiseControl.cancel:
         if self.CP.carFingerprint == CAR.TOYOTA_COROLLA_TSS3:
           can_sends.append(toyotacan.create_tss3_brake_cancel_command(self.packer, CS.tss3_brake_module, 1))
         elif self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3 and host_request_plane:
           can_sends.append(toyotacan.create_tss3_brake_cancel_command(self.packer, CS.tss3_brake_module, 2))
 
-      # Longitudinal remains Toyota-owned. In F33 request-plane mode the host
-      # proxy copies those native 0x08A fields byte-for-byte while selectively
-      # substituting only the ID11 lateral pinion-angle request.
-      output.accel = 0.0
+      # The request-plane proxy samples this bounded command onto source-real
+      # 0x08A generations. Stock/Alpha-Long-disabled configurations expose no
+      # longitudinal output here.
+      output.accel = float(np.clip(CC.actuators.accel, self.params.ACCEL_MIN, self.params.ACCEL_MAX)) \
+        if self.CP.openpilotLongitudinalControl and CC.longActive else 0.0
 
       self.frame += 1
       return output, can_sends

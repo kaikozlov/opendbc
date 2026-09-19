@@ -321,6 +321,11 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
     .min_accel = -3500,  // -3.5 m/s2
   };
 
+  const LongitudinalLimits TOYOTA_F33_LONG_LIMITS = {
+    .max_accel = 1300,   // 1.3 m/s2
+    .min_accel = -1500,  // -1.5 m/s2
+  };
+
   bool tx = true;
 
   if (toyota_tss3_signer) {
@@ -481,41 +486,72 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
                                                  TOYOTA_F33_08A_ANGLE_STEERING_LIMITS.max_angle);
             }
           } else {
-            // Every post-handoff owned generation is validated only as comma's
-            // ID11 request. There is no exact-clone/pass-through category.
-            bool lateral_replacement = true;
+            // Match the exact source generation and permit only the owned
+            // lateral fields and/or normal-DRCC identity, hold and bounds.
+            // Every other Toyota request tuple remains source-exact.
+            bool application_shape = true;
+            bool lateral_replacement = false;
+            bool longitudinal_replacement = false;
             for (uint8_t i = 0U; i < 32U; i++) {
               const bool equal = msg->data[i] == toyota_tss3_08a_native_frames[history_index][i];
               const bool lateral_angle_byte = (i == 18U) || (i == 19U);
               const bool lateral_id_byte = i == 21U;
               const bool assist_gain_byte = i == 24U;
+              const bool delayed_hold_byte = i == 4U;
+              const bool longitudinal_id_byte = (i == 6U) || (i == 7U);
+              const bool accel_bound_byte = (i == 8U) || (i == 9U) || (i == 11U) || (i == 12U);
               const bool mac_bit_byte = i >= 28U;
-              if (!lateral_angle_byte && !lateral_id_byte && !assist_gain_byte && !mac_bit_byte) {
-                lateral_replacement &= equal;
+              if (delayed_hold_byte) {
+                application_shape &= ((msg->data[i] ^ toyota_tss3_08a_native_frames[history_index][i]) & 0xDFU) == 0U;
+              } else if (!lateral_angle_byte && !lateral_id_byte && !assist_gain_byte &&
+                  !longitudinal_id_byte && !accel_bound_byte && !mac_bit_byte) {
+                application_shape &= equal;
               }
+              lateral_replacement |= !equal && (lateral_angle_byte || lateral_id_byte || assist_gain_byte);
+              longitudinal_replacement |= !equal && (delayed_hold_byte || longitudinal_id_byte || accel_bound_byte);
             }
 
-            const uint8_t native_id = toyota_tss3_08a_native_frames[history_index][21] & 0x3FU;
-            const uint8_t host_id = msg->data[21] & 0x3FU;
-            const bool native_lateral_owner = (native_id == 0U) || (native_id == 4U) ||
-                                              (native_id == 11U) || (native_id == 18U);
-            const bool host_id11 = (host_id == 11U) &&
-                                   ((msg->data[21] & 0xC0U) == (toyota_tss3_08a_native_frames[history_index][21] & 0xC0U));
-            lateral_replacement &= native_lateral_owner && host_id11;
-            lateral_replacement &= msg->data[24] == 100U;
             // FV4 is source-generation identity; the MAC bits themselves may differ.
-            lateral_replacement &= (msg->data[28] & 0xF0U) ==
-                                   (toyota_tss3_08a_native_frames[history_index][28] & 0xF0U);
+            application_shape &= (msg->data[28] & 0xF0U) ==
+                                 (toyota_tss3_08a_native_frames[history_index][28] & 0xF0U);
 
-            if (lateral_replacement) {
+            if (application_shape && lateral_replacement) {
+              const uint8_t native_id = toyota_tss3_08a_native_frames[history_index][21] & 0x3FU;
+              const uint8_t host_id = msg->data[21] & 0x3FU;
+              const bool native_lateral_owner = (native_id == 0U) || (native_id == 4U) ||
+                                                (native_id == 11U) || (native_id == 18U);
+              const bool host_id11 = (host_id == 11U) &&
+                                     ((msg->data[21] & 0xC0U) == (toyota_tss3_08a_native_frames[history_index][21] & 0xC0U));
               int target_angle = (msg->data[18] << 8U) | msg->data[19];
               target_angle = to_signed(target_angle, 16);
-              tx = controls_allowed &&
-                   !toyota_f33_angle_cmd_checks(target_angle, true, TOYOTA_F33_08A_ANGLE_STEERING_LIMITS,
-                                                TOYOTA_F33_ANGLE_STEERING_PARAMS);
-              if (tx) {
-                matched_index = history_index;
-              }
+              application_shape &= native_lateral_owner && host_id11 && (msg->data[24] == 100U) &&
+                                   controls_allowed &&
+                                   !toyota_f33_angle_cmd_checks(target_angle, true, TOYOTA_F33_08A_ANGLE_STEERING_LIMITS,
+                                                                TOYOTA_F33_ANGLE_STEERING_PARAMS);
+            }
+
+            if (application_shape && longitudinal_replacement) {
+              const bool source_no_request = (toyota_tss3_08a_native_frames[history_index][6] == 0x00U) &&
+                                             (toyota_tss3_08a_native_frames[history_index][7] == 0x12U);
+              const bool source_ordinary_drcc = (toyota_tss3_08a_native_frames[history_index][6] == 0x2DU) &&
+                                                (toyota_tss3_08a_native_frames[history_index][7] == 0x47U);
+              const bool source_delayed_hold = (toyota_tss3_08a_native_frames[history_index][6] == 0x2DU) &&
+                                               (toyota_tss3_08a_native_frames[history_index][7] == 0x67U);
+              const bool host_ordinary_drcc = (msg->data[6] == 0x2DU) && (msg->data[7] == 0x47U);
+              const bool host_delayed_hold_clear = (msg->data[4] & 0x20U) == 0U;
+              int accel_a = (msg->data[8] << 8U) | msg->data[9];
+              int accel_b = (msg->data[11] << 8U) | msg->data[12];
+              accel_a = to_signed(accel_a, 16);
+              accel_b = to_signed(accel_b, 16);
+              application_shape &= !toyota_stock_longitudinal &&
+                                   (source_no_request || source_ordinary_drcc || source_delayed_hold) &&
+                                   host_ordinary_drcc && host_delayed_hold_clear && (accel_a == accel_b) &&
+                                   !longitudinal_accel_checks(accel_a, TOYOTA_F33_LONG_LIMITS);
+            }
+
+            tx = application_shape;
+            if (tx) {
+              matched_index = history_index;
             }
           }
         }
