@@ -318,16 +318,17 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
     static const AngleSteeringLimits TOYOTA_TSS3_08A_ANGLE_STEERING_LIMITS = {
       .max_angle = 1745,
       .angle_deg_to_can = 17.451171875F,
-      // 0x08A is 40 Hz while CarController updates at 100 Hz. Allow the
-      // largest three-controller-tick delta that can be sampled between
-      // adjacent native request frames; CarController remains tighter.
+      // 0x08A is nominally 40 Hz while CarController updates at 100 Hz, but
+      // source intervals on the live F33 are commonly 30-34 ms and can straddle
+      // four controller updates. Allow exactly four controller-tick deltas;
+      // CarController remains the tighter 100-Hz authority.
       .angle_rate_up_lookup = {
         {5., 25., 25.},
-        {0.45, 0.225, 0.225}
+        {0.60, 0.30, 0.30}
       },
       .angle_rate_down_lookup = {
         {5., 25., 25.},
-        {0.54, 0.39, 0.39}
+        {0.72, 0.52, 0.52}
       },
     };
 
