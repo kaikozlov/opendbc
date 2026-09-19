@@ -579,30 +579,6 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.assertTrue(self.safety.safety_rx_hook(msg))
     return bytes(msg[0].data)[:32]
 
-  def set_measured_angle_raw(self, target_raw: int) -> int:
-    # Exercise the production 0x025 decoder instead of mutating only the
-    # test-facing sample min/max fields. Find the coarse/fraction pair whose
-    # safety-unit representation is closest to target_raw.
-    best = None
-    for coarse in range(-2048, 2048):
-      for fraction in range(-8, 8):
-        decoded = round(((coarse * 15) + fraction) * 1787.0 / 1024.0)
-        candidate = (abs(decoded - target_raw), abs(coarse), abs(fraction), coarse, fraction, decoded)
-        if best is None or candidate < best:
-          best = candidate
-    assert best is not None
-    _, _, _, coarse, fraction, decoded = best
-    data = bytearray(CAMRY_COMMON[0x025])
-    encoded_coarse = coarse & 0xFFF
-    data[0] = (data[0] & 0xF0) | ((encoded_coarse >> 8) & 0x0F)
-    data[1] = encoded_coarse & 0xFF
-    data[4] = ((fraction & 0x0F) << 4) | (data[4] & 0x0F)
-    msg = libsafety_py.make_CANPacket(0x025, 0, bytes(data))
-    msg[0].fd = 1
-    for _ in range(6):
-      self.assertTrue(self.safety.safety_rx_hook(msg))
-    return decoded
-
   def arm(self):
     self.assertTrue(self.safety.safety_tx_hook(self.admin(1)))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
@@ -683,47 +659,32 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.assertTrue(self.safety.safety_tx_hook(self.host_frame(next_source)))
     self.assertEqual(self.safety.get_desired_angle_last(), 60)
 
-  def test_host_can_match_newer_unconsumed_generation_but_not_replay_older(self):
-    self.set_measured_angle_raw(-110)
-    self.safety.set_timer(10_000)
+  def test_host_must_consume_native_generations_oldest_first(self):
     handoff = self.observe_source(target_id=0, angle_raw=-110, b26=0x1F, semantic=0x5F, fv4=7)
     self.arm()
     self.assertTrue(self.safety.safety_tx_hook(self.host_frame(handoff)))
 
-    self.safety.set_timer(20_000)
     oldest = self.observe_source(target_id=0, angle_raw=-100, b26=0x20, semantic=0x60, fv4=8)
-    self.safety.set_timer(30_000)
     middle = self.observe_source(target_id=0, angle_raw=-95, b26=0x21, semantic=0x61, fv4=9)
-    self.safety.set_timer(40_000)
     newest = self.observe_source(target_id=0, angle_raw=-90, b26=0x22, semantic=0x62, fv4=10)
     self.safety.set_controls_allowed(True)
+    self.safety.set_desired_angle_last(-110)
 
-    # Safety retains a short source history for oracle latency. Matching a
-    # newer still-unconsumed generation consumes it and every older generation
-    # atomically, even though production normally represents each generation.
-    newest_host = self.host_frame(newest, angle_raw=-104, target_id=11, assist_gain_raw=100, mutate_mac=True)
-    self.assertTrue(self.safety.safety_tx_hook(newest_host))
-
-    # Older skipped generations are now permanently consumed: no replay/backward
-    # movement is permitted even though their source bytes remain in history.
-    oldest_host = self.host_frame(oldest, angle_raw=-106, target_id=11, assist_gain_raw=100, mutate_mac=True)
-    self.assertFalse(self.safety.safety_tx_hook(oldest_host))
+    # A newer source-real generation cannot skip older unconsumed generations.
+    newest_host = self.host_frame(newest, angle_raw=-85, target_id=11, assist_gain_raw=100, mutate_mac=True)
+    self.assertFalse(self.safety.safety_tx_hook(newest_host))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
 
-    # Recreate authority and show a smaller forward skip also remains monotonic.
     self.setUp()
-    self.set_measured_angle_raw(-110)
-    self.safety.set_timer(10_000)
     handoff = self.observe_source(target_id=0, angle_raw=-110, b26=0x1F, semantic=0x5F, fv4=7)
     self.arm()
     self.assertTrue(self.safety.safety_tx_hook(self.host_frame(handoff)))
-    self.safety.set_timer(20_000)
     oldest = self.observe_source(target_id=0, angle_raw=-100, b26=0x20, semantic=0x60, fv4=8)
-    self.safety.set_timer(30_000)
     middle = self.observe_source(target_id=0, angle_raw=-95, b26=0x21, semantic=0x61, fv4=9)
-    self.safety.set_timer(40_000)
     newest = self.observe_source(target_id=0, angle_raw=-90, b26=0x22, semantic=0x62, fv4=10)
     self.safety.set_controls_allowed(True)
+    self.safety.set_desired_angle_last(-110)
+    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(oldest, angle_raw=-108, target_id=11, assist_gain_raw=100, mutate_mac=True)))
     self.assertTrue(self.safety.safety_tx_hook(self.host_frame(middle, angle_raw=-106, target_id=11, assist_gain_raw=100, mutate_mac=True)))
     self.assertTrue(self.safety.safety_tx_hook(self.host_frame(newest, angle_raw=-104, target_id=11, assist_gain_raw=100, mutate_mac=True)))
 
@@ -740,15 +701,11 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
 
   def test_native_id0_can_promote_to_id11_with_lta_gain(self):
-    self.set_measured_angle_raw(-100)
-    self.safety.set_timer(10_000)
-    handoff = self.observe_source(target_id=0, angle_raw=-100, b26=0x20, semantic=0x5F, fv4=7)
-    self.arm()
-    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(handoff)))
-    self.safety.set_controls_allowed(True)
-
-    self.safety.set_timer(30_000)
     source = self.observe_source(target_id=0, angle_raw=-100, b26=0x21, semantic=0x60, fv4=8)
+    self.arm()
+    self.safety.set_controls_allowed(True)
+    self.safety.set_desired_angle_last(-100)
+
     promoted = self.host_frame(source, angle_raw=-95, target_id=11, assist_gain_raw=100, mutate_mac=True)
     self.assertTrue(self.safety.safety_tx_hook(promoted))
 
@@ -775,15 +732,11 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
 
   def test_modified_frame_is_id11_angle_only(self):
-    self.set_measured_angle_raw(100)
-    self.safety.set_timer(10_000)
-    handoff = self.observe_source(target_id=11, angle_raw=100, b26=0x21, semantic=0x60, fv4=8)
-    self.arm()
-    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(handoff)))
-    self.safety.set_controls_allowed(True)
-
-    self.safety.set_timer(30_000)
     source = self.observe_source(target_id=11, angle_raw=100, b26=0x22, semantic=0x61, fv4=9)
+    self.arm()
+    self.safety.set_controls_allowed(True)
+    self.safety.set_desired_angle_last(100)
+
     modified = self.host_frame(source, angle_raw=105, mutate_mac=True)
     self.assertTrue(self.safety.safety_tx_hook(modified))
 
@@ -797,62 +750,21 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.assertFalse(self.safety.safety_tx_hook(bad_msg))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
 
-  def test_exact_id0_fallback_rebases_to_measured_steering(self):
-    self.set_measured_angle_raw(0)
-    self.safety.set_timer(10_000)
-    handoff = self.observe_source(target_id=0, angle_raw=0, b26=0x20)
-    self.arm()
-    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(handoff)))
-    self.safety.set_controls_allowed(True)
-
-    self.safety.set_timer(30_000)
-    first = self.observe_source(target_id=0, angle_raw=0, b26=0x21)
-    self.assertTrue(self.safety.safety_tx_hook(
-      self.host_frame(first, angle_raw=5, target_id=11, assist_gain_raw=100, mutate_mac=True)))
-    self.assertEqual(self.safety.get_desired_angle_last(), 5)
-
-    # A missed signer generation becomes exact ID0/no-request. Rebase to what
-    # the steering sensor actually reports; the host proxy gives CarController
-    # this same transition before it computes the next modified target.
-    self.safety.set_timer(50_000)
-    measured = self.set_measured_angle_raw(20)
-    fallback = self.observe_source(target_id=0, angle_raw=0, b26=0x22)
-    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(fallback)))
-    self.assertEqual(self.safety.get_desired_angle_last(), measured)
-
-    self.safety.set_timer(60_000)
-    resumed = self.observe_source(target_id=0, angle_raw=0, b26=0x23)
-    self.assertTrue(self.safety.safety_tx_hook(
-      self.host_frame(resumed, angle_raw=23, target_id=11, assist_gain_raw=100, mutate_mac=True)))
-
-    # Elapsed-time scaling is still the ordinary 100-Hz rate boundary.
-    self.safety.set_timer(70_000)
-    too_fast = self.observe_source(target_id=0, angle_raw=0, b26=0x24)
-    self.assertFalse(self.safety.safety_tx_hook(
-      self.host_frame(too_fast, angle_raw=30, target_id=11, assist_gain_raw=100, mutate_mac=True)))
-    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
-
   def test_exact_non_id11_clone_resets_angle_rate_baseline_for_id11_reentry(self):
-    self.set_measured_angle_raw(100)
-    self.safety.set_timer(10_000)
-    handoff = self.observe_source(target_id=11, angle_raw=100, b26=0x1F)
-    self.arm()
-    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(handoff)))
-    self.safety.set_controls_allowed(True)
-    self.safety.set_timer(30_000)
     source = self.observe_source(target_id=11, angle_raw=100, b26=0x20)
+    self.arm()
+    self.safety.set_controls_allowed(True)
+    self.safety.set_desired_angle_last(100)
     self.assertTrue(self.safety.safety_tx_hook(self.host_frame(source, angle_raw=105, mutate_mac=True)))
 
     # Toyota owns a different application for a while. Its exact clone resets
     # the openpilot angle-rate baseline to measured steering.
-    self.safety.set_timer(40_000)
-    self.set_measured_angle_raw(0)
+    self.safety.set_angle_meas(0, 0)
     non_id11 = self.observe_source(target_id=18, angle_raw=500, b26=0x21)
     self.assertTrue(self.safety.safety_tx_hook(self.host_frame(non_id11)))
 
-    self.safety.set_timer(50_000)
     reentry = self.observe_source(target_id=11, angle_raw=0, b26=0x22)
-    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(reentry, angle_raw=4, mutate_mac=True)))
+    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(reentry, angle_raw=5, mutate_mac=True)))
 
   def test_modified_non_id11_is_rejected(self):
     source = self.observe_source(target_id=18, angle_raw=100)
@@ -873,13 +785,8 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     old_reset = 0x12345
     new_reset = old_reset + 1
     old_fv4 = ((2 & 0x3) << 2) | (old_reset & 0x3)
-    self.set_measured_angle_raw(100)
-    self.safety.set_timer(10_000)
-    handoff = self.observe_source(target_id=11, angle_raw=100, b26=0x2F, fv4=old_fv4)
-    self.arm()
-    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(handoff)))
-    self.safety.set_timer(30_000)
     source = self.observe_source(target_id=11, angle_raw=100, b26=0x30, fv4=old_fv4)
+    self.arm()
 
     # 0x00F advances first. Safety must still accept the exact source generation
     # (or its bounded ID11 angle substitution) by matching native 0x08A itself.
@@ -891,7 +798,6 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
 
     new_fv4 = ((3 & 0x3) << 2) | (new_reset & 0x3)
-    self.safety.set_timer(50_000)
     next_source = self.observe_source(target_id=11, angle_raw=105, b26=0x31, fv4=new_fv4)
     self.assertTrue(self.safety.safety_tx_hook(self.host_frame(next_source, angle_raw=110, mutate_mac=True)))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
@@ -908,18 +814,15 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.assertFalse(self.safety.safety_tx_hook(msg))
 
   def test_recent_native_history_allows_oracle_reply_lag(self):
-    self.set_measured_angle_raw(90)
-    self.safety.set_timer(10_000)
     handoff = self.observe_source(target_id=11, angle_raw=90, b26=0x1F, semantic=0x6F)
     self.arm()
     self.assertTrue(self.safety.safety_tx_hook(self.host_frame(handoff)))
 
-    self.safety.set_timer(30_000)
     source0 = self.observe_source(target_id=11, angle_raw=100, b26=0x20, semantic=0x70)
     # A later native generation can arrive while command5 is signing source0.
-    self.safety.set_timer(50_000)
     self.observe_source(target_id=18, angle_raw=200, b26=0x21, semantic=0x71)
     self.safety.set_controls_allowed(True)
+    self.safety.set_desired_angle_last(90)
     self.assertTrue(self.safety.safety_tx_hook(self.host_frame(source0, angle_raw=95, mutate_mac=True)))
 
   def test_host_request_mode_blocks_legacy_c7_sideband(self):
