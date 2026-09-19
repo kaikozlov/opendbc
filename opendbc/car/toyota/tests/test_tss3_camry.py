@@ -931,6 +931,26 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.assertTrue(self.safety.safety_tx_hook(self.host_frame(
       idle, request_a=0x2D, request_b=0x47, accel_a=1300, accel_b=1300, mutate_mac=True)))
 
+  def test_alpha_long_gas_override_drops_stale_generation_without_releasing(self):
+    self.use_alpha_long_safety()
+    handoff = self.observe_source(target_id=0, b26=0x20)
+    self.arm()
+    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(handoff)))
+    self.safety.set_controls_allowed(True)
+
+    stale_source = self.observe_source(target_id=0, b26=0x21)
+    self.safety.set_gas_pressed_prev(True)
+    self.assertFalse(self.safety.safety_tx_hook(
+      self.host_frame(stale_source, accel_a=-500, accel_b=-500, mutate_mac=True)))
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
+
+    # The stale source was consumed. The next openpilot-shaped inactive command
+    # is accepted in the same request-plane ownership session.
+    inactive_source = self.observe_source(target_id=0, b26=0x22)
+    self.assertTrue(self.safety.safety_tx_hook(
+      self.host_frame(inactive_source, accel_a=0, accel_b=0, mutate_mac=True)))
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
+
   def test_alpha_long_rejects_unequal_or_out_of_range_bounds(self):
     for accel_a, accel_b in ((-500, -499), (-1501, -1501), (1301, 1301)):
       with self.subTest(accel_a=accel_a, accel_b=accel_b):

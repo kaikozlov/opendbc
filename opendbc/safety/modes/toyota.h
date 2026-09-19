@@ -459,6 +459,8 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
     if (host_08a) {
       tx = false;
       int matched_index = -1;
+      int gas_override_drop_index = -1;
+      const int desired_angle_previous = desired_angle_last;
 
       if (toyota_tss3_08a_replacement_active && (toyota_tss3_08a_native_history > 0U) &&
           msg->fd && (GET_LEN(msg) == 32U)) {
@@ -543,10 +545,24 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
               int accel_b = (msg->data[11] << 8U) | msg->data[12];
               accel_a = to_signed(accel_a, 16);
               accel_b = to_signed(accel_b, 16);
-              application_shape &= !toyota_stock_longitudinal &&
-                                   (source_no_request || source_ordinary_drcc || source_delayed_hold) &&
-                                   host_ordinary_drcc && host_delayed_hold_clear && (accel_a == accel_b) &&
+              const bool longitudinal_shape = !toyota_stock_longitudinal &&
+                                              (source_no_request || source_ordinary_drcc || source_delayed_hold) &&
+                                              host_ordinary_drcc && host_delayed_hold_clear && (accel_a == accel_b);
+              const bool accel_in_range = !safety_max_limit_check(accel_a, TOYOTA_F33_LONG_LIMITS.max_accel,
+                                                                  TOYOTA_F33_LONG_LIMITS.min_accel);
+              const bool accel_inactive = accel_a == TOYOTA_F33_LONG_LIMITS.inactive_accel;
+              // card and Panda observe the same gas edge asynchronously. A
+              // structurally valid command created just before that edge is
+              // dropped like any normal openpilot longitudinal TX violation,
+              // but it still consumes its source generation and cannot tear
+              // down request-plane ownership.
+              const bool gas_override_drop = application_shape && longitudinal_shape && controls_allowed &&
+                                             gas_pressed_prev && accel_in_range && !accel_inactive;
+              application_shape &= longitudinal_shape &&
                                    !longitudinal_accel_checks(accel_a, TOYOTA_F33_LONG_LIMITS);
+              if (!application_shape && gas_override_drop) {
+                gas_override_drop_index = history_index;
+              }
             }
 
             tx = application_shape;
@@ -561,6 +577,12 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
         toyota_tss3_08a_first_host_frame = false;
         toyota_tss3_08a_native_consumed[matched_index] = true;
         toyota_tss3_08a_last_tx_ts = microsecond_timer_get();
+      } else if (gas_override_drop_index >= 0) {
+        // No command reached the car, so keep the last transmitted angle as
+        // the safety baseline. The following inactive generation remains in
+        // the same relay ownership session.
+        desired_angle_last = desired_angle_previous;
+        toyota_tss3_08a_native_consumed[gas_override_drop_index] = true;
       } else if (toyota_tss3_08a_replacement_active) {
         // Any malformed/replayed/mistimed host frame restores stock forwarding.
         toyota_tss3_08a_replacement_active = false;
