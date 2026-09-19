@@ -77,7 +77,6 @@ class CarController(CarControllerBase):
 
     self.tss3_control_sequence = 0
     self.tss3_request_plane_active = False
-    self.tss3_request_plane_baseline_angle_deg: float | None = None
 
   def update(self, CC, CS, now_nanos):
     if self.CP.flags & ToyotaFlags.TSS3:
@@ -93,13 +92,8 @@ class CarController(CarControllerBase):
       # In F33 request-plane mode, do not accumulate a hidden steering target
       # before the authenticated proxy actually owns 0x08A. Panda seeds the
       # handoff baseline from measured steering, so CarController must remain on
-      # that same baseline until ownership is confirmed. If an oracle miss makes
-      # the proxy forward a Toyota-native ID11 generation, continue from that
-      # actual downstream command on the next control tick.
-      if host_request_plane and self.tss3_request_plane_baseline_angle_deg is not None:
-        self.last_angle = self.tss3_request_plane_baseline_angle_deg
-        self.tss3_request_plane_baseline_angle_deg = None
-
+      # that same baseline until ownership is confirmed. Once active, native ID0
+      # and ID11 are both valid carriers for the normal rate-limited target.
       lateral_command_active = CC.latActive and (not host_request_plane or
                                                  (self.tss3_request_plane_active and CS.tss3_lateral_request_id in (0, 11)))
 

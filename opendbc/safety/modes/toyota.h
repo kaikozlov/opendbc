@@ -69,11 +69,9 @@ static bool toyota_tss3_08a_native_valid = false;
 #define TOYOTA_TSS3_08A_NATIVE_HISTORY_LEN 16U
 static uint8_t toyota_tss3_08a_native_frames[TOYOTA_TSS3_08A_NATIVE_HISTORY_LEN][32] = {{0}};
 static bool toyota_tss3_08a_native_consumed[TOYOTA_TSS3_08A_NATIVE_HISTORY_LEN] = {false};
-static uint32_t toyota_tss3_08a_native_rx_ts[TOYOTA_TSS3_08A_NATIVE_HISTORY_LEN] = {0U};
 static uint8_t toyota_tss3_08a_native_history = 0U;
 static uint32_t toyota_tss3_08a_native_last_rx_ts = 0U;
 static uint32_t toyota_tss3_08a_last_tx_ts = 0U;
-static uint32_t toyota_tss3_08a_angle_last_source_ts = 0U;
 static uint8_t toyota_tss3_08a_oracle_next_cf = 0U;
 static bool toyota_tss3_08a_first_host_frame = false;
 
@@ -124,13 +122,11 @@ static void toyota_rx_hook(const CANPacket_t *msg) {
           toyota_tss3_08a_native_frames[history_index][i] = toyota_tss3_08a_native_frames[history_index - 1U][i];
         }
         toyota_tss3_08a_native_consumed[history_index] = toyota_tss3_08a_native_consumed[history_index - 1U];
-        toyota_tss3_08a_native_rx_ts[history_index] = toyota_tss3_08a_native_rx_ts[history_index - 1U];
       }
       for (uint8_t i = 0U; i < 32U; i++) {
         toyota_tss3_08a_native_frames[0][i] = msg->data[i];
       }
       toyota_tss3_08a_native_consumed[0] = false;
-      toyota_tss3_08a_native_rx_ts[0] = microsecond_timer_get();
       if (toyota_tss3_08a_native_history < TOYOTA_TSS3_08A_NATIVE_HISTORY_LEN) {
         toyota_tss3_08a_native_history++;
       }
@@ -317,6 +313,23 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
       },
     };
 
+    static const AngleSteeringLimits TOYOTA_TSS3_08A_ANGLE_STEERING_LIMITS = {
+      .max_angle = 1745,
+      .angle_deg_to_can = 17.451171875F,
+      // 0x08A is nominally 40 Hz while CarController updates at 100 Hz, but
+      // source intervals on the live F33 are commonly 30-34 ms and can straddle
+      // four controller updates. Allow exactly four controller-tick deltas;
+      // CarController remains the tighter 100-Hz authority.
+      .angle_rate_up_lookup = {
+        {5., 25., 25.},
+        {0.60, 0.30, 0.30}
+      },
+      .angle_rate_down_lookup = {
+        {5., 25., 25.},
+        {0.72, 0.52, 0.52}
+      },
+    };
+
     const bool signer_control = (msg->bus == 1U) && (msg->addr == 0x777U);
     const bool oracle_transport = toyota_tss3_08a_host && !toyota_corolla_hf &&
                                   (msg->bus == 0U) && (msg->addr == 0x7A1U);
@@ -338,7 +351,6 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
           tx = true;
           toyota_tss3_08a_replacement_active = false;
           toyota_tss3_08a_first_host_frame = false;
-          toyota_tss3_08a_angle_last_source_ts = 0U;
         } else {
           // This is only a relay ownership handoff. It carries no steering
           // permission or target generation: controls_allowed remains the
@@ -348,7 +360,6 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
           if (tx) {
             toyota_tss3_08a_replacement_active = true;
             toyota_tss3_08a_first_host_frame = true;
-            toyota_tss3_08a_angle_last_source_ts = 0U;
             toyota_tss3_08a_last_tx_ts = microsecond_timer_get();
             // The latest source generation may be cloned immediately as the
             // atomic handoff witness. Older pre-arm generations are ineligible.
@@ -395,8 +406,15 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
 
       if (toyota_tss3_08a_replacement_active && toyota_tss3_08a_native_valid &&
           msg->fd && (GET_LEN(msg) == 32U)) {
+        int oldest_unconsumed_index = -1;
         for (uint8_t history_index = 0U; history_index < toyota_tss3_08a_native_history; history_index++) {
-          if (toyota_tss3_08a_native_consumed[history_index]) {
+          if (!toyota_tss3_08a_native_consumed[history_index]) {
+            oldest_unconsumed_index = history_index;
+          }
+        }
+
+        for (uint8_t history_index = 0U; history_index < toyota_tss3_08a_native_history; history_index++) {
+          if ((int)history_index != oldest_unconsumed_index) {
             continue;
           }
 
@@ -454,44 +472,12 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
       }
 
       if (matched_index >= 0) {
-        const uint32_t source_ts = toyota_tss3_08a_native_rx_ts[matched_index];
         if (matched_lateral_replacement) {
-          // Relay ownership becomes steering authority only after the exact
-          // source clone has completed the atomic handoff. A modified frame can
-          // never substitute for that first witness.
-          if (toyota_tss3_08a_first_host_frame) {
-            tx = false;
-          } else {
-            int target_angle = (msg->data[18] << 8U) | msg->data[19];
-            target_angle = to_signed(target_angle, 16);
-
-            // CarController applies the ordinary TSS3 angle-rate limit at 100 Hz,
-            // while authenticated 0x08A generations arrive irregularly and a
-            // missing oracle response may deliberately fall back to exact native
-            // ID0. Enforce the same per-controller-tick rate against the actual
-            // source-generation time delta instead of assuming every host frame
-            // is exactly four controller ticks after the previous one.
-            const uint32_t source_elapsed = safety_get_ts_elapsed(source_ts, toyota_tss3_08a_angle_last_source_ts);
-            uint32_t controller_ticks = (source_elapsed + 9999U) / 10000U;
-            controller_ticks = SAFETY_CLAMP(controller_ticks, 1U, TOYOTA_TSS3_08A_REPLACEMENT_TIMEOUT_US / 10000U);
-
-            const float fudged_speed = (vehicle_speed.min / VEHICLE_SPEED_FACTOR) - 1.;
-            const int delta_angle_up = (safety_interpolate(TOYOTA_TSS3_ANGLE_STEERING_LIMITS.angle_rate_up_lookup, fudged_speed) *
-                                        TOYOTA_TSS3_ANGLE_STEERING_LIMITS.angle_deg_to_can * controller_ticks) + 1.;
-            const int delta_angle_down = (safety_interpolate(TOYOTA_TSS3_ANGLE_STEERING_LIMITS.angle_rate_down_lookup, fudged_speed) *
-                                          TOYOTA_TSS3_ANGLE_STEERING_LIMITS.angle_deg_to_can * controller_ticks) + 1.;
-            const int highest_desired_angle = desired_angle_last + ((desired_angle_last > 0) ? delta_angle_up : delta_angle_down);
-            const int lowest_desired_angle = desired_angle_last - ((desired_angle_last >= 0) ? delta_angle_down : delta_angle_up);
-
-            tx = controls_allowed &&
-                 !safety_max_limit_check(target_angle, TOYOTA_TSS3_ANGLE_STEERING_LIMITS.max_angle,
-                                         -TOYOTA_TSS3_ANGLE_STEERING_LIMITS.max_angle) &&
-                 !safety_max_limit_check(target_angle, highest_desired_angle, lowest_desired_angle);
-            if (tx) {
-              desired_angle_last = target_angle;
-              toyota_tss3_08a_angle_last_source_ts = source_ts;
-            }
-          }
+          int target_angle = (msg->data[18] << 8U) | msg->data[19];
+          target_angle = to_signed(target_angle, 16);
+          tx = !safety_max_limit_check(target_angle, TOYOTA_TSS3_08A_ANGLE_STEERING_LIMITS.max_angle,
+                                       -TOYOTA_TSS3_08A_ANGLE_STEERING_LIMITS.max_angle) &&
+               !steer_angle_cmd_checks(target_angle, true, TOYOTA_TSS3_08A_ANGLE_STEERING_LIMITS);
         } else {
           // Stock clone: do not apply openpilot steering policy to Toyota's own
           // request. The first exact clone is the atomic handoff witness, not a
@@ -501,41 +487,28 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
           const uint8_t native_id = toyota_tss3_08a_native_frames[matched_index][21] & 0x3FU;
           if (toyota_tss3_08a_first_host_frame) {
             desired_angle_last = SAFETY_CLAMP(angle_meas.values[0],
-                                              -TOYOTA_TSS3_ANGLE_STEERING_LIMITS.max_angle,
-                                               TOYOTA_TSS3_ANGLE_STEERING_LIMITS.max_angle);
-            toyota_tss3_08a_angle_last_source_ts = source_ts;
+                                              -TOYOTA_TSS3_08A_ANGLE_STEERING_LIMITS.max_angle,
+                                               TOYOTA_TSS3_08A_ANGLE_STEERING_LIMITS.max_angle);
           } else if (native_id == 11U) {
             int native_angle = (toyota_tss3_08a_native_frames[matched_index][18] << 8U) |
                                toyota_tss3_08a_native_frames[matched_index][19];
             desired_angle_last = to_signed(native_angle, 16);
-            toyota_tss3_08a_angle_last_source_ts = source_ts;
           } else {
-            // Exact ID0/other-app fallback contains no openpilot lateral
-            // command. Re-enter from measured steering; the proxy gives
-            // CarController the same one-shot baseline before its next target.
             desired_angle_last = SAFETY_CLAMP(angle_meas.values[0],
-                                              -TOYOTA_TSS3_ANGLE_STEERING_LIMITS.max_angle,
-                                               TOYOTA_TSS3_ANGLE_STEERING_LIMITS.max_angle);
-            toyota_tss3_08a_angle_last_source_ts = source_ts;
+                                              -TOYOTA_TSS3_08A_ANGLE_STEERING_LIMITS.max_angle,
+                                               TOYOTA_TSS3_08A_ANGLE_STEERING_LIMITS.max_angle);
           }
         }
       }
 
       if (tx) {
         toyota_tss3_08a_first_host_frame = false;
-        // A valid host generation may match any still-unconsumed source entry
-        // retained for oracle latency. Consume that generation and all older
-        // entries atomically; newer generations remain available while replay
-        // or backward movement stays rejected.
-        for (uint8_t history_index = (uint8_t)matched_index; history_index < toyota_tss3_08a_native_history; history_index++) {
-          toyota_tss3_08a_native_consumed[history_index] = true;
-        }
+        toyota_tss3_08a_native_consumed[matched_index] = true;
         toyota_tss3_08a_last_tx_ts = microsecond_timer_get();
       } else if (toyota_tss3_08a_replacement_active) {
         // Any malformed/replayed/mistimed host frame restores stock forwarding.
         toyota_tss3_08a_replacement_active = false;
         toyota_tss3_08a_first_host_frame = false;
-        toyota_tss3_08a_angle_last_source_ts = 0U;
       }
     }
     if (corolla_brake_cancel) {
@@ -693,7 +666,6 @@ static bool toyota_fwd_hook(int bus_num, int addr) {
     if (elapsed > TOYOTA_TSS3_08A_REPLACEMENT_TIMEOUT_US) {
       toyota_tss3_08a_replacement_active = false;
       toyota_tss3_08a_first_host_frame = false;
-      toyota_tss3_08a_angle_last_source_ts = 0U;
     } else {
       block = true;
     }
@@ -746,11 +718,8 @@ static safety_config toyota_init(uint16_t param) {
   toyota_tss3_08a_native_valid = false;
   toyota_tss3_08a_native_history = 0U;
   toyota_tss3_08a_native_last_rx_ts = 0U;
-  toyota_tss3_08a_last_tx_ts = 0U;
-  toyota_tss3_08a_angle_last_source_ts = 0U;
   for (uint8_t i = 0U; i < TOYOTA_TSS3_08A_NATIVE_HISTORY_LEN; i++) {
     toyota_tss3_08a_native_consumed[i] = false;
-    toyota_tss3_08a_native_rx_ts[i] = 0U;
   }
   toyota_tss3_08a_oracle_next_cf = 0U;
   toyota_tss3_08a_first_host_frame = false;
