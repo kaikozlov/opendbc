@@ -71,13 +71,11 @@ static uint8_t toyota_tss3_08a_native_history = 0U;
 static uint32_t toyota_tss3_08a_native_last_rx_ts = 0U;
 static uint32_t toyota_tss3_08a_last_tx_ts = 0U;
 static uint8_t toyota_tss3_08a_oracle_next_cf = 0U;
-static uint8_t toyota_tss3_08a_oracle_cf_batches = 0U;
 static bool toyota_tss3_08a_first_host_frame = false;
 
 // Native 0x08A is ~40 Hz with observed ~20-34 ms source intervals. Four source
-// generations cover the bounded same-session oracle repair without retaining
-// the obsolete serialized-retry backlog. Fail open if host replacement traffic
-// disappears for 100 ms.
+// generations cover normal EPS oracle response latency without retaining stale
+// host work. Fail open if host replacement traffic disappears for 100 ms.
 const uint32_t TOYOTA_TSS3_08A_REPLACEMENT_TIMEOUT_US = 100000U;
 static int toyota_dbc_eps_torque_factor = 100;   // conversion factor for STEER_TORQUE_EPS in %: see dbc file
 
@@ -390,15 +388,10 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
       tx = first_frame || consecutive_frame;
       if (first_frame) {
         toyota_tss3_08a_oracle_next_cf = 1U;
-        toyota_tss3_08a_oracle_cf_batches = 0U;
       } else if (consecutive_frame) {
         toyota_tss3_08a_oracle_next_cf++;
         if (toyota_tss3_08a_oracle_next_cf > 5U) {
-          toyota_tss3_08a_oracle_cf_batches++;
-          // One bounded second CF train repairs a fast-path batch that reached
-          // the EPS before its real ISO-TP FC. It reuses the same FF/session and
-          // cannot create another oracle transaction or freshness generation.
-          toyota_tss3_08a_oracle_next_cf = (toyota_tss3_08a_oracle_cf_batches < 2U) ? 1U : 0U;
+          toyota_tss3_08a_oracle_next_cf = 0U;
         }
       }
     }
@@ -691,7 +684,6 @@ static safety_config toyota_init(uint16_t param) {
     toyota_tss3_08a_native_consumed[i] = false;
   }
   toyota_tss3_08a_oracle_next_cf = 0U;
-  toyota_tss3_08a_oracle_cf_batches = 0U;
   toyota_tss3_08a_first_host_frame = false;
   toyota_dbc_eps_torque_factor = param & TOYOTA_EPS_FACTOR;
 

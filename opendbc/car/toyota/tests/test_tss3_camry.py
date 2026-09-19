@@ -606,12 +606,11 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.assertTrue(self.safety.safety_rx_hook(disabled_msg))
     self.assertFalse(self.safety.get_controls_allowed())
 
-  def test_oracle_transport_allows_one_bounded_same_session_cf_repair(self):
+  def test_oracle_transport_is_one_normal_ff_cf_sequence(self):
     self.assertFalse(self.safety.safety_tx_hook(self.oracle_cf(1)))
     self.assertTrue(self.safety.safety_tx_hook(self.oracle_ff(9)))
-    for _ in range(2):
-      for sn in range(1, 6):
-        self.assertTrue(self.safety.safety_tx_hook(self.oracle_cf(sn, fill=sn)))
+    for sn in range(1, 6):
+      self.assertTrue(self.safety.safety_tx_hook(self.oracle_cf(sn, fill=sn)))
     self.assertFalse(self.safety.safety_tx_hook(self.oracle_cf(1)))
     self.assertFalse(self.safety.safety_tx_hook(self.oracle_cf(6)))
 
