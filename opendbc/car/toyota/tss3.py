@@ -34,13 +34,15 @@ def build_signer_control(target_angle_raw: int, control_sequence: int) -> tuple[
 
 
 def build_request_application(native_application: bytes, *, lat_active: bool, target_angle_raw: int,
-                              long_active: bool, accel: float) -> bytes:
+                              long_control: bool, accel: float) -> bytes:
   """Merge openpilot actuation into one source-real TSS3 0x08A application.
 
   The native generation retains unowned lifecycle, set-speed and arbitration
-  metadata. Active openpilot longitudinal promotes the known no-request,
+  metadata. Engaged openpilot longitudinal promotes the known no-request,
   ordinary-DRCC and delayed-hold states to the normal ID11/ID17 request and
-  owns both acceleration bounds. Other Toyota request tuples remain unchanged.
+  owns both acceleration bounds. ``accel`` is zero while longitudinal is
+  inactive, matching openpilot's normal driver-override contract. Other Toyota
+  request tuples remain unchanged.
   """
   if len(native_application) != 28:
     raise ValueError("native 0x08A application must be 28 bytes")
@@ -55,7 +57,7 @@ def build_request_application(native_application: bytes, *, lat_active: bool, ta
     if native_id != TSS3_LTA_LCA_ID:
       application[24] = TSS3_LTA_ASSIST_GAIN_RAW
 
-  if long_active and (application[6], application[7]) in TSS3_REPLACEABLE_LONGITUDINAL_REQUESTS:
+  if long_control and (application[6], application[7]) in TSS3_REPLACEABLE_LONGITUDINAL_REQUESTS:
     application[4] &= ~0x20  # leave Toyota's delayed-hold substate
     application[6:8] = bytes(TSS3_LONGITUDINAL_HOST_REQUEST)
     accel_raw = int(round(accel / TSS3_ACCEL_SCALE))
