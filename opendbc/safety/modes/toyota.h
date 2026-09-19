@@ -73,6 +73,7 @@ static uint8_t toyota_tss3_08a_native_history = 0U;
 static uint32_t toyota_tss3_08a_native_last_rx_ts = 0U;
 static uint32_t toyota_tss3_08a_last_tx_ts = 0U;
 static uint8_t toyota_tss3_08a_oracle_next_cf = 0U;
+static uint8_t toyota_tss3_08a_oracle_cf_batches = 0U;
 static bool toyota_tss3_08a_first_host_frame = false;
 
 // Native 0x08A is ~40 Hz. History depth is transport capacity, not an authority
@@ -394,10 +395,15 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
       tx = first_frame || consecutive_frame;
       if (first_frame) {
         toyota_tss3_08a_oracle_next_cf = 1U;
+        toyota_tss3_08a_oracle_cf_batches = 0U;
       } else if (consecutive_frame) {
         toyota_tss3_08a_oracle_next_cf++;
         if (toyota_tss3_08a_oracle_next_cf > 5U) {
-          toyota_tss3_08a_oracle_next_cf = 0U;
+          toyota_tss3_08a_oracle_cf_batches++;
+          // One bounded second CF train repairs a fast-path batch that reached
+          // the EPS before its real ISO-TP FC. It reuses the same FF/session and
+          // cannot create another oracle transaction or freshness generation.
+          toyota_tss3_08a_oracle_next_cf = (toyota_tss3_08a_oracle_cf_batches < 2U) ? 1U : 0U;
         }
       }
     }
@@ -445,25 +451,24 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
 
           const uint8_t native_id = toyota_tss3_08a_native_frames[history_index][21] & 0x3FU;
           const uint8_t host_id = msg->data[21] & 0x3FU;
-          const bool native_id11 = (native_id == 11U) &&
-                                   (msg->data[21] == toyota_tss3_08a_native_frames[history_index][21]);
-          const bool id0_promoted = (native_id == 0U) && (host_id == 11U) &&
-                                    ((msg->data[21] & 0xC0U) == (toyota_tss3_08a_native_frames[history_index][21] & 0xC0U));
+          const bool native_lateral_owner = (native_id == 0U) || (native_id == 4U) ||
+                                            (native_id == 11U) || (native_id == 18U);
+          const bool host_id11 = (host_id == 11U) &&
+                                 ((msg->data[21] & 0xC0U) == (toyota_tss3_08a_native_frames[history_index][21] & 0xC0U));
           lateral_replacement &= toyota_tss3_08a_signed;
-          lateral_replacement &= native_id11 || id0_promoted;
-          // Native ID11 keeps its source-real assist gain. Promoted ID0 must
-          // carry Toyota's observed LTA/LCA B24 raw 100 (1.00 assist gain).
-          lateral_replacement &= native_id11 ?
-                                 (msg->data[24] == toyota_tss3_08a_native_frames[history_index][24]) :
-                                 (msg->data[24] == 100U);
+          lateral_replacement &= native_lateral_owner && host_id11;
+          // Comma-owned lateral authority is always expressed as Toyota's
+          // LTA/LCA ID11 shape. ID4/LDA and ID18/SDG are competing FRC owners,
+          // not pass-through modes, so takeover normalizes B24 to ID11 gain 100.
+          lateral_replacement &= msg->data[24] == 100U;
           // FV4 belongs to the native generation being replaced. Do not compare
           // it with latest 0x00F: those two publishers legitimately straddle
           // normal reset-counter transitions.
           lateral_replacement &= (msg->data[28] & 0xF0U) == (toyota_tss3_08a_native_frames[history_index][28] & 0xF0U);
-          // Native ID11 with an unchanged angle is simply an exact clone. ID0
-          // promotion is itself the lateral semantic change even when B18:B19
-          // happens to equal the native idle angle.
-          lateral_replacement &= angle_changed || id0_promoted;
+          // Native ID11 with an unchanged angle is simply an exact clone.
+          // Changing any other observed Toyota lateral owner to ID11 is itself
+          // the semantic change even when B18:B19 happens to be unchanged.
+          lateral_replacement &= angle_changed || native_id != 11U;
 
           if (exact_clone || lateral_replacement) {
             matched_index = history_index;
@@ -475,30 +480,34 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
 
       if (matched_index >= 0) {
         if (matched_lateral_replacement) {
-          int target_angle = (msg->data[18] << 8U) | msg->data[19];
-          target_angle = to_signed(target_angle, 16);
-          tx = !safety_max_limit_check(target_angle, TOYOTA_TSS3_08A_ANGLE_STEERING_LIMITS.max_angle,
-                                       -TOYOTA_TSS3_08A_ANGLE_STEERING_LIMITS.max_angle) &&
-               !steer_angle_cmd_checks(target_angle, true, TOYOTA_TSS3_08A_ANGLE_STEERING_LIMITS);
-        } else {
-          // Stock clone: do not apply openpilot steering policy to Toyota's own
-          // request. The first exact clone is the atomic handoff witness, not a
-          // steering command, so seed the OP rate baseline from measured
-          // steering just as CarController does on CC.latActive transitions.
-          tx = true;
-          const uint8_t native_id = toyota_tss3_08a_native_frames[matched_index][21] & 0x3FU;
+          // The first host frame is an exact source clone that witnesses the
+          // relay handoff. Modified lateral authority cannot begin before it.
           if (toyota_tss3_08a_first_host_frame) {
-            desired_angle_last = SAFETY_CLAMP(angle_meas.values[0],
-                                              -TOYOTA_TSS3_08A_ANGLE_STEERING_LIMITS.max_angle,
-                                               TOYOTA_TSS3_08A_ANGLE_STEERING_LIMITS.max_angle);
-          } else if (native_id == 11U) {
-            int native_angle = (toyota_tss3_08a_native_frames[matched_index][18] << 8U) |
-                               toyota_tss3_08a_native_frames[matched_index][19];
-            desired_angle_last = to_signed(native_angle, 16);
+            tx = false;
           } else {
-            desired_angle_last = SAFETY_CLAMP(angle_meas.values[0],
-                                              -TOYOTA_TSS3_08A_ANGLE_STEERING_LIMITS.max_angle,
-                                               TOYOTA_TSS3_08A_ANGLE_STEERING_LIMITS.max_angle);
+            int target_angle = (msg->data[18] << 8U) | msg->data[19];
+            target_angle = to_signed(target_angle, 16);
+            tx = !safety_max_limit_check(target_angle, TOYOTA_TSS3_08A_ANGLE_STEERING_LIMITS.max_angle,
+                                         -TOYOTA_TSS3_08A_ANGLE_STEERING_LIMITS.max_angle) &&
+                 !steer_angle_cmd_checks(target_angle, true, TOYOTA_TSS3_08A_ANGLE_STEERING_LIMITS);
+          }
+        } else {
+          // The one exact clone permitted during an owned interval is the
+          // atomic handoff witness. After that, controls_allowed lateral traffic
+          // must be comma-owned ID11; an exact Toyota ID0/ID4/ID18 frame would
+          // reintroduce a competing request owner at Brake/VMM.
+          const uint8_t native_id = toyota_tss3_08a_native_frames[matched_index][21] & 0x3FU;
+          tx = toyota_tss3_08a_first_host_frame || !controls_allowed || (native_id == 11U);
+          if (tx) {
+            if (!toyota_tss3_08a_first_host_frame && controls_allowed && (native_id == 11U)) {
+              int native_angle = (toyota_tss3_08a_native_frames[matched_index][18] << 8U) |
+                                 toyota_tss3_08a_native_frames[matched_index][19];
+              desired_angle_last = to_signed(native_angle, 16);
+            } else {
+              desired_angle_last = SAFETY_CLAMP(angle_meas.values[0],
+                                                -TOYOTA_TSS3_08A_ANGLE_STEERING_LIMITS.max_angle,
+                                                 TOYOTA_TSS3_08A_ANGLE_STEERING_LIMITS.max_angle);
+            }
           }
         }
       }
@@ -726,6 +735,7 @@ static safety_config toyota_init(uint16_t param) {
     toyota_tss3_08a_native_consumed[i] = false;
   }
   toyota_tss3_08a_oracle_next_cf = 0U;
+  toyota_tss3_08a_oracle_cf_batches = 0U;
   toyota_tss3_08a_first_host_frame = false;
   toyota_dbc_eps_torque_factor = param & TOYOTA_EPS_FACTOR;
 
