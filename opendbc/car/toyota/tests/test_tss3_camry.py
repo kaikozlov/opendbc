@@ -142,6 +142,17 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     relay = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, relay_fingerprint(), [], True, False, False)
     self.assertTrue(relay.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.TSS3_08A_HOST.value)
     self.assertTrue(relay.enableBsm)
+    self.assertTrue(relay.alphaLongitudinalAvailable)
+    self.assertTrue(relay.openpilotLongitudinalControl)
+    self.assertTrue(relay.autoResumeSng)
+    self.assertTrue(relay.pcmCruise)
+    self.assertFalse(relay.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.STOCK_LONGITUDINAL.value)
+
+    relay_stock_long = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, relay_fingerprint(), [], False, False, False)
+    self.assertTrue(relay_stock_long.alphaLongitudinalAvailable)
+    self.assertFalse(relay_stock_long.openpilotLongitudinalControl)
+    self.assertTrue(relay_stock_long.pcmCruise)
+    self.assertTrue(relay_stock_long.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.STOCK_LONGITUDINAL.value)
 
   def test_unqualified_camry_longitudinal_is_not_advertised(self):
     for alpha_long in (False, True):
@@ -390,6 +401,19 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertGreater(output.steeringAngleDeg, measured + max_delta)
     self.assertAlmostEqual(output.steeringAngleDeg, measured + 2 * max_delta, delta=0.02)
 
+  def test_host_request_plane_exposes_bounded_alpha_long_acceleration(self):
+    cp = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, relay_fingerprint(), [], True, False, False)
+    ci = CarInterface(cp)
+    update_state(ci, moving=True, bus=0, source_bus=2, hud=CAMRY_HUD)
+
+    for requested, expected in ((1.2, 1.2), (2.0, 1.3), (-2.0, -1.5)):
+      output, sends = ci.apply(control(0.0, active=False, accel=requested, long_active=True), 2_000_000_000)
+      self.assertAlmostEqual(output.accel, expected)
+      self.assertFalse(any(address == 0x08A for address, _, _ in sends))
+
+    output, _ = ci.apply(control(0.0, active=False, accel=1.0, long_active=False), 2_010_000_000)
+    self.assertEqual(output.accel, 0.0)
+
   def test_f33_uses_vehicle_model_limits_instead_of_tss2_rate_curve(self):
     ci = CarInterface(self.CP)
     state = update_state(ci, speed_ms=25.0)
@@ -549,6 +573,7 @@ class TestToyotaCamryTSS3Safety(unittest.TestCase):
 class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
   PARAM = (EPS_SCALE[CAR.TOYOTA_CAMRY_TSS3] | ToyotaSafetyFlags.F33 |
            ToyotaSafetyFlags.STOCK_LONGITUDINAL | ToyotaSafetyFlags.TSS3_08A_HOST)
+  ALPHA_LONG_PARAM = PARAM & ~ToyotaSafetyFlags.STOCK_LONGITUDINAL
 
   def setUp(self):
     self.safety = libsafety_py.libsafety
@@ -558,8 +583,13 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
 
   @staticmethod
   def source_08a(b26: int = 0x12, *, target_id: int = 0, angle_raw: int = 0,
-                 semantic: int | None = None, fv4: int | None = None):
+                 semantic: int | None = None, fv4: int | None = None,
+                 request_a: int | None = None, request_b: int | None = None):
     data = bytearray(CAMRY_COMMON[0x08A])
+    if request_a is not None:
+      data[6] = request_a
+    if request_b is not None:
+      data[7] = request_b
     data[18:20] = angle_raw.to_bytes(2, "big", signed=True)
     data[21] = (data[21] & 0xC0) | (target_id & 0x3F)
     if semantic is not None:
@@ -600,7 +630,9 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
 
   @staticmethod
   def host_frame(source: bytes, *, angle_raw: int | None = None, target_id: int | None = None,
-                 assist_gain_raw: int | None = None, mutate_mac: bool = False):
+                 assist_gain_raw: int | None = None, accel_a: int | None = None,
+                 accel_b: int | None = None, request_a: int | None = None,
+                 request_b: int | None = None, mutate_mac: bool = False):
     data = bytearray(source)
     if angle_raw is not None:
       data[18:20] = angle_raw.to_bytes(2, "big", signed=True)
@@ -608,6 +640,14 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
       data[21] = (data[21] & 0xC0) | (target_id & 0x3F)
     if assist_gain_raw is not None:
       data[24] = assist_gain_raw
+    if request_a is not None:
+      data[6] = request_a
+    if request_b is not None:
+      data[7] = request_b
+    if accel_a is not None:
+      data[8:10] = accel_a.to_bytes(2, "big", signed=True)
+    if accel_b is not None:
+      data[11:13] = accel_b.to_bytes(2, "big", signed=True)
     if mutate_mac:
       data[28] ^= 0x0F  # MAC28 only; preserve FV4 high nibble
       data[29] ^= 0xA5
@@ -631,6 +671,11 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
   def arm(self):
     self.assertTrue(self.safety.safety_tx_hook(self.admin(1)))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
+
+  def use_alpha_long_safety(self):
+    self.assertEqual(self.safety.set_safety_hooks(structs.CarParams.SafetyModel.toyota, self.ALPHA_LONG_PARAM), 0)
+    self.safety.init_tests()
+    self.safety.set_timer(0)
 
   def test_relay_open_rx_checks_require_native_sources_not_forwarded_bus0_08a(self):
     def fd(addr: int, bus: int, data: bytes):
@@ -738,9 +783,8 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.assertTrue(self.safety.safety_tx_hook(self.host_frame(source)))
     self.assertEqual(self.safety.get_desired_angle_last(), 0)
 
-    # After the handoff witness there is no exact-clone authority category.
-    # A byte-identical ID11 is evaluated by the same comma-ID11 steering checks
-    # as any other host command; byte equality itself grants nothing.
+    # A byte-identical post-handoff generation is safe to preserve when only
+    # the other axis is controlled; it still consumes this source exactly once.
     next_source = self.observe_source(target_id=11, angle_raw=0, b26=0x21)
     self.safety.set_controls_allowed(True)
     self.assertTrue(self.safety.safety_tx_hook(self.host_frame(next_source)))
@@ -790,7 +834,6 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.assertTrue(self.safety.safety_tx_hook(self.host_frame(oldest, angle_raw=-108, target_id=11, assist_gain_raw=100, mutate_mac=True)))
     self.assertTrue(self.safety.safety_tx_hook(self.host_frame(middle, angle_raw=-106, target_id=11, assist_gain_raw=100, mutate_mac=True)))
     self.assertTrue(self.safety.safety_tx_hook(self.host_frame(newest, angle_raw=-104, target_id=11, assist_gain_raw=100, mutate_mac=True)))
-
 
   def test_exact_clone_preserves_non_id11_requests_and_is_single_use(self):
     source = self.observe_source(target_id=18, b26=0x12, semantic=0x51)
@@ -857,31 +900,102 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.assertFalse(self.safety.safety_tx_hook(bad_msg))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
 
-  def test_id4_and_id18_are_replaced_by_comma_id11_not_passed_through(self):
+  def test_id4_and_id18_can_be_replaced_or_preserved_source_exact(self):
     handoff = self.observe_source(target_id=11, angle_raw=100, b26=0x20)
     self.arm()
     self.assertTrue(self.safety.safety_tx_hook(self.host_frame(handoff)))
     self.safety.set_controls_allowed(True)
     self.safety.set_desired_angle_last(100)
 
-    for b26, native_id, gain in ((0x21, 4, 100), (0x22, 18, 50)):
+    for b26, native_id in ((0x21, 4), (0x22, 18)):
       source = self.observe_source(target_id=native_id, angle_raw=100, b26=b26)
       promoted = self.host_frame(source, angle_raw=102, target_id=11, assist_gain_raw=100, mutate_mac=True)
       self.assertTrue(self.safety.safety_tx_hook(promoted))
       self.safety.set_desired_angle_last(102)
 
-      # The same Toyota owner is not allowed through exactly once comma owns.
+      # A source-exact owner is also valid for longitudinal-only operation.
       next_source = self.observe_source(target_id=native_id, angle_raw=100, b26=b26 + 2)
-      self.assertFalse(self.safety.safety_tx_hook(self.host_frame(next_source)))
-      self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
-      if native_id == 4:
-        # Re-arm for the second independent source-owner case.
-        self.setUp()
-        handoff = self.observe_source(target_id=11, angle_raw=100, b26=0x30)
+      self.assertTrue(self.safety.safety_tx_hook(self.host_frame(next_source)))
+
+  def test_alpha_long_promotes_longitudinal_ids_and_replaces_equal_bounds(self):
+    self.use_alpha_long_safety()
+    handoff = self.observe_source(target_id=0, b26=0x20)
+    self.arm()
+    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(handoff)))
+    self.safety.set_controls_allowed(True)
+
+    source = self.observe_source(target_id=0, b26=0x21)
+    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(source, accel_a=-500, accel_b=-500, mutate_mac=True)))
+
+    idle = self.observe_source(target_id=0, b26=0x22, request_a=0x00, request_b=0x12)
+    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(
+      idle, request_a=0x2D, request_b=0x47, accel_a=1300, accel_b=1300, mutate_mac=True)))
+
+  def test_alpha_long_rejects_unequal_or_out_of_range_bounds(self):
+    for accel_a, accel_b in ((-500, -499), (-1501, -1501), (1301, 1301)):
+      with self.subTest(accel_a=accel_a, accel_b=accel_b):
+        self.use_alpha_long_safety()
+        handoff = self.observe_source(target_id=0, b26=0x20)
         self.arm()
         self.assertTrue(self.safety.safety_tx_hook(self.host_frame(handoff)))
         self.safety.set_controls_allowed(True)
-        self.safety.set_desired_angle_last(100)
+        source = self.observe_source(target_id=0, b26=0x21)
+        self.assertFalse(self.safety.safety_tx_hook(
+          self.host_frame(source, accel_a=accel_a, accel_b=accel_b, mutate_mac=True)))
+
+  def test_alpha_long_preserves_alternate_intervention_tuple(self):
+    self.use_alpha_long_safety()
+    handoff = self.observe_source(target_id=0, b26=0x20)
+    self.arm()
+    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(handoff)))
+    self.safety.set_controls_allowed(True)
+
+    intervention = self.observe_source(target_id=0, b26=0x21, request_a=0x35, request_b=0x53)
+    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(intervention, mutate_mac=True)))
+
+    changed = self.observe_source(target_id=0, b26=0x22, request_a=0x35, request_b=0x53)
+    self.assertFalse(self.safety.safety_tx_hook(
+      self.host_frame(changed, accel_a=-500, accel_b=-500, mutate_mac=True)))
+
+  def test_alpha_long_reclaims_delayed_hold_request_owner(self):
+    self.use_alpha_long_safety()
+    handoff = self.observe_source(target_id=0, b26=0x20)
+    self.arm()
+    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(handoff)))
+    self.safety.set_controls_allowed(True)
+
+    delayed_hold_msg = self.source_08a(target_id=0, b26=0x21, request_a=0x2D, request_b=0x67)
+    delayed_hold_msg[0].data[4] |= 0x20
+    self.assertTrue(self.safety.safety_rx_hook(delayed_hold_msg))
+    delayed_hold = bytes(delayed_hold_msg[0].data)[:32]
+    resumed = bytearray(delayed_hold)
+    resumed[4] &= ~0x20
+    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(
+      bytes(resumed), request_b=0x47, accel_a=-500, accel_b=-500, mutate_mac=True)))
+
+  def test_stock_longitudinal_mode_rejects_acceleration_replacement(self):
+    handoff = self.observe_source(target_id=0, b26=0x20)
+    self.arm()
+    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(handoff)))
+    self.safety.set_controls_allowed(True)
+    source = self.observe_source(target_id=0, b26=0x21)
+    self.assertFalse(self.safety.safety_tx_hook(
+      self.host_frame(source, accel_a=-500, accel_b=-500, mutate_mac=True)))
+
+  def test_alpha_long_cannot_synthesize_unowned_cruise_state(self):
+    for byte_index, bit_mask in ((3, 0x08), (4, 0x10), (20, 0xC0), (22, 0x10)):
+      with self.subTest(byte_index=byte_index, bit_mask=bit_mask):
+        self.use_alpha_long_safety()
+        handoff = self.observe_source(target_id=0, b26=0x20)
+        self.arm()
+        self.assertTrue(self.safety.safety_tx_hook(self.host_frame(handoff)))
+        self.safety.set_controls_allowed(True)
+        source = self.observe_source(target_id=0, b26=0x21)
+        bad = bytearray(self.host_frame(source, accel_a=-500, accel_b=-500, mutate_mac=True)[0].data)[:32]
+        bad[byte_index] ^= bit_mask
+        bad_msg = libsafety_py.make_CANPacket(0x08A, 0, bytes(bad))
+        bad_msg[0].fd = 1
+        self.assertFalse(self.safety.safety_tx_hook(bad_msg))
 
   def test_modified_non_id11_is_rejected(self):
     handoff = self.observe_source(target_id=11, angle_raw=100, b26=0x20)

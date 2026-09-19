@@ -56,6 +56,9 @@ class CarInterface(CarInterfaceBase):
         relay_request_plane = 0x025 in fingerprint.get(0, {}) and 0x08A in fingerprint.get(2, {})
         if relay_request_plane:
           ret.safetyConfigs[0].safetyParam |= ToyotaSafetyFlags.TSS3_08A_HOST.value
+          ret.alphaLongitudinalAvailable = True
+          ret.openpilotLongitudinalControl = alpha_long
+          ret.autoResumeSng = alpha_long
         ret.dashcamOnly = False
         # The EPS-resident helper owns native B6 signing; openpilot owns only
         # the bounded C7 sideband and therefore needs no host SecOC key.
@@ -90,15 +93,10 @@ class CarInterface(CarInterfaceBase):
         ret.dashcamOnly = True
 
       if not ret.dashcamOnly:
-        # 0x08A is the shared TSS3 request-side envelope for lateral and
-        # longitudinal application requests. On stock Toyota-B it is on the
-        # unsplit chassis network, and openpilot does not yet own a qualified
-        # source-suppression/signing path for longitudinal replacement. Keep
-        # Toyota longitudinal authoritative even when Alpha Long is requested.
-        ret.alphaLongitudinalAvailable = False
-        ret.openpilotLongitudinalControl = False
-        ret.autoResumeSng = False
-        ret.safetyConfigs[0].safetyParam |= ToyotaSafetyFlags.STOCK_LONGITUDINAL.value
+        # Stock Toyota-B has no independently suppressible 0x08A source. The
+        # Camry request-plane repin does, and advertises Alpha Long only there.
+        if not ret.openpilotLongitudinalControl:
+          ret.safetyConfigs[0].safetyParam |= ToyotaSafetyFlags.STOCK_LONGITUDINAL.value
 
       return ret
 
