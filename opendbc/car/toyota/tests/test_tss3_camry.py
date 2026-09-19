@@ -655,11 +655,13 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.assertTrue(self.safety.safety_tx_hook(self.host_frame(source)))
     self.assertEqual(self.safety.get_desired_angle_last(), 0)
 
-    # After the handoff witness, ordinary exact ID11 clones again track their
-    # native request angle when they are actually the commanded output.
-    next_source = self.observe_source(target_id=11, angle_raw=60, b26=0x21)
+    # After the handoff witness there is no exact-clone authority category.
+    # A byte-identical ID11 is evaluated by the same comma-ID11 steering checks
+    # as any other host command; byte equality itself grants nothing.
+    next_source = self.observe_source(target_id=11, angle_raw=0, b26=0x21)
+    self.safety.set_controls_allowed(True)
     self.assertTrue(self.safety.safety_tx_hook(self.host_frame(next_source)))
-    self.assertEqual(self.safety.get_desired_angle_last(), 60)
+    self.assertEqual(self.safety.get_desired_angle_last(), 0)
 
   def test_host_must_consume_native_generations_oldest_first(self):
     handoff = self.observe_source(target_id=0, angle_raw=-110, b26=0x1F, semantic=0x5F, fv4=7)
