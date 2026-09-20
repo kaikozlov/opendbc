@@ -316,7 +316,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertFalse(recovered.steerFaultTemporary)
     self.assertFalse(recovered.steerFaultPermanent)
 
-  def test_carstate_cooperative_inhibits_assert_and_recover(self):
+  def test_carstate_cooperative_inhibits_are_not_steering_faults(self):
     for command_inhibit, angle_inhibit in ((1, 0), (0, 1), (1, 1)):
       with self.subTest(command=command_inhibit, angle=angle_inhibit):
         ci = CarInterface(self.CP)
@@ -325,20 +325,26 @@ class TestToyotaCamryTSS3(unittest.TestCase):
         raw[19] = (raw[19] & ~1) | angle_inhibit
         state = update_state(ci, eps_telemetry=bytes(raw), hud=CAMRY_HUD)
         self.assertTrue(state.canValid)
-        self.assertTrue(state.steerFaultTemporary)
-        self.assertFalse(state.steerFaultPermanent)
-        self.assertFalse(state.vehicleSensorsInvalid)
-        state = update_state(ci, counter_offset=20, hud=CAMRY_HUD)
         self.assertFalse(state.steerFaultTemporary)
         self.assertFalse(state.steerFaultPermanent)
+        self.assertFalse(state.vehicleSensorsInvalid)
 
-  def test_reference_initializing_source_is_not_healthy_steering(self):
-    # The original fixture is valid telemetry, but F33's reference-inhibit
-    # signal at B19[0] is set. Do not silently label this startup state healthy.
+  def test_driver_override_with_cooperative_inhibit_uses_steering_pressed(self):
+    # Measured override telemetry with F33_COOPERATIVE_COMMAND_INHIBIT set.
+    override = bytes.fromhex("12000003330930b9130330053c800e99030b0000053c07b50000000042c3b381")
+    state = update_state(CarInterface(self.CP), moving=True, eps_telemetry=override, hud=CAMRY_HUD)
+    self.assertTrue(state.canValid)
+    self.assertTrue(state.steeringPressed)
+    self.assertFalse(state.steerFaultTemporary)
+    self.assertFalse(state.steerFaultPermanent)
+
+  def test_reference_initializing_source_does_not_report_a_steering_fault(self):
+    # F33's reference-inhibit signal at B19[0] is stock cooperative state, not
+    # an openpilot steering fault or a reason to surrender lateral ownership.
     initializing = bytes.fromhex("00000000170000500000100026820000000000010000ffff00000000b280595f")
     state = update_state(CarInterface(self.CP), eps_telemetry=initializing, hud=CAMRY_HUD)
     self.assertTrue(state.canValid)
-    self.assertTrue(state.steerFaultTemporary)
+    self.assertFalse(state.steerFaultTemporary)
     self.assertFalse(state.steerFaultPermanent)
     self.assertFalse(state.vehicleSensorsInvalid)
 
