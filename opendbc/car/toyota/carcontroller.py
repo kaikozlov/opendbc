@@ -94,6 +94,7 @@ class CarController(CarControllerBase):
       host_request_plane = (self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3 and self.CP.safetyConfigs and
                             bool(self.CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.TSS3_08A_HOST.value))
       lateral_command_active = CC.latActive
+      hud_control = CC.hudControl
 
       # Run TSS3 lateral at the native 100 Hz openpilot control cadence. The
       # request-plane proxy samples this normal rate-limited target on native
@@ -129,6 +130,17 @@ class CarController(CarControllerBase):
           can_sends.append(toyotacan.create_tss3_brake_cancel_command(self.packer, CS.tss3_brake_module, 1))
         elif self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3 and host_request_plane:
           can_sends.append(toyotacan.create_tss3_brake_cancel_command(self.packer, CS.tss3_brake_module, 2))
+
+      # Match Toyota's ordinary HUD ownership pattern: suppress the source
+      # frame in Panda and regenerate it at 5 Hz, with immediate alert edges.
+      steer_alert = hud_control.visualAlert in (VisualAlert.steerRequired, VisualAlert.ldw)
+      send_ui = steer_alert != self.alert_active
+      self.alert_active = steer_alert
+      if host_request_plane and CS.tss3_lkas_hud and (self.frame % 20 == 0 or send_ui):
+        can_sends.append(toyotacan.create_tss3_hud_command(
+          CS.tss3_lkas_hud, hud_control.leftLaneVisible, hud_control.rightLaneVisible,
+          CC.latActive, steer_alert,
+        ))
 
       # The request-plane proxy samples this bounded command onto source-real
       # 0x08A generations. Stock/Alpha-Long-disabled configurations expose no

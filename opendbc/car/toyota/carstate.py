@@ -50,6 +50,8 @@ class CarState(CarStateBase):
     self.lkas_button = 0
     self.distance_button = 0
     self.tss3_cruise_button = 0
+    self.tss3_distance_state = None
+    self.tss3_lta_switch_state = None
 
     self.pcm_follow_distance = 0
 
@@ -112,12 +114,36 @@ class CarState(CarStateBase):
       self.tss3_cruise_button = 4
     else:
       self.tss3_cruise_button = 0
-    ret.buttonEvents = create_button_events(self.tss3_cruise_button, previous_button, {
+    button_events = create_button_events(self.tss3_cruise_button, previous_button, {
       1: ButtonType.cancel,
       2: ButtonType.decelCruise,
       3: ButtonType.accelCruise,
       4: ButtonType.mainCruise,
     })
+
+    # TSS3 publishes following distance as a persistent four-state selection,
+    # rather than another momentary bit in the protected cruise-switch PDU.
+    # A selection change corresponds to one physical gap-button press.
+    distance_state = int(source_cp.vl["TSS3_CRUISE_DISPLAY"]["SET_VEHICLE_INTERVAL_TIME"])
+    if (self.tss3_distance_state in range(1, 5) and distance_state in range(1, 5) and
+        distance_state != self.tss3_distance_state):
+      button_events.extend(create_button_events(1, 0, {1: ButtonType.gapAdjustCruise}) +
+                           create_button_events(0, 1, {1: ButtonType.gapAdjustCruise}))
+    if distance_state in range(1, 5):
+      self.tss3_distance_state = distance_state
+
+    # The canonical HUD carrier distinguishes LTA off (0x10) from enabled
+    # states (0x12 available, 0x14 active). Ignore active/available transitions;
+    # only the persistent feature toggle is a button event.
+    hud_mode = int(self.tss3_lkas_hud.get("BYTE_0", 0))
+    lta_switch_state = hud_mode in (0x12, 0x14) if hud_mode in (0x10, 0x12, 0x14) else None
+    if (self.tss3_lta_switch_state is not None and lta_switch_state is not None and
+        lta_switch_state != self.tss3_lta_switch_state):
+      button_events.extend(create_button_events(1, 0, {1: ButtonType.lkas}) +
+                           create_button_events(0, 1, {1: ButtonType.lkas}))
+    if lta_switch_state is not None:
+      self.tss3_lta_switch_state = lta_switch_state
+    ret.buttonEvents = button_events
 
     driver_torque_invalid = cp.vl["TSS3_EPS_TELEMETRY"]["DRIVER_TORQUE_INVALID"] != 0
     ret.vehicleSensorsInvalid = ret.vehicleSensorsInvalid or driver_torque_invalid

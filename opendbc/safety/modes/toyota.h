@@ -371,7 +371,9 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
     const bool corolla_brake_cancel = toyota_corolla_hf && (msg->bus == 1U) && (msg->addr == 0x101U);
     const bool camry_brake_cancel = toyota_tss3_08a_host && !toyota_corolla_hf &&
                                     (msg->bus == 2U) && (msg->addr == 0x101U);
-    tx = signer_control || oracle_transport || host_08a || corolla_brake_cancel || camry_brake_cancel;
+    const bool camry_hud = toyota_tss3_08a_host && !toyota_corolla_hf && !msg->fd &&
+                           (msg->bus == 0U) && (msg->addr == 0x412U);
+    tx = signer_control || oracle_transport || host_08a || corolla_brake_cancel || camry_brake_cancel || camry_hud;
     if (signer_control) {
       const bool c7_header_valid = !msg->fd && (msg->data[0] == 7U) && (msg->data[1] == 0xC7U) &&
                                     (msg->data[2] == 0xC7U) && (msg->data[6] == 0U) && (msg->data[7] == 0U);
@@ -746,7 +748,8 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
 }
 
 static bool toyota_fwd_hook(int bus_num, int addr) {
-  bool block = false;
+  bool block = toyota_tss3_08a_host && !toyota_corolla_hf &&
+               (bus_num == 2) && (addr == 0x412);
   if (toyota_tss3_08a_host && !toyota_corolla_hf && toyota_tss3_08a_replacement_active &&
       (bus_num == 2) && (addr == 0x8A)) {
     const uint32_t elapsed = safety_get_ts_elapsed(microsecond_timer_get(), toyota_tss3_08a_last_tx_ts);
@@ -832,6 +835,9 @@ static safety_config toyota_init(uint16_t param) {
         {0x1FDC0002, 0, 8, .check_relay = false},
         {0x08A, 0, 32, .check_relay = false},
         {0x101, 2, 8, .check_relay = false},
+        // Only relay-correct F33 replaces 0x412. Keep relay collision checking,
+        // while the dynamic forwarding hook selects that physical topology.
+        {0x412, 0, 8, .check_relay = true, .disable_static_blocking = true},
       };
       SET_TX_MSGS(toyota_f33_tss3_tx_msgs, ret);
       static RxCheck toyota_f33_rx_checks[] = {
