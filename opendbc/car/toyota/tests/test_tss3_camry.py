@@ -743,9 +743,38 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
       self.assertTrue(self.safety.safety_rx_hook(self.cruise_switch("cancel")))
       self.assertFalse(self.safety.get_controls_allowed())
 
-    self.safety.set_controls_allowed(True)
+    # F33's main/mode button does not change openpilot engagement permission.
+    self.safety.set_controls_allowed(False)
     self.assertTrue(self.safety.safety_rx_hook(self.cruise_switch("main")))
     self.assertFalse(self.safety.get_controls_allowed())
+    self.safety.set_controls_allowed(True)
+    self.assertTrue(self.safety.safety_rx_hook(self.cruise_switch("main")))
+    self.assertTrue(self.safety.get_controls_allowed())
+
+  def test_alpha_long_mode_button_keeps_owned_request_accepted(self):
+    self.use_alpha_long_safety()
+
+    handoff = self.observe_source(target_id=0, b26=0x20, request_a=0x00, request_b=0x12)
+    self.arm()
+    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(handoff)))
+
+    self.assertTrue(self.safety.safety_rx_hook(self.cruise_switch("set")))
+    self.assertTrue(self.safety.safety_rx_hook(self.cruise_switch()))
+    self.assertTrue(self.safety.get_controls_allowed())
+
+    source = self.observe_source(target_id=0, b26=0x21, request_a=0x00, request_b=0x12)
+    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(
+      source, target_id=11, assist_gain_raw=100, request_a=0x2D, request_b=0x47,
+      accel_a=-500, accel_b=-500, mutate_mac=True)))
+
+    # Recorded F33 bit 58 changes the Toyota display mode from 0xA0 to 0xC0.
+    # It must not revoke the still-engaged openpilot request plane.
+    self.assertTrue(self.safety.safety_rx_hook(self.cruise_switch("main")))
+    self.assertTrue(self.safety.get_controls_allowed())
+    next_source = self.observe_source(target_id=0, b26=0x22, request_a=0x00, request_b=0x12)
+    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(
+      next_source, target_id=11, assist_gain_raw=100, request_a=0x2D, request_b=0x47,
+      accel_a=-500, accel_b=-500, mutate_mac=True)))
 
   def test_camry_brake_cancel_safety_is_stock_shaped_and_checksum_valid(self):
     good = bytes.fromhex("8800000100000093")

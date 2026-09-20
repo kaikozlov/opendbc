@@ -172,7 +172,7 @@ static void toyota_rx_hook(const CANPacket_t *msg) {
     }
 
     if (!toyota_stock_longitudinal && (msg->bus == 0U) && (msg->addr == 0xFEU) && (GET_LEN(msg) == 32U)) {
-      enum { TOYOTA_BTN_NONE, TOYOTA_BTN_CANCEL, TOYOTA_BTN_SET, TOYOTA_BTN_RESUME, TOYOTA_BTN_MAIN };
+      enum { TOYOTA_BTN_NONE, TOYOTA_BTN_CANCEL, TOYOTA_BTN_SET, TOYOTA_BTN_RESUME };
       int button = TOYOTA_BTN_NONE;
       if (GET_BIT(msg, 38U)) {
         button = TOYOTA_BTN_CANCEL;
@@ -180,8 +180,6 @@ static void toyota_rx_hook(const CANPacket_t *msg) {
         button = TOYOTA_BTN_SET;
       } else if (GET_BIT(msg, 31U)) {
         button = TOYOTA_BTN_RESUME;
-      } else if (GET_BIT(msg, 58U)) {
-        button = TOYOTA_BTN_MAIN;
       }
 
       const bool set_release = (button != TOYOTA_BTN_SET) && (cruise_button_prev == TOYOTA_BTN_SET);
@@ -189,7 +187,9 @@ static void toyota_rx_hook(const CANPacket_t *msg) {
       if (set_release || resume_release) {
         controls_allowed = true;
       }
-      if ((button == TOYOTA_BTN_CANCEL) || (button == TOYOTA_BTN_MAIN)) {
+      // F33 bit 58 changes Toyota's cruise presentation mode while the main
+      // availability latch remains set. It is not an openpilot disengagement.
+      if (button == TOYOTA_BTN_CANCEL) {
         controls_allowed = false;
       }
       cruise_button_prev = button;
