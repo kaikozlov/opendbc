@@ -457,7 +457,7 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
     if (host_08a) {
       tx = false;
       int matched_index = -1;
-      int gas_override_drop_index = -1;
+      int safety_drop_index = -1;
 
       if (toyota_tss3_08a_replacement_active && (toyota_tss3_08a_native_history > 0U) &&
           msg->fd && (GET_LEN(msg) == 32U)) {
@@ -489,6 +489,7 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
             // lateral fields and/or normal-DRCC identity, hold and bounds.
             // Every other Toyota request tuple remains source-exact.
             bool application_shape = true;
+            bool actuation_valid = true;
             bool lateral_replacement = false;
             bool longitudinal_replacement = false;
             for (uint8_t i = 0U; i < 32U; i++) {
@@ -527,12 +528,12 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
               int target_angle = (msg->data[18] << 8U) | msg->data[19];
               target_angle = to_signed(target_angle, 16);
               if (native_lateral_owner && lateral_selector_shape && host_lateral_active) {
-                application_shape &= controls_allowed &&
-                                     !toyota_f33_angle_cmd_checks(target_angle, true, TOYOTA_F33_08A_ANGLE_STEERING_LIMITS,
-                                                                  TOYOTA_F33_ANGLE_STEERING_PARAMS);
+                actuation_valid &= controls_allowed &&
+                                   !toyota_f33_angle_cmd_checks(target_angle, true, TOYOTA_F33_08A_ANGLE_STEERING_LIMITS,
+                                                                TOYOTA_F33_ANGLE_STEERING_PARAMS);
               } else if (native_lateral_owner && lateral_selector_shape && host_lateral_inactive) {
-                application_shape &= !toyota_f33_angle_cmd_checks(target_angle, false, TOYOTA_F33_08A_ANGLE_STEERING_LIMITS,
-                                                                   TOYOTA_F33_ANGLE_STEERING_PARAMS);
+                actuation_valid &= !toyota_f33_angle_cmd_checks(target_angle, false, TOYOTA_F33_08A_ANGLE_STEERING_LIMITS,
+                                                                 TOYOTA_F33_ANGLE_STEERING_PARAMS);
               } else if (!native_lateral_owner) {
                 // Unknown Toyota intervention IDs remain source-exact. Known
                 // ordinary owners must always use openpilot's active or
@@ -546,6 +547,8 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
             if (application_shape && longitudinal_replacement) {
               const bool source_no_request = (toyota_tss3_08a_native_frames[history_index][6] == 0x00U) &&
                                              (toyota_tss3_08a_native_frames[history_index][7] == 0x12U);
+              const bool source_driver_override = (toyota_tss3_08a_native_frames[history_index][6] == 0x2CU) &&
+                                                  (toyota_tss3_08a_native_frames[history_index][7] == 0x46U);
               const bool source_ordinary_drcc = (toyota_tss3_08a_native_frames[history_index][6] == 0x2DU) &&
                                                 (toyota_tss3_08a_native_frames[history_index][7] == 0x47U);
               const bool source_delayed_hold = (toyota_tss3_08a_native_frames[history_index][6] == 0x2DU) &&
@@ -557,28 +560,20 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
               accel_a = to_signed(accel_a, 16);
               accel_b = to_signed(accel_b, 16);
               const bool longitudinal_shape = !toyota_stock_longitudinal &&
-                                              (source_no_request || source_ordinary_drcc || source_delayed_hold) &&
+                                              (source_no_request || source_driver_override ||
+                                               source_ordinary_drcc || source_delayed_hold) &&
                                               host_ordinary_drcc && host_delayed_hold_clear && (accel_a == accel_b);
-              const bool accel_in_range = !safety_max_limit_check(accel_a, TOYOTA_F33_LONG_LIMITS.max_accel,
-                                                                  TOYOTA_F33_LONG_LIMITS.min_accel);
-              const bool accel_inactive = accel_a == TOYOTA_F33_LONG_LIMITS.inactive_accel;
-              // card and Panda observe the same gas edge asynchronously. A
-              // structurally valid command created just before that edge is
-              // dropped like any normal openpilot longitudinal TX violation,
-              // but it still consumes its source generation and cannot tear
-              // down request-plane ownership.
-              const bool gas_override_drop = application_shape && longitudinal_shape && controls_allowed &&
-                                             gas_pressed_prev && accel_in_range && !accel_inactive;
-              application_shape &= longitudinal_shape &&
-                                   !longitudinal_accel_checks(accel_a, TOYOTA_F33_LONG_LIMITS);
-              if (!application_shape && gas_override_drop) {
-                gas_override_drop_index = history_index;
+              application_shape &= longitudinal_shape;
+              if (longitudinal_shape) {
+                actuation_valid &= !longitudinal_accel_checks(accel_a, TOYOTA_F33_LONG_LIMITS);
               }
             }
 
-            tx = application_shape;
+            tx = application_shape && actuation_valid;
             if (tx) {
               matched_index = history_index;
+            } else if (application_shape && !actuation_valid) {
+              safety_drop_index = history_index;
             }
           }
         }
@@ -588,12 +583,12 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
         toyota_tss3_08a_first_host_frame = false;
         toyota_tss3_08a_native_consumed[matched_index] = true;
         toyota_tss3_08a_last_tx_ts = microsecond_timer_get();
-      } else if (gas_override_drop_index >= 0) {
-        // The ordinary steering safety check has already advanced its desired
-        // angle for this source generation. Keep that progression: 0x08A
-        // carries both axes, and rewinding it makes the following generation's
-        // valid lateral request look like a rate violation.
-        toyota_tss3_08a_native_consumed[gas_override_drop_index] = true;
+      } else if (safety_drop_index >= 0) {
+        // Match normal Panda behavior: drop one structurally valid actuation
+        // violation without changing request-plane ownership. Angle safety has
+        // already reset its baseline to measured steering, so the next normal
+        // CarController command can recover without a separate state machine.
+        toyota_tss3_08a_native_consumed[safety_drop_index] = true;
       } else if (toyota_tss3_08a_replacement_active) {
         // Any malformed/replayed/mistimed host frame restores stock forwarding.
         toyota_tss3_08a_replacement_active = false;

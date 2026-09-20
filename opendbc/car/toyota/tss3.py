@@ -9,7 +9,7 @@ TSS3_LATERAL_SOURCE_IDS = (0, 4, 11, 18)  # No Request, LDA, LTA/LCA, SDG
 TSS3_NO_LATERAL_REQUEST_ID = 0
 TSS3_LTA_LCA_ID = 11
 TSS3_LTA_ASSIST_GAIN_RAW = 100
-TSS3_REPLACEABLE_LONGITUDINAL_REQUESTS = ((0x00, 0x12), (0x2D, 0x47), (0x2D, 0x67))
+TSS3_REPLACEABLE_LONGITUDINAL_REQUESTS = ((0x00, 0x12), (0x2C, 0x46), (0x2D, 0x47), (0x2D, 0x67))
 TSS3_LONGITUDINAL_HOST_REQUEST = (0x2D, 0x47)
 TSS3_ACCEL_SCALE = 0.001
 
@@ -42,11 +42,11 @@ def build_request_application(native_application: bytes, *, lat_active: bool, ta
   metadata. While openpilot is engaged, known ordinary lateral requests are
   encoded as ID11/gain100 when active and ID0 at the measured angle when
   inactive. The inactive request preserves Toyota's source gain companion.
-  Engaged openpilot longitudinal promotes the known no-request,
-  ordinary-DRCC and delayed-hold states to the normal ID11/ID17 request and
-  owns both acceleration bounds. ``accel`` is zero while longitudinal is
-  inactive, matching openpilot's normal driver-override contract. Other Toyota
-  request tuples remain unchanged.
+  Engaged openpilot longitudinal promotes the known no-request, ordinary-DRCC,
+  driver-override allocation and delayed-hold states to the normal ID11/ID17
+  request and owns both acceleration bounds. ``accel`` is zero while
+  longitudinal is inactive, matching openpilot's normal driver-override
+  contract. Other Toyota request tuples remain unchanged.
   """
   if len(native_application) != 28:
     raise ValueError("native 0x08A application must be 28 bytes")
