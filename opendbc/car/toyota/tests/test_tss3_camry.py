@@ -866,6 +866,30 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.safety.set_desired_angle_last(0)
     self.assertFalse(self.safety.safety_tx_hook(self.host_frame(next_source, angle_raw=17, mutate_mac=True)))
 
+  def test_lateral_rate_reject_drops_one_generation_and_recovers_in_place(self):
+    handoff = self.observe_source(target_id=11, angle_raw=-551, b26=0x20)
+    self.arm()
+    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(handoff)))
+    self.safety.set_controls_allowed(True)
+    self.safety.set_desired_angle_last(-551)
+
+    # This is the road fault: an inactive/active steering transition produced
+    # 29 B6 counts against the 28-count sampled-controller envelope. Normal
+    # angle safety rejects the one command and rebases to measured steering.
+    rejected_source = self.observe_source(target_id=11, angle_raw=-551, b26=0x21)
+    self.assertFalse(self.safety.safety_tx_hook(
+      self.host_frame(rejected_source, angle_raw=-522, mutate_mac=True)))
+    self.assertEqual(self.safety.get_desired_angle_last(), 0)
+
+    # Like every other Panda-controlled angle car, a safety reject does not
+    # relinquish message ownership. The source generation is consumed and the
+    # next ordinary bounded command recovers from the measured-angle baseline.
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
+    next_source = self.observe_source(target_id=11, angle_raw=-522, b26=0x22)
+    self.assertTrue(self.safety.safety_tx_hook(
+      self.host_frame(next_source, angle_raw=7, mutate_mac=True)))
+    self.assertEqual(self.safety.get_desired_angle_last(), 7)
+
   def test_host_must_consume_native_generations_oldest_first(self):
     handoff = self.observe_source(target_id=0, angle_raw=-110, b26=0x1F, semantic=0x5F, fv4=7)
     self.arm()
@@ -1031,11 +1055,22 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
     self.assertEqual(self.safety.get_desired_angle_last(), 28)
 
-    # Both stale sources were consumed. The next openpilot-shaped inactive
-    # command is accepted in the same request-plane ownership session.
-    inactive_source = self.observe_source(target_id=11, angle_raw=0, b26=0x23)
+    # Toyota changes the allocation companions to 0/2 while the driver gas
+    # override is active. It is still the ordinary ID11/ID17 request and must
+    # become openpilot's normal inactive command instead of leaking alternating
+    # native positive acceleration into the owned request plane.
+    inactive_msg = self.source_08a(target_id=11, angle_raw=0, b26=0x23,
+                                   request_a=0x2C, request_b=0x46)
+    inactive_data = bytearray(bytes(inactive_msg[0].data)[:32])
+    inactive_data[8:10] = (714).to_bytes(2, "big", signed=True)
+    inactive_data[11:13] = (714).to_bytes(2, "big", signed=True)
+    inactive_msg = libsafety_py.make_CANPacket(0x08A, 2, bytes(inactive_data))
+    inactive_msg[0].fd = 1
+    self.assertTrue(self.safety.safety_rx_hook(inactive_msg))
+    inactive_source = bytes(inactive_msg[0].data)[:32]
     self.assertTrue(self.safety.safety_tx_hook(
-      self.host_frame(inactive_source, angle_raw=40, accel_a=0, accel_b=0, mutate_mac=True)))
+      self.host_frame(inactive_source, angle_raw=40, request_a=0x2D, request_b=0x47,
+                      accel_a=0, accel_b=0, mutate_mac=True)))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
 
   def test_alpha_long_rejects_unequal_or_out_of_range_bounds(self):
