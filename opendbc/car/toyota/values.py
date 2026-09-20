@@ -4,11 +4,12 @@ from dataclasses import dataclass, field
 from enum import Enum, IntFlag
 
 from opendbc.car import Bus, CarSpecs, PlatformConfig, Platforms
-from opendbc.car.lateral import AngleSteeringLimits
+from opendbc.car.lateral import AngleSteeringLimits, AngleSteeringLimitsVM
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.structs import CarParams
 from opendbc.car.docs_definitions import CarFootnote, CarDocs, Column, CarParts, CarHarness, SupportType
-from opendbc.car.fw_query_definitions import FwQueryConfig, Request, StdQueries
+from opendbc.car.fw_query_definitions import FwQueryConfig, OfflineFwVersions, PlatformResolverContext, Request, StdQueries
+from opendbc.car.toyota import platform_resolver
 
 Ecu = CarParams.Ecu
 MIN_ACC_SPEED = 19. * CV.MPH_TO_MS
@@ -19,6 +20,8 @@ class CarControllerParams:
   STEER_STEP = 1
   STEER_MAX = 1500
   STEER_ERROR_MAX = 350     # max delta between torque cmd and torque motor
+
+  TSS3_TARGET_ANGLE_SCALE_DEG = 1024 / 17870
 
   # Lane Tracing Assist (LTA) control limits
   ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(
@@ -33,14 +36,36 @@ class CarControllerParams:
     ([5, 25], [0.36, 0.26]),
   )
 
+  # Retained for TSS3 platforms without a target-native vehicle-model safety
+  # contract. Exact F33 uses F33_ANGLE_LIMITS below.
+  TSS3_ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(
+    1745 * TSS3_TARGET_ANGLE_SCALE_DEG,
+    ([5, 25], [0.15, 0.075]),
+    ([5, 25], [0.18, 0.13]),
+  )
+
+  # Exact F33 mode-2 (LTA/LCA) firmware clamps the B6 target to +/-1745 raw.
+  # Its 5 ms conditioner permits 7 units in the doubled target domain per
+  # invocation: 3.5 B6 counts/5 ms, or 7 counts per 10 ms openpilot tick.
+  # Vehicle-model limiting supplies the speed-dependent lateral accel/jerk
+  # envelope using this platform's geometry instead of inherited TSS2 curves.
+  F33_ANGLE_LIMITS: AngleSteeringLimitsVM = AngleSteeringLimitsVM(
+    1745 * TSS3_TARGET_ANGLE_SCALE_DEG,
+    MAX_ANGLE_RATE=7 * TSS3_TARGET_ANGLE_SCALE_DEG,
+  )
+
   MAX_LTA_DRIVER_TORQUE_ALLOWANCE = 150  # slightly above steering pressed allows some resistance when changing lanes
 
   def __init__(self, CP):
-    if CP.flags & ToyotaFlags.RAISED_ACCEL_LIMIT:
-      self.ACCEL_MAX = 2.0
+    if CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:
+      self.ANGLE_LIMITS = self.F33_ANGLE_LIMITS
+
+    if CP.flags & ToyotaFlags.TSS3:
+      self.ACCEL_MAX = 1.3 if CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3 else 1.5
+      self.ACCEL_MIN = -1.5
     else:
-      self.ACCEL_MAX = 1.5  # m/s2, lower than allowed 2.0 m/s^2 for tuning reasons
-    self.ACCEL_MIN = -3.5  # m/s2
+      self.ACCEL_MAX = 2.0 if CP.flags & ToyotaFlags.RAISED_ACCEL_LIMIT else 1.5
+      self.ACCEL_MIN = -3.5
 
     if CP.lateralTuning.which() == 'torque':
       self.STEER_DELTA_UP = 15       # 1.0s time to peak torque
@@ -56,6 +81,10 @@ class ToyotaSafetyFlags(IntFlag):
   STOCK_LONGITUDINAL = (2 << 8)
   LTA = (4 << 8)
   SECOC = (8 << 8)
+  TSS3_SIGNER = (16 << 8)
+  F33 = TSS3_SIGNER  # compatibility alias
+  COROLLA_HF = (32 << 8)
+  TSS3_08A_HOST = (64 << 8)
 
 
 class ToyotaFlags(IntFlag):
@@ -74,6 +103,8 @@ class ToyotaFlags(IntFlag):
   # these cars can utilize 2.0 m/s^2
   RAISED_ACCEL_LIMIT = 1024
   SECOC = 2048
+  # Network/state generation, independent of actuator authentication.
+  TSS3 = 4096
 
   # deprecated flags
   # these cars are speculated to allow stop and go when the DSU is unplugged or disabled with sDSU
@@ -124,6 +155,21 @@ class ToyotaSecOCPlatformConfig(PlatformConfig):
       self.dbc_dict = {Bus.pt: 'toyota_secoc_pt_generated'}
 
 
+@dataclass
+class ToyotaTSS3CarDocs(ToyotaCarDocs):
+  support_type: SupportType = SupportType.CUSTOM
+  support_link: str | None = None
+  car_parts: CarParts = field(default_factory=CarParts.common([CarHarness.toyota_b]))
+
+
+@dataclass
+class ToyotaTSS3PlatformConfig(PlatformConfig):
+  dbc_dict: dict = field(default_factory=lambda: {Bus.pt: 'toyota_tss3_pt_generated'})
+
+  def init(self):
+    self.flags |= ToyotaFlags.TSS3
+
+
 class CAR(Platforms):
   # Toyota
   TOYOTA_ALPHARD_TSS2 = ToyotaTSS2PlatformConfig(
@@ -172,6 +218,12 @@ class CAR(Platforms):
     ],
     TOYOTA_CAMRY.specs,
   )
+  TOYOTA_CAMRY_TSS3 = ToyotaTSS3PlatformConfig(
+    [ToyotaTSS3CarDocs("Toyota Camry Hybrid 2026")],
+    TOYOTA_CAMRY.specs.override(steerRatio=15.3),
+    dbc_dict={Bus.pt: 'toyota_tss3_pt_generated', Bus.radar: 'toyota_tss3_pt_generated'},
+    flags=ToyotaFlags.HYBRID | ToyotaFlags.SECOC,
+  )
   TOYOTA_CHR = PlatformConfig(
     [
       ToyotaCarDocs("Toyota C-HR 2017-20"),
@@ -207,6 +259,16 @@ class CAR(Platforms):
       ToyotaCarDocs("Lexus UX Hybrid 2019-24"),
     ],
     CarSpecs(mass=3060. * CV.LB_TO_KG, wheelbase=2.67, steerRatio=13.9, tireStiffnessFactor=0.444),
+  )
+  TOYOTA_COROLLA_TSS3 = ToyotaTSS3PlatformConfig(
+    [
+      ToyotaTSS3CarDocs("Toyota Corolla 2023-25", min_enable_speed=MIN_ACC_SPEED),
+      ToyotaTSS3CarDocs("Toyota Corolla Hybrid 2023-25", min_enable_speed=MIN_ACC_SPEED),
+    ],
+    # TSS3 here is the E210 sedan only; the older aggregate also covered Corolla
+    # Cross/Lexus UX and therefore carried a shorter representative wheelbase.
+    CarSpecs(mass=3060. * CV.LB_TO_KG, wheelbase=2.70, steerRatio=13.9, tireStiffnessFactor=0.444),
+    flags=ToyotaFlags.SECOC,
   )
   TOYOTA_HIGHLANDER = PlatformConfig(
     [
@@ -482,6 +544,52 @@ def match_fw_to_car_fuzzy(live_fw_versions, vin, offline_fw_versions) -> set[str
   return {str(c) for c in (candidates - FUZZY_EXCLUDED_PLATFORMS)}
 
 
+# Toyota vehicle types are release/region-specific OEM identities. This bridge
+# is deliberately curated: the GTS resolver may identify an unsupported car,
+# but it cannot declare that car control-compatible with an openpilot platform.
+# Corolla ICE/HV remain one control platform: GTS gives them the same EMPS/ABS/FRC
+# stack, while every mapped HV install set adds category 466 Brake Booster.
+TOYOTA_COROLLA_TSS3_ICE_VEHICLE_TYPES = frozenset((12512, 12513, 12516, 12821, 12822, 12827))
+TOYOTA_COROLLA_TSS3_HYBRID_VEHICLE_TYPES = frozenset((12514, 12515, 12823, 12824))
+
+TOYOTA_PLATFORM_BY_VEHICLE: dict[tuple[str, int], CAR] = {
+  # Camry/Camry HV 2021-24. All resolve the established TSS2 architecture
+  # (FRC category 430), distinct from the category-498 TSS3 architecture.
+  ("NA", 12339): CAR.TOYOTA_CAMRY_TSS2,
+  ("NA", 12340): CAR.TOYOTA_CAMRY_TSS2,
+  ("NA", 12401): CAR.TOYOTA_CAMRY_TSS2,
+  ("NA", 12404): CAR.TOYOTA_CAMRY_TSS2,
+  ("NA", 12505): CAR.TOYOTA_CAMRY_TSS2,
+  ("NA", 12506): CAR.TOYOTA_CAMRY_TSS2,
+  ("NA", 12507): CAR.TOYOTA_CAMRY_TSS2,
+  ("NA", 12606): CAR.TOYOTA_CAMRY_TSS2,
+  ("NA", 12607): CAR.TOYOTA_CAMRY_TSS2,
+  ("NA", 12608): CAR.TOYOTA_CAMRY_TSS2,
+  # Exact generation-20 Camry HV identity used by the maintainer vehicle.
+  ("NA", 12862): CAR.TOYOTA_CAMRY_TSS3,
+  # Corolla generation-23 and generation-25 identities covering the two
+  # directly acquired H/F EPS specimens. Corolla Cross and GR Corolla remain
+  # separate even though GTS may place them in the same broad TSS3 family.
+  **{("NA", vehicle_type): CAR.TOYOTA_COROLLA_TSS3
+     for vehicle_type in TOYOTA_COROLLA_TSS3_ICE_VEHICLE_TYPES | TOYOTA_COROLLA_TSS3_HYBRID_VEHICLE_TYPES},
+}
+
+
+def resolve_platform(live_fw_versions, vin: str, offline_fw_versions: OfflineFwVersions,
+                     context: PlatformResolverContext) -> set[str]:
+  del live_fw_versions, offline_fw_versions
+  matches = tuple(
+    match for match in platform_resolver.resolve_all_regions(platform_resolver.load_data(), vin, context.vin_rx_addr)
+    if match.resolution_complete
+  )
+  # An incomplete compatibility map must fail closed when an OEM identity is
+  # ambiguous. Every viable identity has to map to the same platform.
+  if not matches or any((match.region, match.vehicle_type) not in TOYOTA_PLATFORM_BY_VEHICLE for match in matches):
+    return set()
+  platforms = {TOYOTA_PLATFORM_BY_VEHICLE[(match.region, match.vehicle_type)] for match in matches}
+  return {str(platform) for platform in platforms} if len(platforms) == 1 else set()
+
+
 # Regex patterns for parsing more general platform-specific identifiers from FW versions.
 # - Part number: Toyota part number (usually last character needs to be ignored to find a match).
 #    Each ECU address has just one part number.
@@ -544,10 +652,26 @@ FW_QUERY_CONFIG = FwQueryConfig(
                       Ecu.hybrid, Ecu.srs, Ecu.transmission, Ecu.hvac],
       bus=0,
     ),
+    # Stock Toyota-B exposes the TSS3 EPS and ABS diagnostic endpoints on bus
+    # 1. Query both so an exact ABS identity can still resolve a car whose EPS
+    # diagnostic endpoint is unavailable.
+    Request(
+      [StdQueries.TESTER_PRESENT_REQUEST, StdQueries.DEFAULT_DIAGNOSTIC_REQUEST, StdQueries.EXTENDED_DIAGNOSTIC_REQUEST, StdQueries.UDS_VERSION_REQUEST],
+      [StdQueries.TESTER_PRESENT_RESPONSE, StdQueries.DEFAULT_DIAGNOSTIC_RESPONSE, StdQueries.EXTENDED_DIAGNOSTIC_RESPONSE, StdQueries.UDS_VERSION_RESPONSE],
+      whitelist_ecus=[Ecu.eps, Ecu.abs],
+      bus=1,
+      obd_multiplexing=False,
+    ),
   ],
   non_essential_ecus={
     # FIXME: On some models, abs can sometimes be missing
-    Ecu.abs: [CAR.TOYOTA_RAV4, CAR.TOYOTA_COROLLA, CAR.TOYOTA_HIGHLANDER, CAR.TOYOTA_SIENNA, CAR.LEXUS_IS, CAR.TOYOTA_ALPHARD_TSS2],
+    Ecu.abs: [CAR.TOYOTA_RAV4, CAR.TOYOTA_COROLLA, CAR.TOYOTA_HIGHLANDER, CAR.TOYOTA_SIENNA, CAR.LEXUS_IS, CAR.TOYOTA_ALPHARD_TSS2,
+              CAR.TOYOTA_COROLLA_TSS3],
+    # F33 can transiently miss EPS F181 during NRTD startup. Its exact ABS
+    # identity remains sufficient to identify the Camry; if EPS does respond,
+    # the generic exact matcher still requires that response to match.
+    Ecu.eps: [CAR.TOYOTA_CAMRY_TSS3],
+    Ecu.fwdCamera: [CAR.TOYOTA_CAMRY_TSS3, CAR.TOYOTA_COROLLA_TSS3],
     # On some models, the engine can show on two different addresses
     Ecu.engine: [CAR.TOYOTA_HIGHLANDER, CAR.TOYOTA_CAMRY, CAR.TOYOTA_COROLLA_TSS2, CAR.TOYOTA_CHR, CAR.TOYOTA_CHR_TSS2, CAR.LEXUS_IS,
                  CAR.LEXUS_IS_TSS2, CAR.LEXUS_RC, CAR.LEXUS_NX, CAR.LEXUS_NX_TSS2, CAR.LEXUS_RX, CAR.LEXUS_RX_TSS2],
@@ -571,7 +695,7 @@ FW_QUERY_CONFIG = FwQueryConfig(
     # - Body Control Module ((0x750, 0x40))
     # - Telematics ((0x750, 0xc7))
 
-    # Hybrid control computer can be on 0x7e2 (KWP) or 0x7d2 (UDS) depending on platform
+    # Hybrid control computer can be on 0x7e2 (KWP) or 0x7d2 (UDS) depending on platform.
     (Ecu.hybrid, 0x7e2, None),  # Hybrid Control Assembly & Computer
     (Ecu.hybrid, 0x7d2, None),  # Hybrid Control Assembly & Computer
     (Ecu.srs, 0x780, None),     # SRS Airbag
@@ -582,9 +706,13 @@ FW_QUERY_CONFIG = FwQueryConfig(
     (Ecu.hvac, 0x7c4, None),
   ],
   match_fw_to_car_fuzzy=match_fw_to_car_fuzzy,
+  resolve_platform=resolve_platform,
 )
 
 STEER_THRESHOLD = 100
+
+# Physical steering-wheel torque threshold for exact F33 driver intervention.
+TSS3_STEER_DRIVER_TORQUE_THRESHOLD = 0.6
 
 # These cars have non-standard EPS torque scale factors. All others are 73
 EPS_SCALE = defaultdict(lambda: 73,

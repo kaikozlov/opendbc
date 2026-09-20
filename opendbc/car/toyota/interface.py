@@ -18,13 +18,109 @@ class CarInterface(CarInterfaceBase):
 
   DRIVABLE_GEARS = (structs.CarState.GearShifter.sport,)
 
+  def __init__(self, CP, CP_SP=None):
+    self._upstream_api_compat = CP_SP is None
+    super().__init__(CP, CP_SP if CP_SP is not None else structs.CarParamsSP())
+
+  def update(self, can_packets):
+    ret = super().update(can_packets)
+    return ret[0] if self._upstream_api_compat else ret
+
+  def apply(self, c, c_sp=None, now_nanos=None):
+    # Keep compatibility with upstream tools and retained TSS3 tests, which
+    # predate CarControlSP and pass the timestamp as the second argument.
+    if isinstance(c_sp, int) and now_nanos is None:
+      now_nanos = c_sp
+      c_sp = None
+    return super().apply(c, c_sp if c_sp is not None else structs.CarControlSP(), now_nanos)
+
   @staticmethod
-  def get_pid_accel_limits(CP, CP_SP, current_speed, cruise_speed):
+  def get_pid_accel_limits(CP, CP_SP, current_speed=None, cruise_speed=None):
+    if cruise_speed is None:
+      cruise_speed = current_speed
+      current_speed = CP_SP
     return CarControllerParams(CP).ACCEL_MIN, CarControllerParams(CP).ACCEL_MAX
 
   @staticmethod
   def _get_params(ret: structs.CarParams, candidate, fingerprint, car_fw, alpha_long, is_release, docs) -> structs.CarParams:
     ret.brand = "toyota"
+
+    # TSS3 Corolla powertrains share one openpilot platform and the same EPS application.
+    # Keep the normal HYBRID flag meaningful even though TSS3 returns before the
+    # legacy Toyota detection. Normalize Cap'n Proto enum values before set
+    # membership: _DynamicEnum hashes differ from their equal integer Ecu values.
+    # GTS independently distinguishes Corolla HV by an added category-466 Brake
+    # Booster; the retained HV route also carries the generation-native 0x127.
+    found_ecus = {fw.ecu.raw for fw in car_fw}
+    if candidate == CAR.TOYOTA_COROLLA_TSS3 and (found_ecus & {Ecu.hybrid, Ecu.electricBrakeBooster} or
+                                                    0x127 in fingerprint.get(1, {})):
+      ret.flags |= ToyotaFlags.HYBRID.value
+
+    if ret.flags & ToyotaFlags.TSS3:
+      ret.steerControlType = SteerControlType.angle
+      # Camry object geometry, qualifier and lifecycle are verified against
+      # retained source frames; other TSS3 platforms have no radar DBC mapping.
+      ret.radarUnavailable = Bus.radar not in DBC[candidate]
+      ret.openpilotLongitudinalControl = False
+      ret.autoResumeSng = False
+      ret.minEnableSpeed = -1.
+      ret.centerToFront = ret.wheelbase * 0.44
+
+      if candidate == CAR.TOYOTA_CAMRY_TSS3:
+        ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.toyota)]
+        ret.safetyConfigs[0].safetyParam = (EPS_SCALE[candidate] |
+                                             ToyotaSafetyFlags.F33.value)
+        # The physical request-plane harness is self-identifying: chassis/state
+        # lives on bus0 while the FRC-native 0x08A source lives on bus2. Select
+        # host 0x08A ownership from that observed topology, not a private Param.
+        relay_request_plane = 0x025 in fingerprint.get(0, {}) and 0x08A in fingerprint.get(2, {})
+        if relay_request_plane:
+          ret.safetyConfigs[0].safetyParam |= ToyotaSafetyFlags.TSS3_08A_HOST.value
+          ret.alphaLongitudinalAvailable = True
+          ret.openpilotLongitudinalControl = alpha_long
+          ret.autoResumeSng = alpha_long
+          ret.pcmCruise = not alpha_long
+        ret.dashcamOnly = False
+        # The EPS-resident helper owns native B6 signing; openpilot owns only
+        # the bounded C7 sideband and therefore needs no host SecOC key.
+        ret.secOcRequired = False
+        ret.minSteerSpeed = 0.
+        ret.steerAtStandstill = True
+        # Stock Toyota-B exposes this source on bus1; the request-plane repin
+        # moves the FRC vocabulary, including BSM, to bus2.
+        ret.enableBsm = 0x3F6 in fingerprint[2 if relay_request_plane else 1]
+        ret.steerActuatorDelay = 0.18
+        ret.steerLimitTimer = 0.8
+      elif candidate == CAR.TOYOTA_COROLLA_TSS3:
+        ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.toyota)]
+        ret.safetyConfigs[0].safetyParam = (EPS_SCALE[candidate] |
+                                             ToyotaSafetyFlags.TSS3_SIGNER.value |
+                                             ToyotaSafetyFlags.COROLLA_HF.value)
+        ret.dashcamOnly = False
+        # The RAM-resident helper signs a native EPS-local B6. openpilot sends
+        # only the unified functional-0x777 C7 control used across TSS3 targets.
+        ret.secOcRequired = False
+        ret.minSteerSpeed = 0.
+        ret.steerAtStandstill = True
+        # Corolla TSS3 can follow stock ACC through a stop, but the retained
+        # contributor drives require the driver to establish/resume cruise below
+        # Toyota's 19 mph set-speed floor. Keep the native no-entry threshold.
+        ret.minEnableSpeed = MIN_ACC_SPEED
+        ret.enableBsm = 0x3F6 in fingerprint[1]
+        ret.steerActuatorDelay = 0.18
+        ret.steerLimitTimer = 0.8
+      else:
+        ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.noOutput)]
+        ret.dashcamOnly = True
+
+      if not ret.dashcamOnly:
+        # Stock Toyota-B has no independently suppressible 0x08A source. The
+        # Camry request-plane repin does, and advertises Alpha Long only there.
+        if not ret.openpilotLongitudinalControl:
+          ret.safetyConfigs[0].safetyParam |= ToyotaSafetyFlags.STOCK_LONGITUDINAL.value
+
+      return ret
+
     ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.toyota)]
     ret.safetyConfigs[0].safetyParam = EPS_SCALE[candidate]
 

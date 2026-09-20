@@ -8,6 +8,28 @@ from opendbc.sunnypilot.car.toyota.fingerprints_ext import FW_VERSIONS_EXT
 Ecu = CarParams.Ecu
 
 FW_VERSIONS = {
+  # Exact 2026 Camry Hybrid F33 identity. The EPS application identity is the
+  # control-API anchor; FRC and ABS records corroborate the vehicle platform.
+  CAR.TOYOTA_CAMRY_TSS3: {
+    (Ecu.eps, 0x7A1, None): [
+      b'\x028965F3307000\x00\x00\x00\x008A3113303100\x00\x00\x00\x00',
+    ],
+    (Ecu.fwdCamera, 0x792, None): [
+      b'\x018646F3315000\x00\x00\x00\x00',
+    ],
+    (Ecu.abs, 0x7B0, None): [
+      b'\x01F152633K0000\x00\x00\x00\x00',
+    ],
+  },
+  # Both retained Corolla acquisitions report the same application identity
+  # with trim/year-specific secondary records. The RAM signer independently
+  # binds the complete CodeFlash SHA before installation.
+  CAR.TOYOTA_COROLLA_TSS3: {
+    (Ecu.eps, 0x7A1, None): [
+      b'\x028965F1208000\x00\x00\x00\x008A3111202000\x00\x00\x00\x00',
+      b'\x028965F1208000\x00\x00\x00\x008A3111213000\x00\x00\x00\x00',
+    ],
+  },
   CAR.TOYOTA_AVALON: {
     (Ecu.abs, 0x7b0, None): [
       b'F152607060\x00\x00\x00\x00\x00\x00',

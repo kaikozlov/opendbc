@@ -509,5 +509,46 @@ class TestToyotaSecOcSafety(TestToyotaSecOcSafetyBase):
         self.assertEqual(should_tx, self._tx(self._accel_msg_343(accel, cancel_req=1)))
 
 
+class TestToyotaTss3MadsSafety(unittest.TestCase):
+  @staticmethod
+  def _packet(addr, bus, data):
+    packet = libsafety_py.make_CANPacket(addr, bus, data)
+    if len(data) > 8:
+      packet[0].fd = 1
+    return packet
+
+  def _active_lateral_request(self, mads_allowed: bool) -> bool:
+    safety = libsafety_py.libsafety
+    safety.set_current_safety_param_sp(ToyotaSafetyFlagsSP.DEFAULT)
+    safety.set_safety_hooks(CarParams.SafetyModel.toyota,
+                            73 | ToyotaSafetyFlags.F33 | ToyotaSafetyFlags.TSS3_08A_HOST)
+    safety.init_tests()
+    safety.set_timer(1_000)
+
+    source = bytearray(32)
+    source[28] = 0x10
+    self.assertTrue(safety.safety_rx_hook(self._packet(0x8A, 2, source)))
+    admin = bytes((7, 0xC9, 0xA8, 1, 0, 0, 0, 0))
+    self.assertTrue(safety.safety_tx_hook(self._packet(0x777, 1, admin)))
+    self.assertTrue(safety.safety_tx_hook(self._packet(0x8A, 0, source)))
+
+    next_source = bytearray(source)
+    next_source[26] = 1
+    next_source[28] = 0x20
+    safety.set_timer(26_000)
+    self.assertTrue(safety.safety_rx_hook(self._packet(0x8A, 2, next_source)))
+
+    host = bytearray(next_source)
+    host[21] = 11
+    host[24] = 100
+    safety.set_controls_allowed(False)
+    safety.set_controls_allowed_lateral(mads_allowed)
+    return safety.safety_tx_hook(self._packet(0x8A, 0, host))
+
+  def test_request_plane_lateral_accepts_mads_permission_only(self):
+    self.assertFalse(self._active_lateral_request(False))
+    self.assertTrue(self._active_lateral_request(True))
+
+
 if __name__ == "__main__":
   unittest.main()

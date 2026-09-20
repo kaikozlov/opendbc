@@ -131,6 +131,9 @@ typedef struct {
   const struct lookup_t angle_rate_up_lookup;
   const struct lookup_t angle_rate_down_lookup;
   const uint32_t frequency;              // Hz
+  // Number of controller-frequency deltas allowed between transmitted
+  // commands. Zero keeps the normal one-delta behavior for existing modes.
+  const uint32_t angle_rate_delta_frames;
 } AngleSteeringLimits;
 
 typedef struct {

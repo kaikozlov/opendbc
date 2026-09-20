@@ -1,7 +1,7 @@
 import math
 import numpy as np
 from opendbc.car import Bus, make_tester_present_msg, rate_limit, structs, ACCELERATION_DUE_TO_GRAVITY, DT_CTRL
-from opendbc.car.lateral import apply_meas_steer_torque_limits, apply_std_steer_angle_limits, common_fault_avoidance
+from opendbc.car.lateral import apply_meas_steer_torque_limits, apply_std_steer_angle_limits, apply_steer_angle_limits_vm, common_fault_avoidance
 from opendbc.car.carlog import carlog
 from opendbc.car.common.filter_simple import FirstOrderFilter, HighPassFilter
 from opendbc.car.common.pid import PIDController
@@ -9,7 +9,9 @@ from opendbc.car.secoc import add_mac, build_sync_mac
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.toyota import toyotacan
 from opendbc.car.toyota.values import CAR, NO_STOP_TIMER_CAR, TSS2_CAR, \
-                                        CarControllerParams, ToyotaFlags
+                                        CarControllerParams, ToyotaFlags, ToyotaSafetyFlags
+from opendbc.car.toyota.tss3 import build_signer_control, target_angle_deg_to_raw
+from opendbc.car.vehicle_model import VehicleModel
 from opendbc.can import CANPacker
 
 from opendbc.sunnypilot.car.toyota.gas_interceptor import GasInterceptorCarController
@@ -27,7 +29,6 @@ ACCEL_WINDDOWN_LIMIT = -4.0 * DT_CTRL * 3  # m/s^2 / frame
 ACCEL_PID_UNWIND = 0.03 * DT_CTRL * 3  # m/s^2 / frame
 
 MAX_PITCH_COMPENSATION = 1.5  # m/s^2
-
 # LKA limits
 # EPS faults if you apply torque while the steering rate is above 100 deg/s for too long
 MAX_STEER_RATE = 100  # deg/s
@@ -55,6 +56,7 @@ class CarController(CarControllerBase, GasInterceptorCarController):
     CarControllerBase.__init__(self, dbc_names, CP, CP_SP)
     GasInterceptorCarController.__init__(self, CP, CP_SP)
     self.params = CarControllerParams(self.CP)
+    self.VM = VehicleModel(self.CP)
     self.last_torque = 0
     self.last_angle = 0
     self.alert_active = False
@@ -81,7 +83,68 @@ class CarController(CarControllerBase, GasInterceptorCarController):
     self.secoc_acc_message_counter = 0
     self.secoc_prev_reset_counter = 0
 
+    self.tss3_control_sequence = 0
+
+  def reset_tss3_lateral_target(self, steering_angle_deg: float) -> None:
+    self.last_angle = steering_angle_deg
+
   def update(self, CC, CC_SP, CS, now_nanos):
+    if self.CP.flags & ToyotaFlags.TSS3:
+      if self.CP.dashcamOnly:
+        self.frame += 1
+        return CC.actuators.as_builder(), []
+
+      output = CC.actuators.as_builder()
+      can_sends = []
+
+      host_request_plane = (self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3 and self.CP.safetyConfigs and
+                            bool(self.CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.TSS3_08A_HOST.value))
+      lateral_command_active = CC.latActive
+
+      # Run TSS3 lateral at the native 100 Hz openpilot control cadence. The
+      # request-plane proxy samples this normal rate-limited target on native
+      # 0x08A arrivals; it does not create a second steering state machine.
+      desired_angle = CC.actuators.steeringAngleDeg + CS.out.steeringAngleOffsetDeg
+      measured_angle = CS.out.steeringAngleDeg + CS.out.steeringAngleOffsetDeg
+      if self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:
+        self.last_angle = apply_steer_angle_limits_vm(
+          desired_angle, self.last_angle, CS.out.vEgoRaw, measured_angle,
+          lateral_command_active, self.params, self.VM,
+        )
+      else:
+        self.last_angle = apply_std_steer_angle_limits(
+          desired_angle, self.last_angle, CS.out.vEgoRaw, measured_angle,
+          lateral_command_active, self.params.TSS3_ANGLE_LIMITS,
+        )
+
+      if not host_request_plane:
+        if CC.latActive:
+          self.tss3_control_sequence = self.tss3_control_sequence % 0xFF + 1
+        # Corolla and the legacy Camry bring-up path command the EPS-resident
+        # B6 signer directly. The F33 request-plane path instead consumes this
+        # same rate-limited target in card's authenticated 0x08A proxy.
+        can_sends.append(build_signer_control(
+          target_angle_deg_to_raw(self.last_angle), self.tss3_control_sequence if CC.latActive else 0,
+        ))
+      output.steeringAngleDeg = self.last_angle
+
+      # Cancel remains the ordinary Brake Module command observed on each
+      # topology; it is independent of the protected 0x08A actuation plane.
+      if CC.cruiseControl.cancel:
+        if self.CP.carFingerprint == CAR.TOYOTA_COROLLA_TSS3:
+          can_sends.append(toyotacan.create_tss3_brake_cancel_command(self.packer, CS.tss3_brake_module, 1))
+        elif self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3 and host_request_plane:
+          can_sends.append(toyotacan.create_tss3_brake_cancel_command(self.packer, CS.tss3_brake_module, 2))
+
+      # The request-plane proxy samples this bounded command onto source-real
+      # 0x08A generations. Stock/Alpha-Long-disabled configurations expose no
+      # longitudinal output here.
+      output.accel = float(np.clip(CC.actuators.accel, self.params.ACCEL_MIN, self.params.ACCEL_MAX)) \
+        if self.CP.openpilotLongitudinalControl and CC.longActive else 0.0
+
+      self.frame += 1
+      return output, can_sends
+
     actuators = CC.actuators
     stopping = actuators.longControlState == LongCtrlState.stopping
     hud_control = CC.hudControl
