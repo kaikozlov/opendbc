@@ -145,7 +145,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertTrue(relay.alphaLongitudinalAvailable)
     self.assertTrue(relay.openpilotLongitudinalControl)
     self.assertTrue(relay.autoResumeSng)
-    self.assertFalse(relay.pcmCruise)
+    self.assertTrue(relay.pcmCruise)
     self.assertFalse(relay.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.STOCK_LONGITUDINAL.value)
 
     relay_stock_long = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, relay_fingerprint(), [], False, False, False)
@@ -703,7 +703,6 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x0AA, 0, CAMRY_COMMON[0x0AA])))
     self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x116, 0, CAMRY_COMMON[0x116])))
     self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x101, 0, CAMRY_COMMON[0x101])))
-    self.assertTrue(self.safety.safety_rx_hook(self.cruise_switch()))
     self.assertTrue(self.safety.safety_rx_hook(self.source_08a()))
     self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x00F, 0, bytes(8))))
     self.assertTrue(self.safety.safety_config_valid())
@@ -722,44 +721,36 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     self.assertTrue(self.safety.safety_rx_hook(disabled_msg))
     self.assertFalse(self.safety.get_controls_allowed())
 
-  def test_alpha_long_controls_allowed_follows_buttons_not_native_drcc(self):
+  def test_alpha_long_controls_allowed_follows_native_cruise_latch(self):
     self.use_alpha_long_safety()
 
     self.assertTrue(self.safety.safety_rx_hook(self.source_08a(target_id=11)))
-    self.assertFalse(self.safety.get_controls_allowed())
-
-    for button in ("set", "resume"):
-      self.assertTrue(self.safety.safety_rx_hook(self.cruise_switch(button)))
-      self.assertFalse(self.safety.get_controls_allowed())
-      self.assertTrue(self.safety.safety_rx_hook(self.cruise_switch()))
-      self.assertTrue(self.safety.get_controls_allowed())
-
-      # Native Toyota idle is not an openpilot disengagement input.
-      idle = self.source_08a(target_id=0)
-      idle[0].data[3] &= ~0x08
-      self.assertTrue(self.safety.safety_rx_hook(idle))
-      self.assertTrue(self.safety.get_controls_allowed())
-
-      self.assertTrue(self.safety.safety_rx_hook(self.cruise_switch("cancel")))
-      self.assertFalse(self.safety.get_controls_allowed())
-
-    # F33's main/mode button does not change openpilot engagement permission.
-    self.safety.set_controls_allowed(False)
-    self.assertTrue(self.safety.safety_rx_hook(self.cruise_switch("main")))
-    self.assertFalse(self.safety.get_controls_allowed())
-    self.safety.set_controls_allowed(True)
-    self.assertTrue(self.safety.safety_rx_hook(self.cruise_switch("main")))
     self.assertTrue(self.safety.get_controls_allowed())
 
-  def test_alpha_long_mode_button_keeps_owned_request_accepted(self):
+    # Button bits do not own a second engagement state. FRC reflects their
+    # accepted result in the following source-real operating latch.
+    for button in ("set", "resume", "cancel", "main"):
+      self.assertTrue(self.safety.safety_rx_hook(self.cruise_switch(button)))
+      self.assertTrue(self.safety.get_controls_allowed())
+
+    disabled = self.source_08a(target_id=0)
+    disabled[0].data[3] &= ~0x08
+    self.assertTrue(self.safety.safety_rx_hook(disabled))
+    self.assertFalse(self.safety.get_controls_allowed())
+
+    for button in ("set", "resume", "cancel", "main"):
+      self.assertTrue(self.safety.safety_rx_hook(self.cruise_switch(button)))
+      self.assertFalse(self.safety.get_controls_allowed())
+
+    self.assertTrue(self.safety.safety_rx_hook(self.source_08a(target_id=11)))
+    self.assertTrue(self.safety.get_controls_allowed())
+
+  def test_alpha_long_button_bit_does_not_preempt_source_latch(self):
     self.use_alpha_long_safety()
 
     handoff = self.observe_source(target_id=0, b26=0x20, request_a=0x00, request_b=0x12)
     self.arm()
     self.assertTrue(self.safety.safety_tx_hook(self.host_frame(handoff)))
-
-    self.assertTrue(self.safety.safety_rx_hook(self.cruise_switch("set")))
-    self.assertTrue(self.safety.safety_rx_hook(self.cruise_switch()))
     self.assertTrue(self.safety.get_controls_allowed())
 
     source = self.observe_source(target_id=0, b26=0x21, request_a=0x00, request_b=0x12)
@@ -767,8 +758,8 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
       source, target_id=11, assist_gain_raw=100, request_a=0x2D, request_b=0x47,
       accel_a=-500, accel_b=-500, mutate_mac=True)))
 
-    # Recorded F33 bit 58 changes the Toyota display mode from 0xA0 to 0xC0.
-    # It must not revoke the still-engaged openpilot request plane.
+    # The raw button cannot independently revoke the request plane. The next
+    # source-real operating latch is the shared engagement result.
     self.assertTrue(self.safety.safety_rx_hook(self.cruise_switch("main")))
     self.assertTrue(self.safety.get_controls_allowed())
     next_source = self.observe_source(target_id=0, b26=0x22, request_a=0x00, request_b=0x12)

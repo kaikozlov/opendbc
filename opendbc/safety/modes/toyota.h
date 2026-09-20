@@ -162,37 +162,10 @@ static void toyota_rx_hook(const CANPacket_t *msg) {
         }
       }
       toyota_tss3_08a_native_last_rx_ts = microsecond_timer_get();
-      // Stock longitudinal follows Toyota's cruise latch. With openpilot
-      // longitudinal, engagement is button-owned like other pcmCruise=False
-      // ports; native DRCC may transition through idle at a long standstill
-      // without revoking openpilot's actuation permission.
-      if (toyota_stock_longitudinal) {
-        pcm_cruise_check(GET_BIT(msg, 27U));
-      }
-    }
-
-    if (!toyota_stock_longitudinal && (msg->bus == 0U) && (msg->addr == 0xFEU) && (GET_LEN(msg) == 32U)) {
-      enum { TOYOTA_BTN_NONE, TOYOTA_BTN_CANCEL, TOYOTA_BTN_SET, TOYOTA_BTN_RESUME };
-      int button = TOYOTA_BTN_NONE;
-      if (GET_BIT(msg, 38U)) {
-        button = TOYOTA_BTN_CANCEL;
-      } else if (GET_BIT(msg, 39U)) {
-        button = TOYOTA_BTN_SET;
-      } else if (GET_BIT(msg, 31U)) {
-        button = TOYOTA_BTN_RESUME;
-      }
-
-      const bool set_release = (button != TOYOTA_BTN_SET) && (cruise_button_prev == TOYOTA_BTN_SET);
-      const bool resume_release = (button != TOYOTA_BTN_RESUME) && (cruise_button_prev == TOYOTA_BTN_RESUME);
-      if (set_release || resume_release) {
-        controls_allowed = true;
-      }
-      // F33 bit 58 changes Toyota's cruise presentation mode while the main
-      // availability latch remains set. It is not an openpilot disengagement.
-      if (button == TOYOTA_BTN_CANCEL) {
-        controls_allowed = false;
-      }
-      cruise_button_prev = button;
+      // FRC remains the native engagement owner with both stock and openpilot
+      // longitudinal. Follow the same source-real operating latch consumed by
+      // CarState so Panda and selfdrived cannot develop independent states.
+      pcm_cruise_check(GET_BIT(msg, 27U));
     }
   }
 
@@ -878,7 +851,6 @@ static safety_config toyota_init(uint16_t param) {
         {.msg = {{0x0AA, 0, 8, 100U, .ignore_checksum = true, .ignore_counter = true}, {0}, {0}}},
         {.msg = {{0x116, 0, 8, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
         {.msg = {{0x101, 0, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
-        {.msg = {{0x0FE, 0, 32, 30U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
         // Relay-open F33 has authoritative native 0x08A only on source bus2.
         // Its downstream bus0 copy is Panda forwarding/TX echo, not an
         // independent RX source and must not be required for safety validity.

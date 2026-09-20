@@ -59,7 +59,9 @@ class CarInterface(CarInterfaceBase):
           ret.alphaLongitudinalAvailable = True
           ret.openpilotLongitudinalControl = alpha_long
           ret.autoResumeSng = alpha_long
-          ret.pcmCruise = not alpha_long
+          # FRC remains the native cruise engagement/set-speed owner while
+          # openpilot replaces its longitudinal actuation request.
+          ret.pcmCruise = True
         ret.dashcamOnly = False
         # The EPS-resident helper owns native B6 signing; openpilot owns only
         # the bounded C7 sideband and therefore needs no host SecOC key.
