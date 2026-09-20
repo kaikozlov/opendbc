@@ -65,14 +65,16 @@ def relay_fingerprint() -> dict[int, dict[int, int]]:
 def update_state(ci: CarInterface, moving: bool = False, counter_offset: int = 0, hud: bytes | None = None,
                  eps_status: int | None = None, eps_telemetry: bytes | None = None,
                  control_request: bytes | None = None, bus: int = 1, source_bus: int | None = None,
-                 speed_ms: float | None = None):
+                 speed_ms: float | None = None, cruise_display: bytes | None = None, iterations: int = 20):
   state = None
-  for i in range(20):
+  for i in range(iterations):
     frames = dict(CAMRY_COMMON)
     if eps_telemetry is not None:
       frames[0x030] = eps_telemetry
     if control_request is not None:
       frames[0x08A] = control_request
+    if cruise_display is not None:
+      frames[0x251] = cruise_display
     if eps_status is not None:
       eps = bytearray(frames[0x030])
       eps[6] = eps_status
@@ -266,6 +268,10 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertEqual(frc_state["BYTE_4"], CAMRY_LONG[4])
     self.assertEqual(frc_state["BYTE_5"], CAMRY_LONG[5])
 
+    display_parser = CANParser("toyota_tss3_pt_generated", [("TSS3_CRUISE_DISPLAY", 0)], 1)
+    display_parser.update([(1_030_000_000, [CanData(0x251, bytes.fromhex("a00000488088a080"), 1)])])
+    self.assertEqual(display_parser.vl["TSS3_CRUISE_DISPLAY"]["SET_VEHICLE_INTERVAL_TIME"], 4)
+
   def test_stock_toyota_b_state_is_entirely_on_bus_one(self):
     ci = CarInterface(self.CP)
     self.assertEqual(ci.can_parsers[Bus.pt].bus, 1)
@@ -449,6 +455,46 @@ class TestToyotaCamryTSS3(unittest.TestCase):
       _, sends = ci.apply(control(1.0, cancel=True, left_lane=True, right_lane=True, steer_alert=True),
                           2_000_000_000 + i * 10_000_000)
       self.assertFalse(any(address in (0x101, 0x412) for address, _, _ in sends))
+
+  def test_relay_hud_replaces_source_at_five_hz_and_on_alert_edges(self):
+    cp = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, relay_fingerprint(), [], True, False, False)
+    ci = CarInterface(cp)
+    disabled_hud = bytes.fromhex("1000002200ee9307")
+    update_state(ci, bus=0, source_bus=2, hud=disabled_hud)
+
+    _, sends = ci.apply(control(1.0, left_lane=True, right_lane=True), 2_000_000_000)
+    self.assertIn((0x412, bytes.fromhex("1400004401ee9307"), 0), sends)
+
+    for i in range(1, 20):
+      _, sends = ci.apply(control(1.0, left_lane=True, right_lane=True), 2_000_000_000 + i * 10_000_000)
+      self.assertFalse(any(address == 0x412 for address, _, _ in sends))
+    _, sends = ci.apply(control(1.0, left_lane=True, right_lane=True), 2_200_000_000)
+    self.assertIn((0x412, bytes.fromhex("1400004401ee9307"), 0), sends)
+
+    _, sends = ci.apply(control(1.0, left_lane=True, right_lane=True, steer_alert=True), 2_210_000_000)
+    self.assertIn((0x412, bytes.fromhex("140c004401ee9307"), 0), sends)
+    _, sends = ci.apply(control(1.0, left_lane=True, right_lane=True), 2_220_000_000)
+    self.assertIn((0x412, bytes.fromhex("1400004401ee9307"), 0), sends)
+
+  def test_gap_and_lta_state_changes_expose_normal_button_events(self):
+    ci = CarInterface(self.CP)
+    update_state(ci, hud=bytes.fromhex("1200002202ee9307"))
+
+    distance = bytearray(CAMRY_COMMON[0x251])
+    distance[5] = (distance[5] & 0x1F) | (2 << 5)
+    state = update_state(ci, counter_offset=20, hud=bytes.fromhex("1200002202ee9307"),
+                         cruise_display=bytes(distance), iterations=1)
+    self.assertEqual([(event.type, event.pressed) for event in state.buttonEvents], [
+      (structs.CarState.ButtonEvent.Type.gapAdjustCruise, True),
+      (structs.CarState.ButtonEvent.Type.gapAdjustCruise, False),
+    ])
+
+    state = update_state(ci, counter_offset=21, hud=bytes.fromhex("1000002200ee9307"),
+                         cruise_display=bytes(distance), iterations=1)
+    self.assertEqual([(event.type, event.pressed) for event in state.buttonEvents], [
+      (structs.CarState.ButtonEvent.Type.lkas, True),
+      (structs.CarState.ButtonEvent.Type.lkas, False),
+    ])
 
   def test_reengagement_does_not_reuse_the_residents_consumed_sequence(self):
     ci = CarInterface(self.CP)
@@ -785,6 +831,17 @@ class TestToyotaCamryTSS3RequestReplacementSafety(unittest.TestCase):
     bad_checksum[7] ^= 1
     self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x101, 2, bytes(bad_checksum))))
     self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x101, 0, good)))
+
+  def test_camry_hud_is_classic_bus0_replacement(self):
+    hud = libsafety_py.make_CANPacket(0x412, 0, bytes.fromhex("1400004401ee9307"))
+    self.assertTrue(self.safety.safety_tx_hook(hud))
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x412), -1)
+
+    fd_hud = libsafety_py.make_CANPacket(0x412, 0, bytes.fromhex("1400004401ee9307"))
+    fd_hud[0].fd = 1
+    self.assertFalse(self.safety.safety_tx_hook(fd_hud))
+    self.assertFalse(self.safety.safety_tx_hook(
+      libsafety_py.make_CANPacket(0x412, 2, bytes.fromhex("1400004401ee9307"))))
 
   def test_oracle_transport_is_one_ordered_raw_classic_transaction(self):
     # Continuations are never valid without a fresh fragment zero.

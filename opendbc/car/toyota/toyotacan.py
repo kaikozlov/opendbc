@@ -80,10 +80,11 @@ def create_tss3_hud_command(stock_hud, left_line: bool, right_line: bool, lat_ac
   data = bytearray(int(stock_hud[f"BYTE_{i}"]) for i in range(8))
 
   # The ordinary road-state 0x412 alphabet is recovered on the maintainer
-  # Camry: inactive recognized/missing lanes are nibble 1/2, active recognized
-  # lanes are nibble 4, with B0 low mode 2->4 and B4 2->1 under lateral control.
-  # Preserve startup/noncanonical frames rather than assigning unknown states.
-  if data[0] not in (0x12, 0x14) or data[4] not in (1, 2):
+  # Camry: B0/B4 are 0x10/0 when LTA is off, 0x12/2 when available, and
+  # 0x14/1 while active. Inactive recognized/missing lanes are nibble 1/2 and
+  # active recognized lanes are nibble 4. Preserve startup/noncanonical frames
+  # rather than assigning unknown states.
+  if data[0] not in (0x10, 0x12, 0x14) or data[4] not in (0, 1, 2):
     return 0x412, bytes(data), 0
 
   visible_line = 4 if lat_active else 1
