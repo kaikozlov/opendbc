@@ -145,9 +145,10 @@ class CarState(CarStateBase):
     ret.cruiseState.standstill = ret.cruiseState.enabled and bool(request["DELAYED_HOLD_STATE"])
     ret.cruiseState.available = bool(source_cp.vl["TSS3_CRUISE_DISPLAY"]["CRUISE_MAIN_STATE"])
     # Conventional cruise is not an incompatible control mode on this platform:
-    # lateral remains available, and pcmCruise=False makes longitudinal
-    # openpilot-owned. Leave nonAdaptive false so the generic event contract
-    # reflects control compatibility rather than raw cluster presentation.
+    # lateral remains available. Leave nonAdaptive false so the generic event
+    # contract reflects control compatibility rather than raw cluster
+    # presentation. The native latch and set speed remain the pcmCruise source
+    # even when openpilot owns longitudinal actuation.
     set_speed_kph = float(request["SET_SPEED"])
     ret.cruiseState.speed = set_speed_kph * CV.KPH_TO_MS if set_speed_kph > 0 else 0.0
     cluster_set_speed = float(source_cp.vl["TSS3_CRUISE_DISPLAY"]["UI_SET_SPEED"])
