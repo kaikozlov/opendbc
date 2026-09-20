@@ -70,7 +70,8 @@ class CarInterface(CarInterfaceBase):
         ret.steerAtStandstill = True
         # Stock Toyota-B exposes this source on bus1; the request-plane repin
         # moves the FRC vocabulary, including BSM, to bus2.
-        ret.enableBsm = 0x3F6 in fingerprint[2 if relay_request_plane else 1]
+        if 0x3F6 in fingerprint[2 if relay_request_plane else 1]:
+          ret.flags |= ToyotaFlags.HAS_BSM.value
         ret.steerActuatorDelay = 0.18
         ret.steerLimitTimer = 0.8
       elif candidate == CAR.TOYOTA_COROLLA_TSS3:
@@ -88,7 +89,8 @@ class CarInterface(CarInterfaceBase):
         # contributor drives require the driver to establish/resume cruise below
         # Toyota's 19 mph set-speed floor. Keep the native no-entry threshold.
         ret.minEnableSpeed = MIN_ACC_SPEED
-        ret.enableBsm = 0x3F6 in fingerprint[1]
+        if 0x3F6 in fingerprint[1]:
+          ret.flags |= ToyotaFlags.HAS_BSM.value
         ret.steerActuatorDelay = 0.18
         ret.steerLimitTimer = 0.8
       else:

@@ -135,7 +135,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertTrue(self.CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.F33)
     self.assertTrue(self.CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.STOCK_LONGITUDINAL)
     self.assertEqual(DBC[CAR.TOYOTA_CAMRY_TSS3][Bus.pt], "toyota_tss3_pt_generated")
-    self.assertTrue(self.CP.enableBsm)
+    self.assertTrue(self.CP.flags & ToyotaFlags.HAS_BSM)
 
   def test_relay_request_plane_is_selected_from_fingerprint_topology(self):
     stock = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint(), [], True, False, False)
@@ -143,7 +143,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
 
     relay = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, relay_fingerprint(), [], True, False, False)
     self.assertTrue(relay.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.TSS3_08A_HOST.value)
-    self.assertTrue(relay.enableBsm)
+    self.assertTrue(relay.flags & ToyotaFlags.HAS_BSM)
     self.assertTrue(relay.alphaLongitudinalAvailable)
     self.assertTrue(relay.openpilotLongitudinalControl)
     self.assertTrue(relay.autoResumeSng)

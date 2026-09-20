@@ -160,7 +160,7 @@ class CarState(CarStateBase):
     ))
     ret.steerFaultPermanent = False
 
-    if self.CP.enableBsm:
+    if self.CP.flags & ToyotaFlags.HAS_BSM:
       ret.leftBlindspot = bool(source_cp.vl["BSM"]["L_ADJACENT"] or source_cp.vl["BSM"]["L_APPROACHING"])
       ret.rightBlindspot = bool(source_cp.vl["BSM"]["R_ADJACENT"] or source_cp.vl["BSM"]["R_APPROACHING"])
 
@@ -248,7 +248,7 @@ class CarState(CarStateBase):
       ret.cruiseState.speed = set_speed_mph * CV.MPH_TO_MS
       ret.cruiseState.speedCluster = ret.cruiseState.speed
 
-    if self.CP.enableBsm:
+    if self.CP.flags & ToyotaFlags.HAS_BSM:
       ret.leftBlindspot = bool(cp.vl["BSM"]["L_ADJACENT"] or cp.vl["BSM"]["L_APPROACHING"])
       ret.rightBlindspot = bool(cp.vl["BSM"]["R_ADJACENT"] or cp.vl["BSM"]["R_APPROACHING"])
 
@@ -428,7 +428,7 @@ class CarState(CarStateBase):
           ("TSS3_CONTROL_REQUEST", 40),
           ("TSS3_CRUISE_DISPLAY", 1),
         ]
-        if CP.enableBsm:
+        if CP.flags & ToyotaFlags.HAS_BSM:
           pt_messages.append(("BSM", 1))
         return {
           Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, 1),
@@ -448,7 +448,7 @@ class CarState(CarStateBase):
           ("TSS3_CRUISE_DISPLAY", 1),
           ("TSS3_LKAS_HUD", 1),
         ]
-        if CP.enableBsm:
+        if CP.flags & ToyotaFlags.HAS_BSM:
           source_messages.append(("BSM", 1))
         return {
           Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, 0),
@@ -462,7 +462,7 @@ class CarState(CarStateBase):
         ("TSS3_CRUISE_DISPLAY", 1),
         ("TSS3_LKAS_HUD", 1),
       ]
-      if CP.enableBsm:
+      if CP.flags & ToyotaFlags.HAS_BSM:
         pt_messages.append(("BSM", 1))
       return {
         Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, 1),
