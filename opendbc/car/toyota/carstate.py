@@ -50,7 +50,6 @@ class CarState(CarStateBase):
     self.lkas_button = 0
     self.distance_button = 0
     self.tss3_cruise_button = 0
-    self.tss3_distance_state = None
     self.tss3_lta_switch_state = None
 
     self.pcm_follow_distance = 0
@@ -121,16 +120,13 @@ class CarState(CarStateBase):
       4: ButtonType.mainCruise,
     })
 
-    # TSS3 publishes following distance as a persistent four-state selection,
-    # rather than another momentary bit in the protected cruise-switch PDU.
-    # A selection change corresponds to one physical gap-button press.
+    # TSS3 publishes the selected following distance as absolute state. Expose
+    # the corresponding bar count instead of manufacturing a momentary button
+    # event from a state transition: Toyota has four settings while openpilot
+    # has three longitudinal personalities.
     distance_state = int(source_cp.vl["TSS3_CRUISE_DISPLAY"]["SET_VEHICLE_INTERVAL_TIME"])
-    if (self.tss3_distance_state in range(1, 5) and distance_state in range(1, 5) and
-        distance_state != self.tss3_distance_state):
-      button_events.extend(create_button_events(1, 0, {1: ButtonType.gapAdjustCruise}) +
-                           create_button_events(0, 1, {1: ButtonType.gapAdjustCruise}))
     if distance_state in range(1, 5):
-      self.tss3_distance_state = distance_state
+      ret.cruiseState.followDistanceBars = 5 - distance_state
 
     # The canonical HUD carrier distinguishes LTA off (0x10) from enabled
     # states (0x12 available, 0x14 active). Ignore active/available transitions;

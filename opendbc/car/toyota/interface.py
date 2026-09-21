@@ -74,6 +74,13 @@ class CarInterface(CarInterfaceBase):
           ret.flags |= ToyotaFlags.HAS_BSM.value
         ret.steerActuatorDelay = 0.18
         ret.steerLimitTimer = 0.8
+        # F33's 0x08A request is a desired-acceleration interface: retained
+        # drives show near-unity request-to-aEgo tracking with about 0.2 s of
+        # lag. Match other direct-acceleration ports by using feedforward with
+        # the measured delay and no second vehicle-response integrator.
+        ret.longitudinalActuatorDelay = 0.2
+        ret.longitudinalTuning.kiBP = [0.]
+        ret.longitudinalTuning.kiV = [0.]
       elif candidate == CAR.TOYOTA_COROLLA_TSS3:
         ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.toyota)]
         ret.safetyConfigs[0].safetyParam = (EPS_SCALE[candidate] |

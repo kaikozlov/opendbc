@@ -148,6 +148,9 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertTrue(relay.openpilotLongitudinalControl)
     self.assertTrue(relay.autoResumeSng)
     self.assertTrue(relay.pcmCruise)
+    self.assertAlmostEqual(relay.longitudinalActuatorDelay, 0.2)
+    self.assertEqual(list(relay.longitudinalTuning.kiBP), [0.])
+    self.assertEqual(list(relay.longitudinalTuning.kiV), [0.])
     self.assertFalse(relay.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.STOCK_LONGITUDINAL.value)
 
     relay_stock_long = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, relay_fingerprint(), [], False, False, False)
@@ -482,18 +485,17 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     _, sends = ci.apply(control(1.0, left_lane=True, right_lane=True), 2_220_000_000)
     self.assertIn((0x412, bytes.fromhex("1400004401ee9307"), 0), sends)
 
-  def test_gap_and_lta_state_changes_expose_normal_button_events(self):
+  def test_gap_state_maps_to_absolute_bars_and_lta_exposes_button_event(self):
     ci = CarInterface(self.CP)
-    update_state(ci, hud=bytes.fromhex("1200002202ee9307"))
+    state = update_state(ci, hud=bytes.fromhex("1200002202ee9307"))
+    self.assertEqual(state.cruiseState.followDistanceBars, 4)
 
     distance = bytearray(CAMRY_COMMON[0x251])
     distance[5] = (distance[5] & 0x1F) | (2 << 5)
     state = update_state(ci, counter_offset=20, hud=bytes.fromhex("1200002202ee9307"),
                          cruise_display=bytes(distance), iterations=1)
-    self.assertEqual([(event.type, event.pressed) for event in state.buttonEvents], [
-      (structs.CarState.ButtonEvent.Type.gapAdjustCruise, True),
-      (structs.CarState.ButtonEvent.Type.gapAdjustCruise, False),
-    ])
+    self.assertEqual(state.cruiseState.followDistanceBars, 3)
+    self.assertEqual(list(state.buttonEvents), [])
 
     state = update_state(ci, counter_offset=21, hud=bytes.fromhex("1000002200ee9307"),
                          cruise_display=bytes(distance), iterations=1)

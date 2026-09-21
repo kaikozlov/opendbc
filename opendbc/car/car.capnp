@@ -244,6 +244,7 @@ struct CarState {
     available @2 :Bool;
     standstill @4 :Bool;
     nonAdaptive @5 :Bool;
+    followDistanceBars @7 :Int8;  # 1 is closest; larger values are farther
 
     deprecated :group {
       speedOffset @3 :Float32;
