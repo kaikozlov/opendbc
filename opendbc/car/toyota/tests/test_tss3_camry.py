@@ -1,15 +1,14 @@
 import unittest
 
-from opendbc.can import CANParser
+from opendbc.can import CANPacker, CANParser
 from opendbc.car import Bus, CanData, structs
 from opendbc.car.fw_versions import match_fw_to_car_exact
-from opendbc.car.fw_query_definitions import PlatformResolverContext
 from opendbc.car.toyota.fingerprints import FW_VERSIONS
 from opendbc.car.toyota.interface import CarInterface
 from opendbc.car.toyota.radar_interface import RadarInterface
 from opendbc.car.toyota.tss3 import build_host_application
 from opendbc.car.toyota.toyotacan import toyota_e2e_p05_checksum
-from opendbc.car.toyota.values import CAR, DBC, EPS_SCALE, CarControllerParams, ToyotaFlags, ToyotaSafetyFlags, resolve_platform
+from opendbc.car.toyota.values import CAR, DBC, EPS_SCALE, CarControllerParams, ToyotaFlags, ToyotaSafetyFlags
 from opendbc.safety.tests.libsafety import libsafety_py
 
 
@@ -95,12 +94,12 @@ def update_state(ci: CarInterface, moving: bool = False, counter_offset: int = 0
   return state
 
 
-def control(angle: float, active: bool = True, accel: float = 0.0, long_active: bool = False,
+def control(angle: float, active: bool = True, accel: float = 0.0, long_active: bool = False, enabled: bool = True,
             cancel: bool = False, left_lane: bool = False, right_lane: bool = False, steer_alert: bool = False):
   cc = structs.CarControl()
-  cc.enabled = True
-  cc.latActive = active
-  cc.longActive = long_active
+  cc.enabled = enabled
+  cc.latActive = enabled and active
+  cc.longActive = enabled and long_active
   cc.cruiseControl.cancel = cancel
   cc.actuators.steeringAngleDeg = angle
   cc.actuators.accel = accel
@@ -117,7 +116,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
 
   def test_platform_contract(self):
     self.assertTrue(self.CP.flags & ToyotaFlags.TSS3)
-    self.assertTrue(self.CP.flags & ToyotaFlags.SECOC)
+    self.assertFalse(self.CP.flags & ToyotaFlags.SECOC)
     self.assertFalse(self.CP.flags & ToyotaFlags.TSS2)
     self.assertFalse(self.CP.dashcamOnly)
     self.assertFalse(self.CP.secOcRequired)
@@ -145,7 +144,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     relay = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, relay_fingerprint(), [], True, False, False)
     self.assertTrue(relay.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.TSS3_08A_HOST.value)
     self.assertTrue(relay.flags & ToyotaFlags.HAS_BSM)
-    self.assertTrue(relay.alphaLongitudinalAvailable)
+    self.assertFalse(relay.alphaLongitudinalAvailable)
     self.assertTrue(relay.openpilotLongitudinalControl)
     self.assertTrue(relay.autoResumeSng)
     self.assertTrue(relay.pcmCruise)
@@ -155,7 +154,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertFalse(relay.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.STOCK_LONGITUDINAL.value)
 
     relay_without_toggle = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, relay_fingerprint(), [], False, False, False)
-    self.assertTrue(relay_without_toggle.alphaLongitudinalAvailable)
+    self.assertFalse(relay_without_toggle.alphaLongitudinalAvailable)
     self.assertTrue(relay_without_toggle.openpilotLongitudinalControl)
     self.assertTrue(relay_without_toggle.pcmCruise)
     self.assertFalse(relay_without_toggle.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.STOCK_LONGITUDINAL.value)
@@ -168,12 +167,10 @@ class TestToyotaCamryTSS3(unittest.TestCase):
       self.assertFalse(cp.autoResumeSng)
       self.assertTrue(cp.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.STOCK_LONGITUDINAL)
 
-  def test_exact_identity_and_oem_resolver(self):
+  def test_exact_identity(self):
     fw = FW_VERSIONS[CAR.TOYOTA_CAMRY_TSS3]
     self.assertEqual(fw[(Ecu.eps, 0x7A1, None)], [
       bytes.fromhex("023839363546333330373030300000000038413331313333303331303000000000")])
-    context = PlatformResolverContext(vin_rx_addr=0x7E8, vin_rx_bus=1)
-    self.assertEqual(resolve_platform({}, "JTDAA12K0T0123456", {}, context), {str(CAR.TOYOTA_CAMRY_TSS3)})
 
   def test_tss3_radar_points_from_retained_object_bank(self):
     # Raw source frames exercise the default Camry radar interface.
@@ -396,22 +393,20 @@ class TestToyotaCamryTSS3(unittest.TestCase):
 
     measured = state.steeringAngleDeg + state.steeringAngleOffsetDeg
     max_delta = CarControllerParams.F33_ANGLE_LIMITS.MAX_ANGLE_RATE
-    output, sends = ci.apply(control(5.0), 2_000_000_000)
-    self.assertFalse(any(address == 0x777 for address, _, _ in sends))
-    self.assertAlmostEqual(output.steeringAngleDeg, max_delta, delta=0.01)
+    output, sends = ci.apply(control(0.0, active=False, enabled=False), 2_000_000_000)
+    self.assertAlmostEqual(output.steeringAngleDeg, measured, delta=0.01)
 
-    # Card aligns the controller's existing limiter at the engagement edge,
-    # before the first signed host application. It adds no second actuation gate.
-    ci.CC.reset_tss3_lateral_target(measured)
+    # Normal inactive controller cycles already align the limiter to measured
+    # steering; engagement needs no card-level Toyota reset hook.
     output, sends = ci.apply(control(5.0), 2_010_000_000)
-    self.assertFalse(any(address == 0x777 for address, _, _ in sends))
+    self.assertFalse(any(address == 0x777 and data[1] == 0xC7 for address, data, _ in sends))
     self.assertAlmostEqual(output.steeringAngleDeg, measured + max_delta, delta=0.01)
 
     # Toyota's currently selected source application is not a controller veto.
     request[21] = request[21] & 0xC0
     update_state(ci, moving=True, control_request=bytes(request), bus=0, source_bus=2, hud=CAMRY_HUD)
     output, sends = ci.apply(control(20.0), 2_020_000_000)
-    self.assertFalse(any(address == 0x777 for address, _, _ in sends))
+    self.assertFalse(any(address == 0x777 and data[1] == 0xC7 for address, data, _ in sends))
     self.assertGreater(output.steeringAngleDeg, measured + max_delta)
     self.assertAlmostEqual(output.steeringAngleDeg, measured + 2 * max_delta, delta=0.02)
 
@@ -486,17 +481,19 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     _, sends = ci.apply(control(1.0, left_lane=True, right_lane=True), 2_220_000_000)
     self.assertIn((0x412, bytes.fromhex("1400004401ee9307"), 0), sends)
 
-  def test_gap_state_maps_to_absolute_bars_and_lta_exposes_button_event(self):
+  def test_gap_state_and_lta_use_normal_button_events(self):
     ci = CarInterface(self.CP)
     state = update_state(ci, hud=bytes.fromhex("1200002202ee9307"))
-    self.assertEqual(state.cruiseState.followDistanceBars, 4)
+    self.assertEqual(list(state.buttonEvents), [])
 
     distance = bytearray(CAMRY_COMMON[0x251])
     distance[5] = (distance[5] & 0x1F) | (2 << 5)
     state = update_state(ci, counter_offset=20, hud=bytes.fromhex("1200002202ee9307"),
                          cruise_display=bytes(distance), iterations=1)
-    self.assertEqual(state.cruiseState.followDistanceBars, 3)
-    self.assertEqual(list(state.buttonEvents), [])
+    self.assertEqual([(event.type, event.pressed) for event in state.buttonEvents], [
+      (structs.CarState.ButtonEvent.Type.gapAdjustCruise, True),
+      (structs.CarState.ButtonEvent.Type.gapAdjustCruise, False),
+    ])
 
     state = update_state(ci, counter_offset=21, hud=bytes.fromhex("1000002200ee9307"),
                          cruise_display=bytes(distance), iterations=1)
@@ -519,6 +516,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
 class TestToyotaCamryTSS3Safety(unittest.TestCase):
   def setUp(self):
     self.safety = libsafety_py.libsafety
+    self.packer = CANPacker("toyota_tss3_pt_generated")
     param = EPS_SCALE[CAR.TOYOTA_CAMRY_TSS3] | ToyotaSafetyFlags.F33 | ToyotaSafetyFlags.STOCK_LONGITUDINAL
     self.assertEqual(self.safety.set_safety_hooks(structs.CarParams.SafetyModel.toyota, param), 0)
     self.safety.init_tests()
@@ -629,6 +627,7 @@ class TestToyotaCamryTSS3HostOwnershipSafety(unittest.TestCase):
 
   def setUp(self):
     self.safety = libsafety_py.libsafety
+    self.packer = CANPacker("toyota_tss3_pt_generated")
     self.assertEqual(self.safety.set_safety_hooks(structs.CarParams.SafetyModel.toyota, self.PARAM), 0)
     self.safety.init_tests()
     self.safety.set_timer(0)
@@ -693,6 +692,7 @@ class TestToyotaCamryTSS3HostOwnershipSafety(unittest.TestCase):
     host_angle = angle_raw if angle_raw is not None else 0
     host_accel = (accel_a if accel_a is not None else 0) * 0.001
     data = bytearray(build_host_application(
+      self.packer,
       lat_active=host_id == 11,
       target_angle_raw=host_angle,
       long_active=self.alpha_long,

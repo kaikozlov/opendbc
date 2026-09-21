@@ -6,8 +6,7 @@ from opendbc.car import Bus, CanData, structs
 from opendbc.car.fw_versions import match_fw_to_car_exact
 from opendbc.car.toyota.fingerprints import FW_VERSIONS
 from opendbc.car.toyota.interface import CarInterface
-from opendbc.car.toyota.values import CAR, DBC, EPS_SCALE, FW_QUERY_CONFIG, TOYOTA_COROLLA_TSS3_HYBRID_VEHICLE_TYPES, \
-                                      TOYOTA_COROLLA_TSS3_ICE_VEHICLE_TYPES, TOYOTA_PLATFORM_BY_VEHICLE, ToyotaFlags, ToyotaSafetyFlags
+from opendbc.car.toyota.values import CAR, DBC, EPS_SCALE, FW_QUERY_CONFIG, ToyotaFlags, ToyotaSafetyFlags
 from opendbc.safety.tests.libsafety import libsafety_py
 
 
@@ -112,7 +111,7 @@ class TestToyotaCorollaTSS3(unittest.TestCase):
 
   def test_platform_contract_and_identities(self):
     self.assertTrue(self.CP.flags & ToyotaFlags.TSS3)
-    self.assertTrue(self.CP.flags & ToyotaFlags.SECOC)
+    self.assertFalse(self.CP.flags & ToyotaFlags.SECOC)
     self.assertTrue(self.CP.flags & ToyotaFlags.HYBRID)
     self.assertFalse(self.CP.flags & ToyotaFlags.TSS2)
     self.assertAlmostEqual(self.CP.wheelbase, 2.70)
@@ -133,10 +132,6 @@ class TestToyotaCorollaTSS3(unittest.TestCase):
       bytes.fromhex("023839363546313230383030300000000038413331313132303230303000000000"),
       bytes.fromhex("023839363546313230383030300000000038413331313132313330303000000000"),
     ])
-    self.assertEqual(TOYOTA_COROLLA_TSS3_ICE_VEHICLE_TYPES, {12512, 12513, 12516, 12821, 12822, 12827})
-    self.assertEqual(TOYOTA_COROLLA_TSS3_HYBRID_VEHICLE_TYPES, {12514, 12515, 12823, 12824})
-    for vehicle_type in TOYOTA_COROLLA_TSS3_ICE_VEHICLE_TYPES | TOYOTA_COROLLA_TSS3_HYBRID_VEHICLE_TYPES:
-      self.assertEqual(TOYOTA_PLATFORM_BY_VEHICLE[("NA", vehicle_type)], CAR.TOYOTA_COROLLA_TSS3)
     self.assertTrue(any(request.bus == 1 and request.whitelist_ecus == [Ecu.eps, Ecu.abs] and not request.obd_multiplexing
                         for request in FW_QUERY_CONFIG.requests))
 

@@ -8,7 +8,7 @@ from opendbc.car.common.pid import PIDController
 from opendbc.car.secoc import add_mac, build_sync_mac
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.toyota import toyotacan
-from opendbc.car.toyota.tss3 import build_signer_control, target_angle_deg_to_raw
+from opendbc.car.toyota.tss3 import ToyotaTss3RequestTransport, build_signer_control, target_angle_deg_to_raw
 from opendbc.car.toyota.values import CAR, CarControllerParams, ToyotaFlags, ToyotaSafetyFlags
 from opendbc.car.vehicle_model import VehicleModel
 from opendbc.can import CANPacker
@@ -78,9 +78,13 @@ class CarController(CarControllerBase):
     self.secoc_prev_reset_counter = 0
 
     self.tss3_control_sequence = 0
+    self.tss3_host_request_plane = (self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3 and self.CP.safetyConfigs and
+                                    bool(self.CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.TSS3_08A_HOST.value))
+    self.tss3_request_transport = ToyotaTss3RequestTransport(self.packer) if self.tss3_host_request_plane else None
 
-  def reset_tss3_lateral_target(self, steering_angle_deg: float) -> None:
-    self.last_angle = steering_angle_deg
+  def observe_tss3_request_plane(self, can_packets, can_valid: bool) -> None:
+    if self.tss3_request_transport is not None:
+      self.tss3_request_transport.observe(can_packets, can_valid)
 
   def update(self, CC, CS, now_nanos):
     if self.CP.flags & ToyotaFlags.TSS3:
@@ -91,13 +95,12 @@ class CarController(CarControllerBase):
       output = CC.actuators.as_builder()
       can_sends = []
 
-      host_request_plane = (self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3 and self.CP.safetyConfigs and
-                            bool(self.CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.TSS3_08A_HOST.value))
+      host_request_plane = self.tss3_host_request_plane
       lateral_command_active = CC.latActive
       hud_control = CC.hudControl
 
       # Run TSS3 lateral at the native 100 Hz openpilot control cadence. The
-      # request-plane proxy samples this normal rate-limited target on native
+      # signer transport samples this normal rate-limited target on native
       # 0x08A arrivals; it does not create a second steering state machine.
       desired_angle = CC.actuators.steeringAngleDeg + CS.out.steeringAngleOffsetDeg
       measured_angle = CS.out.steeringAngleDeg + CS.out.steeringAngleOffsetDeg
@@ -117,7 +120,7 @@ class CarController(CarControllerBase):
           self.tss3_control_sequence = self.tss3_control_sequence % 0xFF + 1
         # Corolla and the legacy Camry bring-up path command the EPS-resident
         # B6 signer directly. The F33 request-plane path instead consumes this
-        # same rate-limited target in card's authenticated 0x08A proxy.
+        # same rate-limited target through the Toyota signer transport.
         can_sends.append(build_signer_control(
           target_angle_deg_to_raw(self.last_angle), self.tss3_control_sequence if CC.latActive else 0,
         ))
@@ -142,10 +145,21 @@ class CarController(CarControllerBase):
           CC.latActive, steer_alert,
         ))
 
-      # The request-plane proxy samples this bounded command onto native
-      # freshness ticks. Relay-host mode owns both axes.
+      # The signer transport samples this bounded command onto native freshness
+      # ticks. Relay-host mode owns both axes.
       output.accel = float(np.clip(CC.actuators.accel, self.params.ACCEL_MIN, self.params.ACCEL_MAX)) \
         if self.CP.openpilotLongitudinalControl and CC.longActive else 0.0
+
+      if self.tss3_request_transport is not None:
+        can_sends.extend(self.tss3_request_transport.update_control(
+          enabled=CC.enabled,
+          lat_active=CC.latActive,
+          target_angle_deg=output.steeringAngleDeg,
+          long_active=self.CP.openpilotLongitudinalControl and CC.longActive,
+          accel=output.accel,
+          set_speed_kph=CS.out.vCruise,
+          now_nanos=now_nanos,
+        ))
 
       self.frame += 1
       return output, can_sends

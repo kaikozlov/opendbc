@@ -51,6 +51,7 @@ class CarState(CarStateBase):
     self.distance_button = 0
     self.tss3_cruise_button = 0
     self.tss3_lta_switch_state = None
+    self.tss3_distance_state = None
 
     self.pcm_follow_distance = 0
 
@@ -61,18 +62,9 @@ class CarState(CarStateBase):
     self.tss3_brake_module = None
     self.tss3_lkas_hud = {}
 
-  def _update_tss3(self, cp: CANParser, cp_src: CANParser) -> structs.CarState:
-    if self.CP.carFingerprint == CAR.TOYOTA_COROLLA_TSS3:
-      return self._update_tss3_corolla(cp)
-
-    relay_correct_f33 = bool(self.CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.TSS3_08A_HOST.value)
-    source_cp = cp_src if relay_correct_f33 else cp
-
-    ret = structs.CarState()
+  def _update_tss3_common(self, ret: structs.CarState, cp: CANParser, source_cp: CANParser,
+                          cluster_speed_from_ui: bool) -> None:
     self.tss3_brake_module = copy.copy(cp.vl["BRAKE_MODULE"])
-    if source_cp.vl_all["TSS3_LKAS_HUD"]["BYTE_0"]:
-      self.tss3_lkas_hud = copy.copy(source_cp.vl["TSS3_LKAS_HUD"])
-
     ret.brakePressed = self.tss3_brake_module["BRAKE_PRESSED"] != 0
     ret.gasPressed = cp.vl["GAS_PEDAL"]["GAS_PEDAL_USER"] > 0
     self.parse_wheel_speeds(ret,
@@ -81,7 +73,7 @@ class CarState(CarStateBase):
       cp.vl["WHEEL_SPEEDS"]["WHEEL_SPEED_RL"],
       cp.vl["WHEEL_SPEEDS"]["WHEEL_SPEED_RR"],
     )
-    ret.vEgoCluster = cp.vl["BODY_CONTROL_STATE_2"]["UI_SPEED"] * CV.KPH_TO_MS
+    ret.vEgoCluster = cp.vl["BODY_CONTROL_STATE_2"]["UI_SPEED"] * CV.KPH_TO_MS if cluster_speed_from_ui else ret.vEgo
     ret.standstill = abs(ret.vEgoRaw) < 1e-3
     ret.vehicleSensorsInvalid = any(cp.vl["WHEEL_SPEEDS"][f"WHEEL_SPEED_{wheel}_FAULT"]
                                     for wheel in ("FL", "FR", "RL", "RR"))
@@ -100,6 +92,31 @@ class CarState(CarStateBase):
     ret.brakeHoldActive = cp.vl["ESP_CONTROL"]["BRAKE_HOLD_ACTIVE"] == 1
     ret.espDisabled = cp.vl["ESP_CONTROL"]["TC_DISABLED"] != 0
     ret.genericToggle = bool(cp.vl["LIGHT_STALK"]["AUTO_HIGH_BEAM"])
+
+    driver_torque_invalid = cp.vl["TSS3_EPS_TELEMETRY"]["DRIVER_TORQUE_INVALID"] != 0
+    ret.vehicleSensorsInvalid = ret.vehicleSensorsInvalid or driver_torque_invalid
+    ret.steeringTorque = (cp.vl["TSS3_EPS_TELEMETRY"]["STEERING_WHEEL_TORQUE_COARSE"] +
+                          cp.vl["TSS3_EPS_TELEMETRY"]["STEERING_WHEEL_TORQUE_FINE"]) if not driver_torque_invalid else 0.0
+    ret.steeringTorqueEps = 0.0
+    ret.steeringPressed = abs(ret.steeringTorque) >= TSS3_STEER_DRIVER_TORQUE_THRESHOLD
+    ret.steerFaultTemporary = bool(cp.vl["TSS3_EPS_TELEMETRY"]["EPS_FAULT_INHIBIT"])
+    ret.steerFaultPermanent = False
+
+    if self.CP.flags & ToyotaFlags.HAS_BSM:
+      ret.leftBlindspot = bool(source_cp.vl["BSM"]["L_ADJACENT"] or source_cp.vl["BSM"]["L_APPROACHING"])
+      ret.rightBlindspot = bool(source_cp.vl["BSM"]["R_ADJACENT"] or source_cp.vl["BSM"]["R_APPROACHING"])
+
+  def _update_tss3(self, cp: CANParser, cp_src: CANParser) -> structs.CarState:
+    if self.CP.carFingerprint == CAR.TOYOTA_COROLLA_TSS3:
+      return self._update_tss3_corolla(cp)
+
+    relay_correct_f33 = bool(self.CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.TSS3_08A_HOST.value)
+    source_cp = cp_src if relay_correct_f33 else cp
+
+    ret = structs.CarState()
+    if source_cp.vl_all["TSS3_LKAS_HUD"]["BYTE_0"]:
+      self.tss3_lkas_hud = copy.copy(source_cp.vl["TSS3_LKAS_HUD"])
+    self._update_tss3_common(ret, cp, source_cp, cluster_speed_from_ui=True)
 
     switch = cp.vl["TSS3_CRUISE_SWITCH"]
     previous_button = self.tss3_cruise_button
@@ -120,13 +137,15 @@ class CarState(CarStateBase):
       4: ButtonType.mainCruise,
     })
 
-    # TSS3 publishes the selected following distance as absolute state. Expose
-    # the corresponding bar count instead of manufacturing a momentary button
-    # event from a state transition: Toyota has four settings while openpilot
-    # has three longitudinal personalities.
+    # TSS3 publishes the selected following distance as absolute state. A
+    # selection change is the target-native observation of one ordinary gap
+    # button press; expose it through openpilot's existing button contract.
     distance_state = int(source_cp.vl["TSS3_CRUISE_DISPLAY"]["SET_VEHICLE_INTERVAL_TIME"])
     if distance_state in range(1, 5):
-      ret.cruiseState.followDistanceBars = 5 - distance_state
+      if self.tss3_distance_state is not None and distance_state != self.tss3_distance_state:
+        button_events.extend(create_button_events(1, 0, {1: ButtonType.gapAdjustCruise}) +
+                             create_button_events(0, 1, {1: ButtonType.gapAdjustCruise}))
+      self.tss3_distance_state = distance_state
 
     # The canonical HUD carrier distinguishes LTA off (0x10) from enabled
     # states (0x12 available, 0x14 active). Ignore active/available transitions;
@@ -140,22 +159,6 @@ class CarState(CarStateBase):
     if lta_switch_state is not None:
       self.tss3_lta_switch_state = lta_switch_state
     ret.buttonEvents = button_events
-
-    driver_torque_invalid = cp.vl["TSS3_EPS_TELEMETRY"]["DRIVER_TORQUE_INVALID"] != 0
-    ret.vehicleSensorsInvalid = ret.vehicleSensorsInvalid or driver_torque_invalid
-    ret.steeringTorque = (cp.vl["TSS3_EPS_TELEMETRY"]["STEERING_WHEEL_TORQUE_COARSE"] +
-                          cp.vl["TSS3_EPS_TELEMETRY"]["STEERING_WHEEL_TORQUE_FINE"]) if not driver_torque_invalid else 0.0
-    ret.steeringTorqueEps = 0.0
-    ret.steeringPressed = abs(ret.steeringTorque) >= TSS3_STEER_DRIVER_TORQUE_THRESHOLD
-    # Cooperative-control inhibits describe the stock EPS state, but are not
-    # openpilot steering faults. Driver override is handled through
-    # steeringPressed while openpilot remains responsible for lateral state.
-    ret.steerFaultTemporary = bool(cp.vl["TSS3_EPS_TELEMETRY"]["EPS_FAULT_INHIBIT"])
-    ret.steerFaultPermanent = False
-
-    if self.CP.flags & ToyotaFlags.HAS_BSM:
-      ret.leftBlindspot = bool(source_cp.vl["BSM"]["L_ADJACENT"] or source_cp.vl["BSM"]["L_APPROACHING"])
-      ret.rightBlindspot = bool(source_cp.vl["BSM"]["R_ADJACENT"] or source_cp.vl["BSM"]["R_APPROACHING"])
 
     request = source_cp.vl["TSS3_CONTROL_REQUEST"]
     ret.cruiseState.enabled = bool(request["CRUISE_OPERATING_LATCH"])
@@ -179,50 +182,7 @@ class CarState(CarStateBase):
 
   def _update_tss3_corolla(self, cp: CANParser) -> structs.CarState:
     ret = structs.CarState()
-    self.secoc_synchronization = copy.copy(cp.vl["SECOC_SYNCHRONIZATION"])
-    self.tss3_brake_module = copy.copy(cp.vl["BRAKE_MODULE"])
-
-    ret.brakePressed = self.tss3_brake_module["BRAKE_PRESSED"] != 0
-    ret.gasPressed = cp.vl["GAS_PEDAL"]["GAS_PEDAL_USER"] > 0
-    self.parse_wheel_speeds(ret,
-      cp.vl["WHEEL_SPEEDS"]["WHEEL_SPEED_FL"],
-      cp.vl["WHEEL_SPEEDS"]["WHEEL_SPEED_FR"],
-      cp.vl["WHEEL_SPEEDS"]["WHEEL_SPEED_RL"],
-      cp.vl["WHEEL_SPEEDS"]["WHEEL_SPEED_RR"],
-    )
-    ret.vEgoCluster = ret.vEgo
-    ret.standstill = abs(ret.vEgoRaw) < 1e-3
-    ret.vehicleSensorsInvalid = any(cp.vl["WHEEL_SPEEDS"][f"WHEEL_SPEED_{wheel}_FAULT"]
-                                    for wheel in ("FL", "FR", "RL", "RR"))
-
-    ret.steeringAngleDeg = cp.vl["STEER_ANGLE_SENSOR"]["STEER_ANGLE"] + cp.vl["STEER_ANGLE_SENSOR"]["STEER_FRACTION"]
-    ret.steeringRateDeg = cp.vl["STEER_ANGLE_SENSOR"]["STEER_RATE"]
-    ret.carNotReady = cp.vl["TSS3_READY_STATUS"]["READY_STATUS"] == 0
-    ret.gearShifter = self.parse_gear_shifter(self.shifter_values.get(int(cp.vl[self.tss3_gear_packet]["GEAR"]), None))
-
-    ret.leftBlinker = cp.vl["BLINKERS_STATE"]["TURN_SIGNALS"] == 1
-    ret.rightBlinker = cp.vl["BLINKERS_STATE"]["TURN_SIGNALS"] == 2
-    ret.doorOpen = any(cp.vl["BODY_CONTROL_STATE"][door] for door in
-                       ("DOOR_OPEN_FL", "DOOR_OPEN_FR", "DOOR_OPEN_RL", "DOOR_OPEN_RR"))
-    ret.seatbeltUnlatched = cp.vl["BODY_CONTROL_STATE"]["SEATBELT_DRIVER_UNLATCHED"] != 0
-    ret.parkingBrake = cp.vl["BODY_CONTROL_STATE"]["PARKING_BRAKE"] == 1
-    ret.brakeHoldActive = cp.vl["ESP_CONTROL"]["BRAKE_HOLD_ACTIVE"] == 1
-    ret.espDisabled = cp.vl["ESP_CONTROL"]["TC_DISABLED"] != 0
-    ret.genericToggle = bool(cp.vl["LIGHT_STALK"]["AUTO_HIGH_BEAM"])
-
-    driver_torque_invalid = cp.vl["TSS3_EPS_TELEMETRY"]["DRIVER_TORQUE_INVALID"] != 0
-    ret.vehicleSensorsInvalid = ret.vehicleSensorsInvalid or driver_torque_invalid
-    ret.steeringTorque = (cp.vl["TSS3_EPS_TELEMETRY"]["STEERING_WHEEL_TORQUE_COARSE"] +
-                          cp.vl["TSS3_EPS_TELEMETRY"]["STEERING_WHEEL_TORQUE_FINE"]) if not driver_torque_invalid else 0.0
-    ret.steeringTorqueEps = 0.0
-    ret.steeringPressed = abs(ret.steeringTorque) >= TSS3_STEER_DRIVER_TORQUE_THRESHOLD
-    # Exact H/F closes this bit as the immediate steering fault/inhibit aggregate.
-    # It is sufficient to report current steering unavailability through the normal
-    # openpilot temporary-fault mechanism, but it does not identify a restart-required
-    # or otherwise permanent class.
-    ret.steerFaultTemporary = bool(cp.vl["TSS3_EPS_TELEMETRY"]["EPS_FAULT_INHIBIT"])
-    ret.steerFaultPermanent = False
-
+    self._update_tss3_common(ret, cp, cp, cluster_speed_from_ui=False)
     request = cp.vl["TSS3_CONTROL_REQUEST"]
     longitudinal_id_b = int(request["LONGITUDINAL_REQUEST_ID_B"])
     allocation_b = int(request["LONGITUDINAL_ALLOCATION_METHOD_B"])
@@ -240,10 +200,6 @@ class CarState(CarStateBase):
     if set_speed_mph > 0:
       ret.cruiseState.speed = set_speed_mph * CV.MPH_TO_MS
       ret.cruiseState.speedCluster = ret.cruiseState.speed
-
-    if self.CP.flags & ToyotaFlags.HAS_BSM:
-      ret.leftBlindspot = bool(cp.vl["BSM"]["L_ADJACENT"] or cp.vl["BSM"]["L_APPROACHING"])
-      ret.rightBlindspot = bool(cp.vl["BSM"]["R_ADJACENT"] or cp.vl["BSM"]["R_APPROACHING"])
 
     return ret
 
@@ -417,7 +373,6 @@ class CarState(CarStateBase):
       ]
       if CP.carFingerprint == CAR.TOYOTA_COROLLA_TSS3:
         pt_messages = common_messages + [
-          ("SECOC_SYNCHRONIZATION", 10),
           ("TSS3_CONTROL_REQUEST", 40),
           ("TSS3_CRUISE_DISPLAY", 1),
         ]

@@ -8,8 +8,7 @@ from opendbc.car.lateral import AngleSteeringLimits, AngleSteeringLimitsVM
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.structs import CarParams
 from opendbc.car.docs_definitions import CarFootnote, CarDocs, Column, CarParts, CarHarness, SupportType
-from opendbc.car.fw_query_definitions import FwQueryConfig, OfflineFwVersions, PlatformResolverContext, Request, StdQueries
-from opendbc.car.toyota import platform_resolver
+from opendbc.car.fw_query_definitions import FwQueryConfig, Request, StdQueries
 
 Ecu = CarParams.Ecu
 MIN_ACC_SPEED = 19. * CV.MPH_TO_MS
@@ -231,7 +230,7 @@ class CAR(Platforms):
     [ToyotaTSS3CarDocs("Toyota Camry Hybrid 2026")],
     TOYOTA_CAMRY.specs.override(steerRatio=15.3),
     dbc_dict={Bus.pt: 'toyota_tss3_pt_generated', Bus.radar: 'toyota_tss3_pt_generated'},
-    flags=ToyotaFlags.HYBRID | ToyotaFlags.SECOC,
+    flags=ToyotaFlags.HYBRID,
   )
   TOYOTA_CHR = PlatformConfig(
     [
@@ -277,7 +276,6 @@ class CAR(Platforms):
     # TSS3 here is the E210 sedan only; the older aggregate also covered Corolla
     # Cross/Lexus UX and therefore carried a shorter representative wheelbase.
     CarSpecs(mass=3060. * CV.LB_TO_KG, wheelbase=2.70, steerRatio=13.9, tireStiffnessFactor=0.444),
-    flags=ToyotaFlags.SECOC,
   )
   TOYOTA_HIGHLANDER = PlatformConfig(
     [
@@ -548,52 +546,6 @@ def match_fw_to_car_fuzzy(live_fw_versions, vin, offline_fw_versions) -> set[str
   return {str(c) for c in (candidates - FUZZY_EXCLUDED_PLATFORMS)}
 
 
-# Toyota vehicle types are release/region-specific OEM identities. This bridge
-# is deliberately curated: the GTS resolver may identify an unsupported car,
-# but it cannot declare that car control-compatible with an openpilot platform.
-# Corolla ICE/HV remain one control platform: GTS gives them the same EMPS/ABS/FRC
-# stack, while every mapped HV install set adds category 466 Brake Booster.
-TOYOTA_COROLLA_TSS3_ICE_VEHICLE_TYPES = frozenset((12512, 12513, 12516, 12821, 12822, 12827))
-TOYOTA_COROLLA_TSS3_HYBRID_VEHICLE_TYPES = frozenset((12514, 12515, 12823, 12824))
-
-TOYOTA_PLATFORM_BY_VEHICLE: dict[tuple[str, int], CAR] = {
-  # Camry/Camry HV 2021-24. All resolve the established TSS2 architecture
-  # (FRC category 430), distinct from the category-498 TSS3 architecture.
-  ("NA", 12339): CAR.TOYOTA_CAMRY_TSS2,
-  ("NA", 12340): CAR.TOYOTA_CAMRY_TSS2,
-  ("NA", 12401): CAR.TOYOTA_CAMRY_TSS2,
-  ("NA", 12404): CAR.TOYOTA_CAMRY_TSS2,
-  ("NA", 12505): CAR.TOYOTA_CAMRY_TSS2,
-  ("NA", 12506): CAR.TOYOTA_CAMRY_TSS2,
-  ("NA", 12507): CAR.TOYOTA_CAMRY_TSS2,
-  ("NA", 12606): CAR.TOYOTA_CAMRY_TSS2,
-  ("NA", 12607): CAR.TOYOTA_CAMRY_TSS2,
-  ("NA", 12608): CAR.TOYOTA_CAMRY_TSS2,
-  # Exact generation-20 Camry HV identity used by the maintainer vehicle.
-  ("NA", 12862): CAR.TOYOTA_CAMRY_TSS3,
-  # Corolla generation-23 and generation-25 identities covering the two
-  # directly acquired H/F EPS specimens. Corolla Cross and GR Corolla remain
-  # separate even though GTS may place them in the same broad TSS3 family.
-  **{("NA", vehicle_type): CAR.TOYOTA_COROLLA_TSS3
-     for vehicle_type in TOYOTA_COROLLA_TSS3_ICE_VEHICLE_TYPES | TOYOTA_COROLLA_TSS3_HYBRID_VEHICLE_TYPES},
-}
-
-
-def resolve_platform(live_fw_versions, vin: str, offline_fw_versions: OfflineFwVersions,
-                     context: PlatformResolverContext) -> set[str]:
-  del live_fw_versions, offline_fw_versions
-  matches = tuple(
-    match for match in platform_resolver.resolve_all_regions(platform_resolver.load_data(), vin, context.vin_rx_addr)
-    if match.resolution_complete
-  )
-  # An incomplete compatibility map must fail closed when an OEM identity is
-  # ambiguous. Every viable identity has to map to the same platform.
-  if not matches or any((match.region, match.vehicle_type) not in TOYOTA_PLATFORM_BY_VEHICLE for match in matches):
-    return set()
-  platforms = {TOYOTA_PLATFORM_BY_VEHICLE[(match.region, match.vehicle_type)] for match in matches}
-  return {str(platform) for platform in platforms} if len(platforms) == 1 else set()
-
-
 # Regex patterns for parsing more general platform-specific identifiers from FW versions.
 # - Part number: Toyota part number (usually last character needs to be ignored to find a match).
 #    Each ECU address has just one part number.
@@ -710,7 +662,6 @@ FW_QUERY_CONFIG = FwQueryConfig(
     (Ecu.hvac, 0x7c4, None),
   ],
   match_fw_to_car_fuzzy=match_fw_to_car_fuzzy,
-  resolve_platform=resolve_platform,
 )
 
 STEER_THRESHOLD = 100

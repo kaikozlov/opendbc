@@ -17,6 +17,15 @@ class CarInterface(CarInterfaceBase):
 
   DRIVABLE_GEARS = (structs.CarState.GearShifter.sport,)
 
+  def update(self, can_packets):
+    ret = super().update(can_packets)
+    if self.CC.tss3_request_transport is not None:
+      self.CC.observe_tss3_request_plane(can_packets, ret.canValid)
+      ret.steerFaultTemporary = ret.steerFaultTemporary or self.CC.tss3_request_transport.authority_unavailable()
+      if self.CP.openpilotLongitudinalControl:
+        ret.accFaulted = ret.accFaulted or self.CC.tss3_request_transport.authority_unavailable()
+    return ret
+
   @staticmethod
   def get_pid_accel_limits(CP, current_speed, cruise_speed):
     return CarControllerParams(CP).ACCEL_MIN, CarControllerParams(CP).ACCEL_MAX
@@ -56,7 +65,6 @@ class CarInterface(CarInterfaceBase):
         relay_request_plane = 0x025 in fingerprint.get(0, {}) and 0x08A in fingerprint.get(2, {})
         if relay_request_plane:
           ret.safetyConfigs[0].safetyParam |= ToyotaSafetyFlags.TSS3_08A_HOST.value
-          ret.alphaLongitudinalAvailable = True
           # The repinned 0x08A plane has one publisher for both axes. Blanket
           # comma ownership therefore cannot coexist with stock longitudinal.
           ret.openpilotLongitudinalControl = True
@@ -81,8 +89,6 @@ class CarInterface(CarInterfaceBase):
         # lag. Match other direct-acceleration ports by using feedforward with
         # the measured delay and no second vehicle-response integrator.
         ret.longitudinalActuatorDelay = 0.2
-        ret.longitudinalTuning.kiBP = [0.]
-        ret.longitudinalTuning.kiV = [0.]
       elif candidate == CAR.TOYOTA_COROLLA_TSS3:
         ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.toyota)]
         ret.safetyConfigs[0].safetyParam = (EPS_SCALE[candidate] |
@@ -108,7 +114,8 @@ class CarInterface(CarInterfaceBase):
 
       if not ret.dashcamOnly:
         # Stock Toyota-B has no independently suppressible 0x08A source. The
-        # Camry request-plane repin does, and advertises Alpha Long only there.
+        # Camry request-plane repin does. It owns both axes, so longitudinal is
+        # always enabled rather than exposed as a non-functional Alpha toggle.
         if not ret.openpilotLongitudinalControl:
           ret.safetyConfigs[0].safetyParam |= ToyotaSafetyFlags.STOCK_LONGITUDINAL.value
 
