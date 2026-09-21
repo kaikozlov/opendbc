@@ -142,9 +142,8 @@ class CarController(CarControllerBase):
           CC.latActive, steer_alert,
         ))
 
-      # The request-plane proxy samples this bounded command onto source-real
-      # 0x08A generations. Stock/Alpha-Long-disabled configurations expose no
-      # longitudinal output here.
+      # The request-plane proxy samples this bounded command onto native
+      # freshness ticks. Relay-host mode owns both axes.
       output.accel = float(np.clip(CC.actuators.accel, self.params.ACCEL_MIN, self.params.ACCEL_MAX)) \
         if self.CP.openpilotLongitudinalControl and CC.longActive else 0.0
 

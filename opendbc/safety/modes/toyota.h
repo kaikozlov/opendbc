@@ -64,19 +64,20 @@ static bool toyota_tss3_signer = false;
 static bool toyota_corolla_hf = false;
 static bool toyota_tss3_08a_host = false;
 static bool toyota_tss3_08a_replacement_active = false;
-#define TOYOTA_TSS3_08A_NATIVE_HISTORY_LEN 4U
-static uint8_t toyota_tss3_08a_native_frames[TOYOTA_TSS3_08A_NATIVE_HISTORY_LEN][32] = {{0}};
-static bool toyota_tss3_08a_native_consumed[TOYOTA_TSS3_08A_NATIVE_HISTORY_LEN] = {false};
-static uint8_t toyota_tss3_08a_native_history = 0U;
+#define TOYOTA_TSS3_08A_GENERATION_QUEUE_LEN 8U
+static uint8_t toyota_tss3_08a_generation_b26[TOYOTA_TSS3_08A_GENERATION_QUEUE_LEN] = {0};
+static uint8_t toyota_tss3_08a_generation_fv4[TOYOTA_TSS3_08A_GENERATION_QUEUE_LEN] = {0};
+static uint8_t toyota_tss3_08a_generation_head = 0U;
+static uint8_t toyota_tss3_08a_generation_count = 0U;
+static bool toyota_tss3_08a_native_seen = false;
 static uint32_t toyota_tss3_08a_native_last_rx_ts = 0U;
 static uint32_t toyota_tss3_08a_last_tx_ts = 0U;
 static uint8_t toyota_tss3_08a_oracle_seq = 0U;
 static uint8_t toyota_tss3_08a_oracle_next_fragment = 0U;
-static bool toyota_tss3_08a_first_host_frame = false;
 
-// Native 0x08A is ~40 Hz with observed ~20-34 ms source intervals. Four source
-// generations cover normal EPS oracle response latency without retaining stale
-// host work. Fail open if host replacement traffic disappears for 100 ms.
+// Native 0x08A is ~40 Hz with observed ~20-34 ms source intervals. It supplies
+// only a bounded cadence/freshness token; comma owns every application byte.
+// Fail open if host replacement traffic disappears for 100 ms.
 const uint32_t TOYOTA_TSS3_08A_REPLACEMENT_TIMEOUT_US = 100000U;
 static int toyota_dbc_eps_torque_factor = 100;   // conversion factor for STEER_TORQUE_EPS in %: see dbc file
 
@@ -140,31 +141,25 @@ static bool toyota_get_quality_flag_valid(const CANPacket_t *msg) {
 static void toyota_rx_hook(const CANPacket_t *msg) {
   if (toyota_tss3_08a_host && !toyota_corolla_hf) {
     if ((msg->bus == 2U) && (msg->addr == 0x8AU) && (GET_LEN(msg) == 32U)) {
-      for (uint8_t history_index = TOYOTA_TSS3_08A_NATIVE_HISTORY_LEN - 1U; history_index > 0U; history_index--) {
-        for (uint8_t i = 0U; i < 32U; i++) {
-          toyota_tss3_08a_native_frames[history_index][i] = toyota_tss3_08a_native_frames[history_index - 1U][i];
-        }
-        toyota_tss3_08a_native_consumed[history_index] = toyota_tss3_08a_native_consumed[history_index - 1U];
-      }
-      for (uint8_t i = 0U; i < 32U; i++) {
-        toyota_tss3_08a_native_frames[0][i] = msg->data[i];
-      }
-      toyota_tss3_08a_native_consumed[0] = false;
-      if (toyota_tss3_08a_native_history < TOYOTA_TSS3_08A_NATIVE_HISTORY_LEN) {
-        toyota_tss3_08a_native_history++;
-      }
-      if (toyota_tss3_08a_replacement_active && toyota_tss3_08a_first_host_frame) {
-        // If a newer source generation arrives before the atomic handoff clone,
-        // the previously latest pre-arm generation is no longer eligible.
-        // Keep only the newest native generation available as the handoff witness.
-        for (uint8_t history_index = 1U; history_index < toyota_tss3_08a_native_history; history_index++) {
-          toyota_tss3_08a_native_consumed[history_index] = true;
+      if (toyota_tss3_08a_replacement_active) {
+        if (toyota_tss3_08a_generation_count < TOYOTA_TSS3_08A_GENERATION_QUEUE_LEN) {
+          const uint8_t index = (toyota_tss3_08a_generation_head + toyota_tss3_08a_generation_count) %
+                                TOYOTA_TSS3_08A_GENERATION_QUEUE_LEN;
+          toyota_tss3_08a_generation_b26[index] = msg->data[26] & 0x3FU;
+          toyota_tss3_08a_generation_fv4[index] = msg->data[28] >> 4U;
+          toyota_tss3_08a_generation_count++;
+        } else {
+          // The signer is more than eight source periods behind. Restore stock
+          // forwarding rather than retaining an unbounded replacement backlog.
+          toyota_tss3_08a_replacement_active = false;
+          toyota_tss3_08a_generation_head = 0U;
+          toyota_tss3_08a_generation_count = 0U;
         }
       }
+      toyota_tss3_08a_native_seen = true;
       toyota_tss3_08a_native_last_rx_ts = microsecond_timer_get();
-      // FRC remains the native engagement owner with both stock and openpilot
-      // longitudinal. Follow the same source-real operating latch consumed by
-      // CarState so Panda and selfdrived cannot develop independent states.
+      // The native operating latch remains the ordinary engagement input. No
+      // native application byte is otherwise consumed by host control.
       pcm_cruise_check(GET_BIT(msg, 27U));
     }
   }
@@ -387,24 +382,22 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
         if (release) {
           tx = true;
           toyota_tss3_08a_replacement_active = false;
-          toyota_tss3_08a_first_host_frame = false;
+          toyota_tss3_08a_generation_head = 0U;
+          toyota_tss3_08a_generation_count = 0U;
         } else {
-          // This is only a relay ownership handoff. It carries no steering
-          // permission or target generation: controls_allowed remains the
-          // ordinary openpilot actuation boundary for modified ID11 frames.
+          // Arm only switches publication ownership. The next native arrival
+          // contributes a freshness token; its application is never cloned.
           const uint32_t native_age = safety_get_ts_elapsed(microsecond_timer_get(), toyota_tss3_08a_native_last_rx_ts);
-          tx = (toyota_tss3_08a_native_history > 0U) && (native_age <= TOYOTA_TSS3_08A_REPLACEMENT_TIMEOUT_US);
+          tx = !toyota_stock_longitudinal && toyota_tss3_08a_native_seen &&
+               (native_age <= TOYOTA_TSS3_08A_REPLACEMENT_TIMEOUT_US);
           if (tx) {
             toyota_tss3_08a_replacement_active = true;
-            toyota_tss3_08a_first_host_frame = true;
             toyota_tss3_08a_last_tx_ts = microsecond_timer_get();
-            // The latest source generation may be cloned immediately as the
-            // atomic handoff witness. Older pre-arm generations are ineligible.
-            // If a newer native generation arrives first, rx_hook retires this
-            // pre-arm candidate and makes only that newer generation eligible.
-            for (uint8_t history_index = 0U; history_index < toyota_tss3_08a_native_history; history_index++) {
-              toyota_tss3_08a_native_consumed[history_index] = history_index != 0U;
-            }
+            toyota_tss3_08a_generation_head = 0U;
+            toyota_tss3_08a_generation_count = 0U;
+            desired_angle_last = SAFETY_CLAMP(angle_meas.values[0],
+                                              -TOYOTA_F33_08A_ANGLE_STEERING_LIMITS.max_angle,
+                                               TOYOTA_F33_08A_ANGLE_STEERING_LIMITS.max_angle);
           }
         }
       } else if (toyota_tss3_08a_host && !toyota_corolla_hf) {
@@ -458,143 +451,68 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
     }
     if (host_08a) {
       tx = false;
-      int matched_index = -1;
-      int safety_drop_index = -1;
+      bool application_shape = toyota_tss3_08a_replacement_active &&
+                               (toyota_tss3_08a_generation_count > 0U) &&
+                               msg->fd && (GET_LEN(msg) == 32U);
+      bool actuation_valid = true;
 
-      if (toyota_tss3_08a_replacement_active && (toyota_tss3_08a_native_history > 0U) &&
-          msg->fd && (GET_LEN(msg) == 32U)) {
-        int oldest_unconsumed_index = -1;
-        for (uint8_t history_index = 0U; history_index < toyota_tss3_08a_native_history; history_index++) {
-          if (!toyota_tss3_08a_native_consumed[history_index]) {
-            oldest_unconsumed_index = history_index;
-          }
+      if (application_shape) {
+        const uint8_t expected_b26 = toyota_tss3_08a_generation_b26[toyota_tss3_08a_generation_head];
+        const uint8_t expected_fv4 = toyota_tss3_08a_generation_fv4[toyota_tss3_08a_generation_head];
+        application_shape &= (msg->data[26] == expected_b26) && ((msg->data[28] >> 4U) == expected_fv4);
+
+        // Complete comma-owned active envelope. Only set speed, commanded
+        // angle/acceleration, request sequence, and MAC are variable.
+        application_shape &= (msg->data[0] == 0U) && (msg->data[1] == 0U) &&
+                             (msg->data[2] == 0U) && (msg->data[3] == 0x08U) &&
+                             (msg->data[4] == 0x80U) && (msg->data[5] == 0U) &&
+                             (msg->data[13] == 0x7FU) && (msg->data[14] == 0xFFU) &&
+                             (msg->data[15] == 0U) && (msg->data[16] == 0x7FU) &&
+                             (msg->data[17] == 0xFFU) && (msg->data[20] == 0xC0U) &&
+                             (msg->data[22] == 0x10U) && (msg->data[23] == 0U) &&
+                             (msg->data[25] == 0U) && (msg->data[27] == 0U);
+
+        const uint8_t host_id = msg->data[21];
+        const bool host_lateral_active = (host_id == 11U) && (msg->data[24] == 100U);
+        const bool host_lateral_inactive = (host_id == 0U) && (msg->data[24] == 50U);
+        application_shape &= host_lateral_active || host_lateral_inactive;
+
+        int target_angle = (msg->data[18] << 8U) | msg->data[19];
+        target_angle = to_signed(target_angle, 16);
+        if (host_lateral_active) {
+          actuation_valid &= controls_allowed &&
+                             !toyota_f33_angle_cmd_checks(target_angle, true, TOYOTA_F33_08A_ANGLE_STEERING_LIMITS,
+                                                          TOYOTA_F33_ANGLE_STEERING_PARAMS);
+        } else if (host_lateral_inactive) {
+          actuation_valid &= !toyota_f33_angle_cmd_checks(target_angle, false, TOYOTA_F33_08A_ANGLE_STEERING_LIMITS,
+                                                           TOYOTA_F33_ANGLE_STEERING_PARAMS);
         }
 
-        if (oldest_unconsumed_index >= 0) {
-          const uint8_t history_index = (uint8_t)oldest_unconsumed_index;
-          if (toyota_tss3_08a_first_host_frame) {
-            // Exactly one source clone is used to witness the relay handoff.
-            // Byte equality has no authority meaning after this frame.
-            bool handoff_clone = true;
-            for (uint8_t i = 0U; i < 32U; i++) {
-              handoff_clone &= msg->data[i] == toyota_tss3_08a_native_frames[history_index][i];
-            }
-            if (handoff_clone) {
-              matched_index = history_index;
-              tx = true;
-              desired_angle_last = SAFETY_CLAMP(angle_meas.values[0],
-                                                -TOYOTA_F33_08A_ANGLE_STEERING_LIMITS.max_angle,
-                                                 TOYOTA_F33_08A_ANGLE_STEERING_LIMITS.max_angle);
-            }
-          } else {
-            // Match the exact source generation and permit only the owned
-            // lateral fields and/or normal-DRCC identity, hold and bounds.
-            // Every other Toyota request tuple remains source-exact.
-            bool application_shape = true;
-            bool actuation_valid = true;
-            bool lateral_replacement = false;
-            bool longitudinal_replacement = false;
-            for (uint8_t i = 0U; i < 32U; i++) {
-              const bool equal = msg->data[i] == toyota_tss3_08a_native_frames[history_index][i];
-              const bool lateral_angle_byte = (i == 18U) || (i == 19U);
-              const bool lateral_id_byte = i == 21U;
-              const bool assist_gain_byte = i == 24U;
-              const bool delayed_hold_byte = i == 4U;
-              const bool longitudinal_id_byte = (i == 6U) || (i == 7U);
-              const bool accel_bound_byte = (i == 8U) || (i == 9U) || (i == 11U) || (i == 12U);
-              const bool mac_bit_byte = i >= 28U;
-              if (delayed_hold_byte) {
-                application_shape &= ((msg->data[i] ^ toyota_tss3_08a_native_frames[history_index][i]) & 0xDFU) == 0U;
-              } else if (!lateral_angle_byte && !lateral_id_byte && !assist_gain_byte &&
-                  !longitudinal_id_byte && !accel_bound_byte && !mac_bit_byte) {
-                application_shape &= equal;
-              }
-              lateral_replacement |= !equal && (lateral_angle_byte || lateral_id_byte || assist_gain_byte);
-              longitudinal_replacement |= !equal && (delayed_hold_byte || longitudinal_id_byte || accel_bound_byte);
-            }
-
-            // FV4 is source-generation identity; the MAC bits themselves may differ.
-            application_shape &= (msg->data[28] & 0xF0U) ==
-                                 (toyota_tss3_08a_native_frames[history_index][28] & 0xF0U);
-
-            if (application_shape) {
-              const uint8_t native_id = toyota_tss3_08a_native_frames[history_index][21] & 0x3FU;
-              const uint8_t host_id = msg->data[21] & 0x3FU;
-              const bool native_lateral_owner = (native_id == 0U) || (native_id == 4U) ||
-                                                (native_id == 11U) || (native_id == 18U);
-              const bool lateral_selector_shape = (msg->data[21] & 0xC0U) ==
-                                                  (toyota_tss3_08a_native_frames[history_index][21] & 0xC0U);
-              const bool host_lateral_active = (host_id == 11U) && (msg->data[24] == 100U);
-              const bool host_lateral_inactive = (host_id == 0U) &&
-                                                 (msg->data[24] == toyota_tss3_08a_native_frames[history_index][24]);
-              int target_angle = (msg->data[18] << 8U) | msg->data[19];
-              target_angle = to_signed(target_angle, 16);
-              if (native_lateral_owner && lateral_selector_shape && host_lateral_active) {
-                actuation_valid &= controls_allowed &&
-                                   !toyota_f33_angle_cmd_checks(target_angle, true, TOYOTA_F33_08A_ANGLE_STEERING_LIMITS,
-                                                                TOYOTA_F33_ANGLE_STEERING_PARAMS);
-              } else if (native_lateral_owner && lateral_selector_shape && host_lateral_inactive) {
-                actuation_valid &= !toyota_f33_angle_cmd_checks(target_angle, false, TOYOTA_F33_08A_ANGLE_STEERING_LIMITS,
-                                                                 TOYOTA_F33_ANGLE_STEERING_PARAMS);
-              } else if (!native_lateral_owner) {
-                // Unknown Toyota intervention IDs remain source-exact. Known
-                // ordinary owners must always use openpilot's active or
-                // inactive lateral command shape while replacement is active.
-                application_shape &= !lateral_replacement;
-              } else {
-                application_shape = false;
-              }
-            }
-
-            if (application_shape && longitudinal_replacement) {
-              const bool source_no_request = (toyota_tss3_08a_native_frames[history_index][6] == 0x00U) &&
-                                             (toyota_tss3_08a_native_frames[history_index][7] == 0x12U);
-              const bool source_driver_override = (toyota_tss3_08a_native_frames[history_index][6] == 0x2CU) &&
-                                                  (toyota_tss3_08a_native_frames[history_index][7] == 0x46U);
-              const bool source_ordinary_drcc = (toyota_tss3_08a_native_frames[history_index][6] == 0x2DU) &&
-                                                (toyota_tss3_08a_native_frames[history_index][7] == 0x47U);
-              const bool source_delayed_hold = (toyota_tss3_08a_native_frames[history_index][6] == 0x2DU) &&
-                                               (toyota_tss3_08a_native_frames[history_index][7] == 0x67U);
-              const bool host_ordinary_drcc = (msg->data[6] == 0x2DU) && (msg->data[7] == 0x47U);
-              const bool host_delayed_hold_clear = (msg->data[4] & 0x20U) == 0U;
-              int accel_a = (msg->data[8] << 8U) | msg->data[9];
-              int accel_b = (msg->data[11] << 8U) | msg->data[12];
-              accel_a = to_signed(accel_a, 16);
-              accel_b = to_signed(accel_b, 16);
-              const bool longitudinal_shape = !toyota_stock_longitudinal &&
-                                              (source_no_request || source_driver_override ||
-                                               source_ordinary_drcc || source_delayed_hold) &&
-                                              host_ordinary_drcc && host_delayed_hold_clear && (accel_a == accel_b);
-              application_shape &= longitudinal_shape;
-              if (longitudinal_shape) {
-                actuation_valid &= !longitudinal_accel_checks(accel_a, TOYOTA_F33_LONG_LIMITS);
-              }
-            }
-
-            tx = application_shape && actuation_valid;
-            if (tx) {
-              matched_index = history_index;
-            } else if (application_shape && !actuation_valid) {
-              safety_drop_index = history_index;
-            }
-          }
+        int accel_a = (msg->data[8] << 8U) | msg->data[9];
+        int accel_b = (msg->data[11] << 8U) | msg->data[12];
+        accel_a = to_signed(accel_a, 16);
+        accel_b = to_signed(accel_b, 16);
+        const bool host_longitudinal = (msg->data[6] == 0x2DU) && (msg->data[7] == 0x47U) &&
+                                       (accel_a == accel_b);
+        application_shape &= !toyota_stock_longitudinal && host_longitudinal;
+        if (host_longitudinal) {
+          actuation_valid &= !longitudinal_accel_checks(accel_a, TOYOTA_F33_LONG_LIMITS);
         }
       }
 
-      if (tx) {
-        toyota_tss3_08a_first_host_frame = false;
-        toyota_tss3_08a_native_consumed[matched_index] = true;
-        toyota_tss3_08a_last_tx_ts = microsecond_timer_get();
-      } else if (safety_drop_index >= 0) {
-        // Match normal Panda behavior: drop one structurally valid actuation
-        // violation without changing request-plane ownership. Angle safety has
-        // already reset its baseline to measured steering, so the next normal
-        // CarController command can recover without a separate state machine.
-        toyota_tss3_08a_native_consumed[safety_drop_index] = true;
+      if (application_shape) {
+        toyota_tss3_08a_generation_head = (toyota_tss3_08a_generation_head + 1U) %
+                                           TOYOTA_TSS3_08A_GENERATION_QUEUE_LEN;
+        toyota_tss3_08a_generation_count--;
+        tx = actuation_valid;
+        if (tx) {
+          toyota_tss3_08a_last_tx_ts = microsecond_timer_get();
+        }
       } else if (toyota_tss3_08a_replacement_active) {
-        // Any malformed/replayed/mistimed host frame restores stock forwarding.
+        // A malformed, replayed, or out-of-order host publication fails open.
         toyota_tss3_08a_replacement_active = false;
-        toyota_tss3_08a_first_host_frame = false;
+        toyota_tss3_08a_generation_head = 0U;
+        toyota_tss3_08a_generation_count = 0U;
       }
     }
     if (corolla_brake_cancel || camry_brake_cancel) {
@@ -755,7 +673,8 @@ static bool toyota_fwd_hook(int bus_num, int addr) {
     const uint32_t elapsed = safety_get_ts_elapsed(microsecond_timer_get(), toyota_tss3_08a_last_tx_ts);
     if (elapsed > TOYOTA_TSS3_08A_REPLACEMENT_TIMEOUT_US) {
       toyota_tss3_08a_replacement_active = false;
-      toyota_tss3_08a_first_host_frame = false;
+      toyota_tss3_08a_generation_head = 0U;
+      toyota_tss3_08a_generation_count = 0U;
     } else {
       block = true;
     }
@@ -803,14 +722,12 @@ static safety_config toyota_init(uint16_t param) {
   toyota_corolla_hf = GET_FLAG(param, TOYOTA_PARAM_COROLLA_HF);
   toyota_tss3_08a_host = GET_FLAG(param, TOYOTA_PARAM_TSS3_08A_HOST);
   toyota_tss3_08a_replacement_active = false;
-  toyota_tss3_08a_native_history = 0U;
+  toyota_tss3_08a_native_seen = false;
   toyota_tss3_08a_native_last_rx_ts = 0U;
-  for (uint8_t i = 0U; i < TOYOTA_TSS3_08A_NATIVE_HISTORY_LEN; i++) {
-    toyota_tss3_08a_native_consumed[i] = false;
-  }
+  toyota_tss3_08a_generation_head = 0U;
+  toyota_tss3_08a_generation_count = 0U;
   toyota_tss3_08a_oracle_seq = 0U;
   toyota_tss3_08a_oracle_next_fragment = 0U;
-  toyota_tss3_08a_first_host_frame = false;
   toyota_dbc_eps_torque_factor = param & TOYOTA_EPS_FACTOR;
 
   safety_config ret;

@@ -57,10 +57,12 @@ class CarInterface(CarInterfaceBase):
         if relay_request_plane:
           ret.safetyConfigs[0].safetyParam |= ToyotaSafetyFlags.TSS3_08A_HOST.value
           ret.alphaLongitudinalAvailable = True
-          ret.openpilotLongitudinalControl = alpha_long
-          ret.autoResumeSng = alpha_long
-          # FRC remains the native cruise engagement/set-speed owner while
-          # openpilot replaces its longitudinal actuation request.
+          # The repinned 0x08A plane has one publisher for both axes. Blanket
+          # comma ownership therefore cannot coexist with stock longitudinal.
+          ret.openpilotLongitudinalControl = True
+          ret.autoResumeSng = True
+          # FRC remains the native cruise engagement input, but contributes no
+          # control request fields to the host-owned application.
           ret.pcmCruise = True
         ret.dashcamOnly = False
         # The EPS-resident helper owns native B6 signing; openpilot owns only
