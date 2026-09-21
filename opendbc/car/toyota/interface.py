@@ -100,7 +100,7 @@ class CarInterface(CarInterfaceBase):
       if candidate == CAR.TOYOTA_CAMRY_TSS3:
         ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.toyota)]
         ret.safetyConfigs[0].safetyParam = (EPS_SCALE[candidate] |
-                                             ToyotaSafetyFlags.F33.value)
+                                             ToyotaSafetyFlags.TSS3_SIGNER.value)
         # The physical request-plane harness is self-identifying: chassis/state
         # lives on bus0 while the FRC-native 0x08A source lives on bus2. Select
         # host 0x08A ownership from that observed topology, not a private Param.

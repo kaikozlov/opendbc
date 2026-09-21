@@ -42,7 +42,7 @@ class TestToyotaTss3CamrySafety(common.CarSafetyTest, common.AngleSteeringSafety
     self.application_packer = CANPacker("toyota_tss3_pt_generated")
     self.safety = libsafety_py.libsafety
     param = (EPS_SCALE[CAR.TOYOTA_CAMRY_TSS3] |
-             ToyotaSafetyFlags.F33 | ToyotaSafetyFlags.TSS3_08A_HOST)
+             ToyotaSafetyFlags.TSS3_SIGNER | ToyotaSafetyFlags.TSS3_08A_HOST)
     self.assertEqual(self.safety.set_safety_hooks(CarParams.SafetyModel.toyota, param), 0)
     self.safety.init_tests()
     self.safety.set_timer(0)

@@ -329,10 +329,3 @@ class ToyotaTss3RequestTransport:
 
     sends, self.pending_sends = self.pending_sends, []
     return sends
-
-
-# Kept as source-compatible aliases for the exact-F33 analysis tooling.
-build_f33_signer_control = build_signer_control
-TSS3_F33_SIGNER_CONTROL_ADDR = TSS3_SIGNER_CONTROL_ADDR
-TSS3_F33_SIGNER_CONTROL_MAGIC = TSS3_SIGNER_CONTROL_MAGIC
-TSS3_F33_SIGNER_BUS = TSS3_SIGNER_BUS

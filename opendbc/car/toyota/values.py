@@ -88,7 +88,6 @@ class ToyotaSafetyFlags(IntFlag):
   LTA = (4 << 8)
   SECOC = (8 << 8)
   TSS3_SIGNER = (16 << 8)
-  F33 = TSS3_SIGNER  # compatibility alias
   COROLLA_HF = (32 << 8)
   TSS3_08A_HOST = (64 << 8)
 
