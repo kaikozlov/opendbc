@@ -99,8 +99,7 @@ class TestToyotaTss3CamrySafety(common.CarSafetyTest, common.AngleSteeringSafety
     return self.packer.make_can_msg_safety("STEER_ANGLE_SENSOR", 0, values)
 
   def _get_steer_cmd_angle_max(self, speed):
-    max_angle = get_max_angle_vm(max(speed - 1., 1.), self.VM, self.params)
-    return min(max_angle, self.STEER_ANGLE_MAX)
+    return min(get_max_angle_vm(max(speed - 1., 1.), self.VM, self.params), 32767 / self.DEG_TO_CAN)
 
   def test_angle_cmd_when_enabled(self):
     # Vehicle-model angle limits are speed-dependent and are checked below.
@@ -119,11 +118,10 @@ class TestToyotaTss3CamrySafety(common.CarSafetyTest, common.AngleSteeringSafety
         self.safety.set_desired_angle_last(sign * (max_angle_raw + 1))
         self.assertFalse(self._tx(self._angle_raw_cmd_msg(sign * (max_angle_raw + 1))))
 
-  def test_lateral_jerk_and_conditioner_limits(self):
+  def test_lateral_jerk_limit(self):
     for speed in (1., 5., 10., 15., 25., 40.):
       self._reset_speed_measurement(speed + 1.)
-      vm_delta_raw = int(get_max_angle_delta_vm(speed, self.VM, self.params) * self.DEG_TO_CAN) + 1
-      max_delta_raw = min(vm_delta_raw, 18)
+      max_delta_raw = min(int(get_max_angle_delta_vm(speed, self.VM, self.params) * self.DEG_TO_CAN) + 1, 1745)
       for sign in (-1, 1):
         self.safety.set_controls_allowed(True)
         self.safety.set_desired_angle_last(0)

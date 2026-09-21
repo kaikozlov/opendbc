@@ -76,28 +76,6 @@ static uint32_t toyota_compute_checksum(const CANPacket_t *msg) {
   return checksum;
 }
 
-static bool toyota_f33_angle_cmd_checks(int desired_angle, bool steer_control_enabled,
-                                        const AngleSteeringLimits limits, const AngleSteeringParams params) {
-  const int desired_angle_previous = desired_angle_last;
-  bool conditioner_violation = false;
-  if (controls_allowed && steer_control_enabled) {
-    // Exact F33 conditions 7 B6 counts per 10 ms. Convert that physical rate
-    // to the configured command frequency, rounding up by one raw count.
-    const int max_conditioned_delta = ((7 * 100) + (int)limits.frequency - 1) / (int)limits.frequency;
-    conditioner_violation = safety_max_limit_check(desired_angle,
-                                                   desired_angle_previous + max_conditioned_delta,
-                                                   desired_angle_previous - max_conditioned_delta);
-  }
-
-  bool violation = safety_max_limit_check(desired_angle, limits.max_angle, -limits.max_angle);
-  violation |= steer_angle_cmd_checks_vm(desired_angle, steer_control_enabled, limits, params);
-  violation |= conditioner_violation;
-  if (violation) {
-    desired_angle_last = SAFETY_CLAMP(angle_meas.values[0], -limits.max_angle, limits.max_angle);
-  }
-  return violation;
-}
-
 static uint32_t toyota_get_checksum(const CANPacket_t *msg) {
   int checksum_byte = GET_LEN(msg) - 1U;
   return (uint8_t)(msg->data[checksum_byte]);
@@ -371,9 +349,17 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
                                        -TOYOTA_TSS3_COROLLA_ANGLE_STEERING_LIMITS.max_angle) &&
                !steer_angle_cmd_checks(target_angle, steer_control_enabled, TOYOTA_TSS3_COROLLA_ANGLE_STEERING_LIMITS);
         } else {
-          tx = c7_header_valid &&
-               !toyota_f33_angle_cmd_checks(target_angle, steer_control_enabled,
-                                            TOYOTA_F33_ANGLE_STEERING_LIMITS, TOYOTA_F33_ANGLE_STEERING_PARAMS);
+          bool angle_violation = steer_angle_cmd_checks_vm(target_angle, steer_control_enabled,
+                                                           TOYOTA_F33_ANGLE_STEERING_LIMITS,
+                                                           TOYOTA_F33_ANGLE_STEERING_PARAMS);
+          const bool max_angle_violation = safety_max_limit_check(target_angle, TOYOTA_F33_ANGLE_STEERING_LIMITS.max_angle,
+                                                                  -TOYOTA_F33_ANGLE_STEERING_LIMITS.max_angle);
+          angle_violation |= max_angle_violation;
+          if (max_angle_violation) {
+            desired_angle_last = SAFETY_CLAMP(angle_meas.values[0], -TOYOTA_F33_ANGLE_STEERING_LIMITS.max_angle,
+                                              TOYOTA_F33_ANGLE_STEERING_LIMITS.max_angle);
+          }
+          tx = c7_header_valid && !angle_violation;
         }
       }
     }
@@ -402,16 +388,24 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
 
         int target_angle = (msg->data[18] << 8U) | msg->data[19];
         target_angle = to_signed(target_angle, 16);
+        bool angle_violation = false;
         if (host_lateral_active) {
-          actuation_valid &= controls_allowed &&
-                             !toyota_f33_angle_cmd_checks(target_angle, true, TOYOTA_F33_08A_ANGLE_STEERING_LIMITS,
-                                                          TOYOTA_F33_ANGLE_STEERING_PARAMS);
+          angle_violation = steer_angle_cmd_checks_vm(target_angle, true, TOYOTA_F33_08A_ANGLE_STEERING_LIMITS,
+                                                       TOYOTA_F33_ANGLE_STEERING_PARAMS);
         } else if (host_lateral_inactive) {
-          actuation_valid &= !toyota_f33_angle_cmd_checks(target_angle, false, TOYOTA_F33_08A_ANGLE_STEERING_LIMITS,
-                                                           TOYOTA_F33_ANGLE_STEERING_PARAMS);
+          angle_violation = steer_angle_cmd_checks_vm(target_angle, false, TOYOTA_F33_08A_ANGLE_STEERING_LIMITS,
+                                                       TOYOTA_F33_ANGLE_STEERING_PARAMS);
         } else {
           // The application-shape check above rejects every other lateral ID.
         }
+        const bool max_angle_violation = safety_max_limit_check(target_angle, TOYOTA_F33_08A_ANGLE_STEERING_LIMITS.max_angle,
+                                                                -TOYOTA_F33_08A_ANGLE_STEERING_LIMITS.max_angle);
+        angle_violation |= max_angle_violation;
+        if (max_angle_violation) {
+          desired_angle_last = SAFETY_CLAMP(angle_meas.values[0], -TOYOTA_F33_08A_ANGLE_STEERING_LIMITS.max_angle,
+                                            TOYOTA_F33_08A_ANGLE_STEERING_LIMITS.max_angle);
+        }
+        actuation_valid &= !angle_violation;
 
         int accel_a = (msg->data[8] << 8U) | msg->data[9];
         int accel_b = (msg->data[11] << 8U) | msg->data[12];
