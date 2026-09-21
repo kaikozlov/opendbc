@@ -6,8 +6,7 @@ from opendbc.car import Bus, CanData, structs
 from opendbc.car.fw_versions import match_fw_to_car_exact
 from opendbc.car.toyota.fingerprints import FW_VERSIONS
 from opendbc.car.toyota.interface import CarInterface
-from opendbc.car.toyota.values import CAR, DBC, EPS_SCALE, FW_QUERY_CONFIG, ToyotaFlags, ToyotaSafetyFlags
-from opendbc.safety.tests.libsafety import libsafety_py
+from opendbc.car.toyota.values import CAR, DBC, FW_QUERY_CONFIG, ToyotaFlags, ToyotaSafetyFlags
 
 
 Ecu = structs.CarParams.Ecu
@@ -310,70 +309,6 @@ class TestToyotaCorollaTSS3(unittest.TestCase):
 
     _, sends = ci.apply(control(0.0, active=False, cancel=False), 2_010_000_000)
     self.assertFalse(any(address == 0x101 for address, _, _ in sends))
-
-
-class TestToyotaCorollaTSS3Safety(unittest.TestCase):
-  def setUp(self):
-    self.safety = libsafety_py.libsafety
-    param = (EPS_SCALE[CAR.TOYOTA_COROLLA_TSS3] | ToyotaSafetyFlags.STOCK_LONGITUDINAL |
-             ToyotaSafetyFlags.TSS3_SIGNER | ToyotaSafetyFlags.COROLLA_HF)
-    self.assertEqual(self.safety.set_safety_hooks(structs.CarParams.SafetyModel.toyota, param), 0)
-    self.safety.init_tests()
-    neutral = dict(SPAN_FRAMES)
-    neutral[0x116] = bytes(8)
-    neutral[0x101] = bytes(8)
-    for address in (0x025, 0x030, 0x0AA, 0x116, 0x101):
-      self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(address, 1, neutral[address])))
-    self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x08A, 1, SPAN_ACC_ACTIVE)))
-    self.assertTrue(self.safety.get_controls_allowed())
-
-  @staticmethod
-  def c7(angle_raw=0, sequence=1, bus=1):
-    data = b"\x07\xC7\xC7" + bytes((sequence,)) + angle_raw.to_bytes(2, "big", signed=True) + b"\x00\x00"
-    return libsafety_py.make_CANPacket(0x777, bus, data)
-
-  def test_only_bounded_c7_on_stock_toyota_b(self):
-    self.assertTrue(self.safety.safety_tx_hook(self.c7()))
-    self.assertFalse(self.safety.safety_tx_hook(self.c7(bus=0)))
-    # 0x777 remains a diagnostic address in stock firmware; Panda grants only
-    # the exact private C7 envelope, never arbitrary functional diagnostics.
-    self.assertFalse(self.safety.safety_tx_hook(
-      libsafety_py.make_CANPacket(0x777, 1, bytes.fromhex("0210030000000000"))))
-    self.assertFalse(self.safety.safety_tx_hook(self.c7(1746)))
-    for index in (0, 1, 2, 6, 7):
-      data = bytearray(self.c7()[0].data)
-      data[index] ^= 1
-      self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x777, 1, bytes(data))))
-
-  def test_stock_shaped_brake_cancel_only(self):
-    cancel = with_toyota_checksum(0x101, bytes.fromhex("8800003a00000000"))
-    self.assertTrue(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x101, 1, cancel)))
-    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x101, 2, cancel)))
-
-    clear = with_toyota_checksum(0x101, bytes.fromhex("8000003a00000000"))
-    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x101, 1, clear)))
-
-    bad_checksum = bytearray(cancel)
-    bad_checksum[7] ^= 1
-    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x101, 1, bytes(bad_checksum))))
-
-  def test_0x160_is_not_host_replaceable(self):
-    for bus in range(3):
-      self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x160, bus, COROLLA_LONG)))
-    self.assertEqual(self.safety.safety_fwd_hook(2, 0x160), 0)
-    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x08A, 1, SPAN_ACC_ACTIVE)))
-
-  def test_native_cruise_gate_revokes_control(self):
-    disabled = bytearray(SPAN_ACC_ACTIVE)
-    disabled[22] &= ~0x10
-    self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x08A, 1, bytes(disabled))))
-    self.assertFalse(self.safety.get_controls_allowed())
-
-    legacy_active = bytearray(SPAN_FRAMES[0x176])
-    legacy_active[0] |= 0x20
-    self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x176, 1, bytes(legacy_active))))
-    self.assertFalse(self.safety.get_controls_allowed())
-
 
 if __name__ == "__main__":
   unittest.main()

@@ -151,11 +151,11 @@ class ToyotaTss3RequestTransport:
     self.active = False
     self.arm_pending = False
     self.arm_host_frame: bytes | None = None
+    self.authority_failed = False
     self.last_failure_reason = ""
 
   def authority_unavailable(self) -> bool:
-    acquiring = self.arm_pending or self.inflight is not None or self.ready_host_frame is not None or self.publication_due
-    return self.control_enabled and not self.active and not acquiring
+    return self.control_enabled and self.authority_failed
 
   def _record_failure(self, reason: str) -> None:
     self.last_failure_reason = reason
@@ -176,6 +176,7 @@ class ToyotaTss3RequestTransport:
     self._invalidate_actuation()
 
   def _authority_failure(self, reason: str) -> None:
+    self.authority_failed = True
     self._record_failure(reason)
     self._release()
 
@@ -276,6 +277,13 @@ class ToyotaTss3RequestTransport:
     self.inflight = SignRequest(seq, application, self.control_epoch, generation_started_ns, now_ns)
     self.pending_sends.extend(build_oracle_transport(seq, application))
 
+  def control_generation_due(self, *, enabled: bool, lat_active: bool, long_active: bool) -> bool:
+    """Whether the next update will create a new actuator application."""
+    control_state = (bool(enabled), bool(enabled and lat_active), bool(enabled and long_active))
+    previous_state = (self.control_enabled, self.control_lat_active, self.control_long_active)
+    return bool(enabled and self.can_valid and self.publication_due and
+                (self.inflight is None or control_state != previous_state))
+
   def update_control(self, *, enabled: bool, lat_active: bool, target_angle_deg: float,
                      long_active: bool, accel: float, set_speed_kph: float,
                      now_nanos: int) -> list[CanData]:
@@ -288,6 +296,8 @@ class ToyotaTss3RequestTransport:
       self.control_epoch += 1
       self._invalidate_actuation()
       if enabled and not self.control_enabled:
+        self.authority_failed = False
+        self.last_failure_reason = ""
         self.next_request_sequence = 0
 
     self.control_enabled = enabled

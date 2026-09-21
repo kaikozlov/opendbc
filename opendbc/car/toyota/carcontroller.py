@@ -80,6 +80,10 @@ class CarController(CarControllerBase):
     self.tss3_control_sequence = 0
     self.tss3_host_request_plane = (self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3 and self.CP.safetyConfigs and
                                     bool(self.CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.TSS3_08A_HOST.value))
+    if self.tss3_host_request_plane:
+      # Signed applications are generated at roughly 40 Hz. Two normal
+      # controller ticks conservatively match that application cadence.
+      self.params.STEER_STEP = 2
     self.tss3_request_transport = ToyotaTss3RequestTransport(self.packer) if self.tss3_host_request_plane else None
 
   def observe_tss3_request_plane(self, can_packets, can_valid: bool) -> None:
@@ -97,18 +101,26 @@ class CarController(CarControllerBase):
 
       host_request_plane = self.tss3_host_request_plane
       lateral_command_active = CC.latActive
+      longitudinal_command_active = self.CP.openpilotLongitudinalControl and CC.longActive
       hud_control = CC.hudControl
 
-      # Run TSS3 lateral at the native 100 Hz openpilot control cadence. The
-      # signer transport samples this normal rate-limited target on native
-      # 0x08A arrivals; it does not create a second steering state machine.
+      # Like every angle controller, advance the rate-limited target only when
+      # creating a steering application. The asynchronous signer is merely the
+      # transport for that application and owns no actuator state.
       desired_angle = CC.actuators.steeringAngleDeg + CS.out.steeringAngleOffsetDeg
       measured_angle = CS.out.steeringAngleDeg + CS.out.steeringAngleOffsetDeg
-      if self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:
-        self.last_angle = apply_steer_angle_limits_vm(
-          desired_angle, self.last_angle, CS.out.vEgoRaw, measured_angle,
-          lateral_command_active, self.params, self.VM,
+      create_lateral_application = not host_request_plane or not lateral_command_active or \
+        self.tss3_request_transport.control_generation_due(
+          enabled=CC.enabled,
+          lat_active=CC.latActive,
+          long_active=longitudinal_command_active,
         )
+      if self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:
+        if create_lateral_application:
+          self.last_angle = apply_steer_angle_limits_vm(
+            desired_angle, self.last_angle, CS.out.vEgoRaw, measured_angle,
+            lateral_command_active, self.params, self.VM,
+          )
       else:
         self.last_angle = apply_std_steer_angle_limits(
           desired_angle, self.last_angle, CS.out.vEgoRaw, measured_angle,
@@ -148,14 +160,14 @@ class CarController(CarControllerBase):
       # The signer transport samples this bounded command onto native freshness
       # ticks. Relay-host mode owns both axes.
       output.accel = float(np.clip(CC.actuators.accel, self.params.ACCEL_MIN, self.params.ACCEL_MAX)) \
-        if self.CP.openpilotLongitudinalControl and CC.longActive else 0.0
+        if longitudinal_command_active else 0.0
 
       if self.tss3_request_transport is not None:
         can_sends.extend(self.tss3_request_transport.update_control(
           enabled=CC.enabled,
           lat_active=CC.latActive,
           target_angle_deg=output.steeringAngleDeg,
-          long_active=self.CP.openpilotLongitudinalControl and CC.longActive,
+          long_active=longitudinal_command_active,
           accel=output.accel,
           set_speed_kph=CS.out.vCruise,
           now_nanos=now_nanos,

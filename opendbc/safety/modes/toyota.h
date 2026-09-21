@@ -64,10 +64,7 @@ static bool toyota_tss3_signer = false;
 static bool toyota_corolla_hf = false;
 static bool toyota_tss3_08a_host = false;
 static bool toyota_tss3_08a_replacement_active = false;
-static uint32_t toyota_tss3_08a_last_tx_ts = 0U;
-
-// Fail open if authenticated host replacement traffic disappears for 100 ms.
-const uint32_t TOYOTA_TSS3_08A_REPLACEMENT_TIMEOUT_US = 100000U;
+static uint32_t toyota_tss3_08a_last_publication_ts = 0U;
 static int toyota_dbc_eps_torque_factor = 100;   // conversion factor for STEER_TORQUE_EPS in %: see dbc file
 
 static uint32_t toyota_compute_checksum(const CANPacket_t *msg) {
@@ -84,12 +81,9 @@ static bool toyota_f33_angle_cmd_checks(int desired_angle, bool steer_control_en
   const int desired_angle_previous = desired_angle_last;
   bool conditioner_violation = false;
   if (controls_allowed && steer_control_enabled) {
-    // Exact F33 conditions 7 doubled-domain units per 5 ms foreground call.
-    // This is 7 B6 counts per 10 ms openpilot tick. The 40 Hz request plane can
-    // legitimately sample up to four controller ticks, while the direct
-    // resident-signer sideband samples every tick.
-    const uint32_t delta_frames = SAFETY_MAX(limits.angle_rate_delta_frames, 1U);
-    const int max_conditioned_delta = 7 * delta_frames;
+    // Exact F33 conditions 7 B6 counts per 10 ms. Convert that physical rate
+    // to the configured command frequency, rounding up by one raw count.
+    const int max_conditioned_delta = ((7 * 100) + (int)limits.frequency - 1) / (int)limits.frequency;
     conditioner_violation = safety_max_limit_check(desired_angle,
                                                    desired_angle_previous + max_conditioned_delta,
                                                    desired_angle_previous - max_conditioned_delta);
@@ -158,7 +152,8 @@ static void toyota_rx_hook(const CANPacket_t *msg) {
     if (msg_matches(msg, 0xAAU, tss3_state_bus)) {
       int speed = 0;
       for (uint8_t i = 0U; i < 8U; i += 2U) {
-        speed += (((msg->data[i] & 0x7FU) << 8U) | msg->data[i + 1U]) - 6767;
+        const int wheel_speed = ((msg->data[i] & 0x7FU) << 8U) | msg->data[i + 1U];
+        speed += wheel_speed - 6767;
       }
       vehicle_moving = speed != 0;
       UPDATE_VEHICLE_SPEED(speed / 4.0 * 0.01 * KPH_TO_MS);
@@ -169,8 +164,7 @@ static void toyota_rx_hook(const CANPacket_t *msg) {
     if (toyota_corolla_hf && msg_matches(msg, 0x8AU, tss3_state_bus)) {
       pcm_cruise_check(GET_BIT(msg, 180U));
     }
-    return;
-  }
+  } else {
 
   // get eps motor torque (0.66 factor in dbc)
   if (msg_matches(msg, 0x260U, 0U)) {
@@ -243,6 +237,7 @@ static void toyota_rx_hook(const CANPacket_t *msg) {
 
     UPDATE_VEHICLE_SPEED(speed / 4.0 * 0.01 * KPH_TO_MS);
   }
+  }
 }
 
 static bool toyota_tx_hook(const CANPacket_t *msg) {
@@ -306,16 +301,12 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
       .max_angle = 1745,
       .angle_deg_to_can = 17.451171875F,
       .frequency = 100U,
-      .angle_rate_delta_frames = 1U,
     };
 
     static const AngleSteeringLimits TOYOTA_F33_08A_ANGLE_STEERING_LIMITS = {
       .max_angle = 1745,
       .angle_deg_to_can = 17.451171875F,
-      .frequency = 100U,
-      // A 40 Hz publication can straddle four 100-Hz controller updates.
-      // CarController remains the tighter per-tick authority.
-      .angle_rate_delta_frames = 4U,
+      .frequency = 40U,
     };
 
     // Exact 2026 Camry parameters used by CarController's VehicleModel.
@@ -326,11 +317,13 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
     };
 
     const bool signer_control = (msg->bus == 1U) && (msg->addr == 0x777U);
-    // The EPS resident owns oracle protocol validation. Panda constrains only
-    // its stateless transport envelope; the signed 0x08A remains the safety
-    // boundary for all resulting actuation.
+    // The EPS resident owns oracle sequencing and content validation. Panda
+    // admits only the exact stateless fragment envelope; the signed 0x08A
+    // remains the safety boundary for all resulting actuation.
     const bool oracle_transport = toyota_tss3_08a_host && !toyota_corolla_hf && !msg->fd &&
-                                  (GET_LEN(msg) == 8U) && (msg->bus == 0U) && (msg->addr == 0x777U);
+                                  (GET_LEN(msg) == 8U) && (msg->bus == 0U) && (msg->addr == 0x777U) &&
+                                  (msg->data[0] == 0xC8U) && ((msg->data[1] >> 5U) <= 5U) &&
+                                  ((msg->data[1] & 0x1FU) != 0U) && (msg->data[7] == 0U);
     const bool host_08a = toyota_tss3_08a_host && !toyota_corolla_hf &&
                           (msg->bus == 0U) && (msg->addr == 0x8AU);
     const bool corolla_brake_cancel = toyota_corolla_hf && (msg->bus == 1U) && (msg->addr == 0x101U);
@@ -358,7 +351,7 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
           tx = !toyota_stock_longitudinal;
           if (tx) {
             toyota_tss3_08a_replacement_active = true;
-            toyota_tss3_08a_last_tx_ts = microsecond_timer_get();
+            toyota_tss3_08a_last_publication_ts = microsecond_timer_get();
             desired_angle_last = SAFETY_CLAMP(angle_meas.values[0],
                                               -TOYOTA_F33_08A_ANGLE_STEERING_LIMITS.max_angle,
                                                TOYOTA_F33_08A_ANGLE_STEERING_LIMITS.max_angle);
@@ -416,6 +409,8 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
         } else if (host_lateral_inactive) {
           actuation_valid &= !toyota_f33_angle_cmd_checks(target_angle, false, TOYOTA_F33_08A_ANGLE_STEERING_LIMITS,
                                                            TOYOTA_F33_ANGLE_STEERING_PARAMS);
+        } else {
+          // The application-shape check above rejects every other lateral ID.
         }
 
         int accel_a = (msg->data[8] << 8U) | msg->data[9];
@@ -434,13 +429,11 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
       }
 
       if (application_shape) {
+        // The watchdog covers host publication liveness, independently of the
+        // ordinary actuator checks below. A well-formed rejected application
+        // is blocked, but it does not mean that the host disappeared.
+        toyota_tss3_08a_last_publication_ts = microsecond_timer_get();
         tx = actuation_valid;
-        if (tx) {
-          toyota_tss3_08a_last_tx_ts = microsecond_timer_get();
-        }
-      } else if (toyota_tss3_08a_replacement_active) {
-        // A malformed host publication fails open.
-        toyota_tss3_08a_replacement_active = false;
       }
     }
     if (corolla_brake_cancel || camry_brake_cancel) {
@@ -454,8 +447,7 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
                                (msg->data[5] == 0U) && (msg->data[6] == 0U));
       tx = brake_cancel && checksum_valid && camry_shape;
     }
-    return tx;
-  }
+  } else {
 
   // Check if msg is sent on BUS 0
   // ACCEL: safety check on byte 1-2
@@ -589,16 +581,19 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
       tx = false;
     }
   }
+  }
 
   return tx;
 }
 
 static bool toyota_fwd_hook(int bus_num, int addr) {
+  // Fail open if authenticated host replacement traffic disappears for 100 ms.
+  const uint32_t TOYOTA_TSS3_08A_REPLACEMENT_TIMEOUT_US = 100000U;
   bool block = toyota_tss3_08a_host && !toyota_corolla_hf &&
                (bus_num == 2) && (addr == 0x412);
   if (toyota_tss3_08a_host && !toyota_corolla_hf && toyota_tss3_08a_replacement_active &&
       (bus_num == 2) && (addr == 0x8A)) {
-    const uint32_t elapsed = safety_get_ts_elapsed(microsecond_timer_get(), toyota_tss3_08a_last_tx_ts);
+    const uint32_t elapsed = safety_get_ts_elapsed(microsecond_timer_get(), toyota_tss3_08a_last_publication_ts);
     if (elapsed > TOYOTA_TSS3_08A_REPLACEMENT_TIMEOUT_US) {
       toyota_tss3_08a_replacement_active = false;
     } else {
@@ -662,7 +657,7 @@ static safety_config toyota_init(uint16_t param) {
         {.msg = {{0x025, 1, 32, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
         {.msg = {{0x0AA, 1, 8, 100U, .ignore_checksum = true, .ignore_counter = true}, {0}, {0}}},
         {.msg = {{0x116, 1, 8, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
-        {.msg = {{0x101, 1, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
+        {.msg = {{0x101, 1, 8, 50U, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
         {.msg = {{0x08A, 1, 32, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
       };
       SET_RX_CHECKS(toyota_corolla_hf_rx_checks, ret);
@@ -670,7 +665,7 @@ static safety_config toyota_init(uint16_t param) {
       static const CanMsg toyota_f33_tss3_tx_msgs[] = {
         {0x777, 1, 8, .check_relay = false},
         {0x777, 0, 8, .check_relay = false},
-        {0x08A, 0, 32, .check_relay = false},
+        {0x08A, 0, 32, .check_relay = true, .disable_static_blocking = true},
         {0x101, 2, 8, .check_relay = false},
         // Only relay-correct F33 replaces 0x412. Keep relay collision checking,
         // while the dynamic forwarding hook selects that physical topology.
@@ -681,14 +676,14 @@ static safety_config toyota_init(uint16_t param) {
         {.msg = {{0x025, 1, 32, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
         {.msg = {{0x0AA, 1, 8, 100U, .ignore_checksum = true, .ignore_counter = true}, {0}, {0}}},
         {.msg = {{0x116, 1, 8, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
-        {.msg = {{0x101, 1, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
+        {.msg = {{0x101, 1, 8, 50U, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
         {.msg = {{0x08A, 1, 32, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
       };
       static RxCheck toyota_f33_08a_host_rx_checks[] = {
         {.msg = {{0x025, 0, 32, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
         {.msg = {{0x0AA, 0, 8, 100U, .ignore_checksum = true, .ignore_counter = true}, {0}, {0}}},
         {.msg = {{0x116, 0, 8, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
-        {.msg = {{0x101, 0, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
+        {.msg = {{0x101, 0, 8, 50U, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
         // Native 0x08A remains an FRC-presence and engagement-state input only.
         {.msg = {{0x08A, 2, 32, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
       };

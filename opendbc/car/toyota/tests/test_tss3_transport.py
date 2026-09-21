@@ -102,6 +102,19 @@ class TestToyotaTss3RequestTransport(unittest.TestCase):
     self.assertNotEqual(self.transport.inflight.application, first_application)
     self.assertEqual(self.transport.inflight.application[8:10], (-500).to_bytes(2, "big", signed=True))
 
+  def test_controller_advances_only_for_a_new_application_generation(self):
+    self.assertFalse(self.transport.control_generation_due(enabled=True, lat_active=True, long_active=True))
+
+    self.transport.observe(source_tick(1_000_000_000), True)
+    self.assertTrue(self.transport.control_generation_due(enabled=True, lat_active=True, long_active=True))
+    self.update_control(1_000_000_000)
+    self.assertFalse(self.transport.control_generation_due(enabled=True, lat_active=True, long_active=True))
+
+    # A long-active pedal edge invalidates the stale in-flight application and
+    # creates one new generation from CarController's last published target.
+    self.transport.observe(source_tick(1_010_000_000), True)
+    self.assertTrue(self.transport.control_generation_due(enabled=True, lat_active=True, long_active=False))
+
   def test_control_edge_discards_stale_signer_response(self):
     sequence = self.start_request()
     self.transport.observe(response(1_020_000_000, sequence), True)
@@ -164,6 +177,30 @@ class TestToyotaTss3RequestTransport(unittest.TestCase):
                                                          DOWNSTREAM_BUS + PANDA_REJECTED_OFFSET)), True)
     self.assertEqual(self.transport.last_failure_reason, "handoff_host_frame_rejected")
     self.assertTrue(self.transport.authority_unavailable())
+
+  def test_waiting_for_native_publication_is_not_an_authority_failure(self):
+    # Engagement can arrive just after a native 0x08A tick. Waiting for the
+    # next source publication is ordinary acquisition, not an ACC/EPS fault.
+    self.update_control(1_000_000_000)
+    self.assertFalse(self.transport.active)
+    self.assertFalse(self.transport.arm_pending)
+    self.assertFalse(self.transport.publication_due)
+    self.assertFalse(self.transport.authority_unavailable())
+
+  def test_new_engagement_clears_a_previous_authority_failure(self):
+    self.start_request()
+    sequence = self.transport.inflight.sequence
+    self.transport.observe(response(1_020_000_000, sequence), True)
+    sends = self.update_control(1_020_000_000)
+    host = next(msg for msg in sends if msg.address == NATIVE_08A_ADDR)
+    self.transport.observe(packets(1_021_000_000, CanData(host.address, host.dat,
+                                                         DOWNSTREAM_BUS + PANDA_REJECTED_OFFSET)), True)
+    self.assertTrue(self.transport.authority_unavailable())
+
+    self.update_control(1_022_000_000, enabled=False, lat_active=False, long_active=False)
+    self.update_control(1_023_000_000)
+    self.assertFalse(self.transport.authority_unavailable())
+    self.assertEqual(self.transport.last_failure_reason, "")
 
 
 if __name__ == "__main__":
