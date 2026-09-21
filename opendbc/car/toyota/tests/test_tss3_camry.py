@@ -659,15 +659,6 @@ class TestToyotaCamryTSS3HostOwnershipSafety(unittest.TestCase):
     return libsafety_py.make_CANPacket(0x777, 1, bytes((7, 0xC9, 0xA8, action, 0, 0, 0, 0)))
 
   @staticmethod
-  def sync(reset: int = 0x12345, trip: int = 0x026C):
-    data = bytearray(8)
-    data[0:2] = trip.to_bytes(2, "big")
-    data[2] = (reset >> 12) & 0xFF
-    data[3] = (reset >> 4) & 0xFF
-    data[4] = (reset & 0xF) << 4
-    return libsafety_py.make_CANPacket(0x00F, 0, bytes(data))
-
-  @staticmethod
   def c7(angle_raw: int = 0, sequence: int = 1):
     data = b"\x07\xC7\xC7" + bytes((sequence,)) + angle_raw.to_bytes(2, "big", signed=True) + b"\x00\x00"
     return libsafety_py.make_CANPacket(0x777, 1, data)
@@ -690,11 +681,8 @@ class TestToyotaCamryTSS3HostOwnershipSafety(unittest.TestCase):
   @staticmethod
   def oracle_fragment(fragment: int, seq: int = 1, fill: int = 0):
     header = ((fragment & 0x7) << 5) | (seq & 0x1F)
-    if fragment == 4:
-      data = bytes((header, 0x08, 0x55, 0xC9, 0xA8, seq ^ 0xFF, 0x5A, 0xA5))
-    else:
-      data = bytes((header, fill, fill, fill, fill, fill, fill, fill))
-    return libsafety_py.make_CANPacket(0x1FDC0002, 0, data)
+    data = bytes((0xC8, header, fill, fill, fill, fill, fill, 0))
+    return libsafety_py.make_CANPacket(0x777, 0, data)
 
   def host_frame(self, source: bytes, *, angle_raw: int | None = None, target_id: int | None = None,
                  assist_gain_raw: int | None = None, accel_a: int | None = None,
@@ -748,11 +736,6 @@ class TestToyotaCamryTSS3HostOwnershipSafety(unittest.TestCase):
   def arm(self):
     self.assertTrue(self.safety.safety_tx_hook(self.admin(1)))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
-    # Ownership begins at the next source cadence/freshness token. The host
-    # application does not reuse any source application byte.
-    msg = libsafety_py.make_CANPacket(0x08A, 2, self.last_source)
-    msg[0].fd = 1
-    self.assertTrue(self.safety.safety_rx_hook(msg))
 
   def use_alpha_long_safety(self):
     self.assertEqual(self.safety.set_safety_hooks(structs.CarParams.SafetyModel.toyota, self.ALPHA_LONG_PARAM), 0)
@@ -774,7 +757,6 @@ class TestToyotaCamryTSS3HostOwnershipSafety(unittest.TestCase):
     self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x116, 0, CAMRY_COMMON[0x116])))
     self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x101, 0, CAMRY_COMMON[0x101])))
     self.assertTrue(self.safety.safety_rx_hook(self.source_08a()))
-    self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x00F, 0, bytes(8))))
     self.assertTrue(self.safety.safety_config_valid())
 
   def test_relay_open_native_08a_owns_controls_allowed(self):
@@ -871,31 +853,26 @@ class TestToyotaCamryTSS3HostOwnershipSafety(unittest.TestCase):
     # The resident, not Panda, owns the private transport protocol. Panda admits
     # arbitrary classic eight-byte payloads only on the exact address and bus.
     for payload in (bytes(8), bytes(range(8)), bytes.fromhex("ffffffffffffffff")):
-      self.assertTrue(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x1FDC0002, 0, payload)))
+      self.assertTrue(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x777, 0, payload)))
 
     fd = self.oracle_fragment(0, 13)
     fd[0].fd = 1
     self.assertFalse(self.safety.safety_tx_hook(fd))
-    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x1FDC0002, 1, bytes(self.oracle_fragment(0, 13)[0].data))))
+    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x777, 2, bytes(self.oracle_fragment(0, 13)[0].data))))
     self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x7A1, 0, bytes.fromhex("1028c9c901008a00"))))
 
-  def test_arm_is_fresh_source_ownership_not_id_or_motion_policy(self):
-    self.assertFalse(self.safety.safety_tx_hook(self.admin(1)))
-
-    # Any fresh native request identity can establish relay ownership; the arm
-    # itself carries no steering authority.
-    self.observe_source(target_id=18)
+  def test_arm_is_independent_publication_ownership_not_id_or_motion_policy(self):
+    # Arm carries no steering authority and needs no native generation token.
     self.assertTrue(self.safety.safety_tx_hook(self.admin(1)))
     self.assertTrue(self.safety.safety_tx_hook(self.admin(0)))
 
-    self.observe_source(target_id=11)
     moving = libsafety_py.make_CANPacket(0x0AA, 0, bytes.fromhex("1c001c001c001c00"))
     self.assertTrue(self.safety.safety_rx_hook(moving))
     self.assertTrue(self.safety.safety_tx_hook(self.admin(1)))
 
     self.assertTrue(self.safety.safety_tx_hook(self.admin(0)))
     self.safety.set_timer(100_001)
-    self.assertFalse(self.safety.safety_tx_hook(self.admin(1)))
+    self.assertTrue(self.safety.safety_tx_hook(self.admin(1)))
 
   def test_first_host_frame_uses_measured_steering_baseline(self):
     # Native request angle is not an application input. Arm seeds the normal
@@ -945,53 +922,39 @@ class TestToyotaCamryTSS3HostOwnershipSafety(unittest.TestCase):
     self.assertEqual(self.safety.get_desired_angle_last(), 0)
 
     # Like every other Panda-controlled angle car, a safety reject does not
-    # relinquish message ownership. The freshness generation is consumed and the
-    # next ordinary bounded command recovers from the measured-angle baseline.
+    # relinquish message ownership. The next ordinary bounded command recovers
+    # from the measured-angle baseline.
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
     next_source = self.observe_source(target_id=11, angle_raw=-522, b26=0x22)
     self.assertTrue(self.safety.safety_tx_hook(
       self.host_frame(next_source, angle_raw=7, mutate_mac=True)))
     self.assertEqual(self.safety.get_desired_angle_last(), 7)
 
-  def test_host_must_consume_native_generations_oldest_first(self):
+  def test_host_sequence_and_fv4_are_independent_of_native_generations(self):
     handoff = self.observe_source(target_id=0, angle_raw=-110, b26=0x1F, semantic=0x5F, fv4=7)
     self.arm()
     self.assertTrue(self.safety.safety_tx_hook(self.host_frame(handoff)))
 
     oldest = self.observe_source(target_id=0, angle_raw=-100, b26=0x20, semantic=0x60, fv4=8)
-    middle = self.observe_source(target_id=0, angle_raw=-95, b26=0x21, semantic=0x61, fv4=9)
     newest = self.observe_source(target_id=0, angle_raw=-90, b26=0x22, semantic=0x62, fv4=10)
     self.safety.set_controls_allowed(True)
     self.safety.set_desired_angle_last(-110)
 
-    # A newer freshness generation cannot skip older unconsumed generations.
+    # The EPS resident owns freshness. Panda validates application actuation,
+    # not correspondence with FRC B26/FV4 values or arrival order.
     newest_host = self.host_frame(newest, angle_raw=-85, target_id=11, assist_gain_raw=100, mutate_mac=True)
-    self.assertFalse(self.safety.safety_tx_hook(newest_host))
-    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
+    self.assertTrue(self.safety.safety_tx_hook(newest_host))
+    self.assertTrue(self.safety.safety_tx_hook(
+      self.host_frame(oldest, angle_raw=-82, target_id=11, assist_gain_raw=100, mutate_mac=True)))
 
-    self.setUp()
-    handoff = self.observe_source(target_id=0, angle_raw=-110, b26=0x1F, semantic=0x5F, fv4=7)
-    self.arm()
-    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(handoff)))
-    oldest = self.observe_source(target_id=0, angle_raw=-100, b26=0x20, semantic=0x60, fv4=8)
-    middle = self.observe_source(target_id=0, angle_raw=-95, b26=0x21, semantic=0x61, fv4=9)
-    newest = self.observe_source(target_id=0, angle_raw=-90, b26=0x22, semantic=0x62, fv4=10)
-    self.safety.set_controls_allowed(True)
-    self.safety.set_desired_angle_last(-110)
-    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(oldest, angle_raw=-108, target_id=11, assist_gain_raw=100, mutate_mac=True)))
-    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(middle, angle_raw=-106, target_id=11, assist_gain_raw=100, mutate_mac=True)))
-    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(newest, angle_raw=-104, target_id=11, assist_gain_raw=100, mutate_mac=True)))
-
-  def test_host_generation_token_is_single_use(self):
+  def test_panda_does_not_reimplement_secoc_replay_state(self):
     source = self.observe_source(target_id=18, b26=0x12, semantic=0x51)
     self.arm()
     host = self.host_frame(source)
     self.safety.set_controls_allowed(False)
     self.assertTrue(self.safety.safety_tx_hook(host))
-
-    # A freshness generation is consumed once. Replay is rejected and fails open.
-    self.assertFalse(self.safety.safety_tx_hook(host))
-    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
+    self.assertTrue(self.safety.safety_tx_hook(host))
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
 
   def test_native_request_identity_is_not_host_policy(self):
     handoff = self.observe_source(target_id=0, b26=0x20)
@@ -1051,7 +1014,8 @@ class TestToyotaCamryTSS3HostOwnershipSafety(unittest.TestCase):
 
     # Any field outside the explicit host contract is rejected.
     next_source = self.observe_source(target_id=11, angle_raw=105, b26=0x23, semantic=0x62, fv4=10)
-    bad = bytearray(self.host_frame(next_source, angle_raw=110, mutate_mac=True)[0].data)[:32]
+    next_host = self.host_frame(next_source, angle_raw=110, mutate_mac=True)
+    bad = bytearray(bytes(next_host[0].data)[:32])
     bad[7] ^= 1
     bad_msg = libsafety_py.make_CANPacket(0x08A, 0, bytes(bad))
     bad_msg[0].fd = 1
@@ -1193,7 +1157,8 @@ class TestToyotaCamryTSS3HostOwnershipSafety(unittest.TestCase):
         self.assertTrue(self.safety.safety_tx_hook(self.host_frame(handoff)))
         self.safety.set_controls_allowed(True)
         source = self.observe_source(target_id=0, b26=0x21)
-        bad = bytearray(self.host_frame(source, accel_a=-500, accel_b=-500, mutate_mac=True)[0].data)[:32]
+        host = self.host_frame(source, accel_a=-500, accel_b=-500, mutate_mac=True)
+        bad = bytearray(bytes(host[0].data)[:32])
         bad[byte_index] ^= bit_mask
         bad_msg = libsafety_py.make_CANPacket(0x08A, 0, bytes(bad))
         bad_msg[0].fd = 1
@@ -1218,48 +1183,38 @@ class TestToyotaCamryTSS3HostOwnershipSafety(unittest.TestCase):
     self.safety.set_desired_angle_last(100)
     self.assertFalse(self.safety.safety_tx_hook(self.host_frame(source)))
 
-  def test_latest_00f_cannot_veto_queued_08a_freshness_generation(self):
-    old_reset = 0x12345
-    new_reset = old_reset + 1
-    old_fv4 = ((2 & 0x3) << 2) | (old_reset & 0x3)
-    handoff = self.observe_source(target_id=11, angle_raw=100, b26=0x2F, fv4=old_fv4)
+  def test_00f_is_not_a_request_plane_input(self):
+    handoff = self.observe_source(target_id=11, angle_raw=100, b26=0x2F, fv4=8)
     self.arm()
     self.assertTrue(self.safety.safety_tx_hook(self.host_frame(handoff)))
-    source = self.observe_source(target_id=11, angle_raw=100, b26=0x30, fv4=old_fv4)
-
-    # 0x00F advances first. The already queued native FV4/B26 token remains valid.
-    self.assertTrue(self.safety.safety_rx_hook(self.sync(new_reset)))
+    self.assertTrue(self.safety.safety_rx_hook(libsafety_py.make_CANPacket(0x00F, 0, bytes(8))))
     self.safety.set_controls_allowed(True)
     self.safety.set_desired_angle_last(100)
-    replacement = self.host_frame(source, angle_raw=105, mutate_mac=True)
+    replacement = self.host_frame(handoff, angle_raw=105, mutate_mac=True)
     self.assertTrue(self.safety.safety_tx_hook(replacement))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
 
-    new_fv4 = ((3 & 0x3) << 2) | (new_reset & 0x3)
-    next_source = self.observe_source(target_id=11, angle_raw=105, b26=0x31, fv4=new_fv4)
-    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(next_source, angle_raw=110, mutate_mac=True)))
-    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
-
-  def test_host_frame_preserves_exact_fv4(self):
-    handoff = self.observe_source(target_id=11, angle_raw=100, b26=0x11, fv4=8)
+  def test_panda_accepts_eps_owned_fv4(self):
+    handoff = self.observe_source(target_id=0, angle_raw=0, b26=0x11, fv4=8)
     self.arm()
     self.assertTrue(self.safety.safety_tx_hook(self.host_frame(handoff)))
-    source = self.observe_source(target_id=11, angle_raw=100, b26=0x12, fv4=9)
-    self.safety.set_controls_allowed(True)
-    self.safety.set_desired_angle_last(100)
-    data = bytearray(self.host_frame(source, angle_raw=101, mutate_mac=True)[0].data)[:32]
+    source = self.observe_source(target_id=0, angle_raw=0, b26=0x12, fv4=9)
+    self.safety.set_controls_allowed(False)
+    host = self.host_frame(source, mutate_mac=True)
+    data = bytearray(bytes(host[0].data)[:32])
     data[28] ^= 0x10  # change FV4, not merely MAC28
     msg = libsafety_py.make_CANPacket(0x08A, 0, bytes(data))
     msg[0].fd = 1
-    self.assertFalse(self.safety.safety_tx_hook(msg))
+    self.assertTrue(self.safety.safety_tx_hook(msg))
 
-  def test_generation_queue_allows_oracle_reply_lag(self):
+  def test_native_arrival_during_signing_does_not_create_a_panda_queue(self):
     handoff = self.observe_source(target_id=11, angle_raw=90, b26=0x1F, semantic=0x6F)
     self.arm()
     self.assertTrue(self.safety.safety_tx_hook(self.host_frame(handoff)))
 
     source0 = self.observe_source(target_id=11, angle_raw=100, b26=0x20, semantic=0x70)
-    # A later native generation can arrive while command5 is signing source0.
+    # A native FRC publication may arrive while the EPS signs the host frame;
+    # it has no bearing on Panda's host application check.
     self.observe_source(target_id=18, angle_raw=200, b26=0x21, semantic=0x71)
     self.safety.set_controls_allowed(True)
     self.safety.set_desired_angle_last(90)
@@ -1279,7 +1234,6 @@ class TestToyotaCamryTSS3HostOwnershipSafety(unittest.TestCase):
     self.assertFalse(self.safety.safety_tx_hook(classic))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
 
-    self.observe_source(target_id=0, b26=0x13)
     self.assertTrue(self.safety.safety_tx_hook(self.admin(1)))
     fd_admin = self.admin(0)
     fd_admin[0].fd = 1

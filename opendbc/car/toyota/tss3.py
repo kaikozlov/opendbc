@@ -39,9 +39,9 @@ def build_host_application(*, lat_active: bool, target_angle_raw: int,
                            set_speed_kph: float, request_sequence: int) -> bytes:
   """Build the complete comma-owned TSS3 0x08A application.
 
-  FRC 0x08A supplies only the publication/freshness generation. It is never an
-  application template. The constants below are the dominant complete Camry
-  active and inactive envelopes measured across 44,613 native publications.
+  The FRC frame is never an application template or freshness source. The
+  constants below are the dominant complete Camry active and inactive
+  envelopes measured across 44,613 native publications.
   """
   if not -(1 << 15) <= target_angle_raw < (1 << 15):
     raise ValueError("target angle must fit signed16")
