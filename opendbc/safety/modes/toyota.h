@@ -72,8 +72,6 @@ static uint8_t toyota_tss3_08a_generation_count = 0U;
 static bool toyota_tss3_08a_native_seen = false;
 static uint32_t toyota_tss3_08a_native_last_rx_ts = 0U;
 static uint32_t toyota_tss3_08a_last_tx_ts = 0U;
-static uint8_t toyota_tss3_08a_oracle_seq = 0U;
-static uint8_t toyota_tss3_08a_oracle_next_fragment = 0U;
 
 // Native 0x08A is ~40 Hz with observed ~20-34 ms source intervals. It supplies
 // only a bounded cadence/freshness token; comma owns every application byte.
@@ -359,8 +357,11 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
     };
 
     const bool signer_control = (msg->bus == 1U) && (msg->addr == 0x777U);
-    const bool oracle_transport = toyota_tss3_08a_host && !toyota_corolla_hf &&
-                                  (msg->bus == 0U) && (msg->addr == 0x1FDC0002U);
+    // The EPS resident owns oracle protocol validation. Panda constrains only
+    // its stateless transport envelope; the signed 0x08A remains the safety
+    // boundary for all resulting actuation.
+    const bool oracle_transport = toyota_tss3_08a_host && !toyota_corolla_hf && !msg->fd &&
+                                  (GET_LEN(msg) == 8U) && (msg->bus == 0U) && (msg->addr == 0x1FDC0002U);
     const bool host_08a = toyota_tss3_08a_host && !toyota_corolla_hf &&
                           (msg->bus == 0U) && (msg->addr == 0x8AU);
     const bool corolla_brake_cancel = toyota_corolla_hf && (msg->bus == 1U) && (msg->addr == 0x101U);
@@ -418,35 +419,6 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
                !toyota_f33_angle_cmd_checks(target_angle, steer_control_enabled,
                                             TOYOTA_F33_ANGLE_STEERING_LIMITS, TOYOTA_F33_ANGLE_STEERING_PARAMS);
         }
-      }
-    }
-    if (oracle_transport) {
-      const uint8_t header = msg->data[0];
-      const uint8_t fragment = header >> 5U;
-      const uint8_t seq = header & 0x1FU;
-      const bool base_valid = !msg->fd && (GET_LEN(msg) == 8U) && (seq != 0U) && (fragment <= 4U);
-      tx = false;
-
-      if (base_valid && (fragment == 0U)) {
-        // Fragment zero always restarts the bounded transaction. A later source
-        // generation therefore recovers naturally from a partial host batch.
-        toyota_tss3_08a_oracle_seq = seq;
-        toyota_tss3_08a_oracle_next_fragment = 1U;
-        tx = true;
-      } else if (base_valid && (seq == toyota_tss3_08a_oracle_seq) &&
-                 (fragment == toyota_tss3_08a_oracle_next_fragment)) {
-        if (fragment == 4U) {
-          const uint8_t inverted_seq = (uint8_t)(seq ^ 0xFFU);
-          tx = (msg->data[3] == 0xC9U) && (msg->data[4] == 0xA8U) &&
-               (msg->data[5] == inverted_seq) &&
-               (msg->data[6] == 0x5AU) && (msg->data[7] == 0xA5U);
-          toyota_tss3_08a_oracle_next_fragment = 0U;
-        } else {
-          toyota_tss3_08a_oracle_next_fragment++;
-          tx = true;
-        }
-      } else {
-        toyota_tss3_08a_oracle_next_fragment = 0U;
       }
     }
     if (host_08a) {
@@ -726,8 +698,6 @@ static safety_config toyota_init(uint16_t param) {
   toyota_tss3_08a_native_last_rx_ts = 0U;
   toyota_tss3_08a_generation_head = 0U;
   toyota_tss3_08a_generation_count = 0U;
-  toyota_tss3_08a_oracle_seq = 0U;
-  toyota_tss3_08a_oracle_next_fragment = 0U;
   toyota_dbc_eps_torque_factor = param & TOYOTA_EPS_FACTOR;
 
   safety_config ret;

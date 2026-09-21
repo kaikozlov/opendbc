@@ -867,33 +867,16 @@ class TestToyotaCamryTSS3HostOwnershipSafety(unittest.TestCase):
     self.assertFalse(self.safety.safety_tx_hook(
       libsafety_py.make_CANPacket(0x412, 2, bytes.fromhex("1400004401ee9307"))))
 
-  def test_oracle_transport_is_one_ordered_raw_classic_transaction(self):
-    # Continuations are never valid without a fresh fragment zero.
-    self.assertFalse(self.safety.safety_tx_hook(self.oracle_fragment(1, 9)))
+  def test_oracle_transport_is_a_stateless_raw_classic_channel(self):
+    # The resident, not Panda, owns the private transport protocol. Panda admits
+    # arbitrary classic eight-byte payloads only on the exact address and bus.
+    for payload in (bytes(8), bytes(range(8)), bytes.fromhex("ffffffffffffffff")):
+      self.assertTrue(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x1FDC0002, 0, payload)))
 
-    for fragment in range(5):
-      self.assertTrue(self.safety.safety_tx_hook(self.oracle_fragment(fragment, 9, fill=fragment)))
-
-    # Completion closes the transaction; only a new fragment zero can restart it.
-    self.assertFalse(self.safety.safety_tx_hook(self.oracle_fragment(1, 9)))
-    self.assertTrue(self.safety.safety_tx_hook(self.oracle_fragment(0, 10)))
-    self.assertFalse(self.safety.safety_tx_hook(self.oracle_fragment(1, 11)))
-
-    # Fragment zero is an explicit restart after any partial/malformed sequence.
-    self.assertTrue(self.safety.safety_tx_hook(self.oracle_fragment(0, 11)))
-    for fragment in range(1, 4):
-      self.assertTrue(self.safety.safety_tx_hook(self.oracle_fragment(fragment, 11, fill=fragment)))
-    bad_tail = bytearray(self.oracle_fragment(4, 11)[0].data)
-    bad_tail[6] ^= 1
-    self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x1FDC0002, 0, bytes(bad_tail))))
-    self.assertTrue(self.safety.safety_tx_hook(self.oracle_fragment(0, 12)))
-
-    # No FD form, wrong bus, zero sequence, or legacy diagnostic carrier is admitted.
     fd = self.oracle_fragment(0, 13)
     fd[0].fd = 1
     self.assertFalse(self.safety.safety_tx_hook(fd))
     self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x1FDC0002, 1, bytes(self.oracle_fragment(0, 13)[0].data))))
-    self.assertFalse(self.safety.safety_tx_hook(self.oracle_fragment(0, 0)))
     self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x7A1, 0, bytes.fromhex("1028c9c901008a00"))))
 
   def test_arm_is_fresh_source_ownership_not_id_or_motion_policy(self):
