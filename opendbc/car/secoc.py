@@ -4,32 +4,34 @@ from Crypto.Hash import CMAC
 from Crypto.Cipher import AES
 
 
-def add_mac(key, trip_cnt, reset_cnt, msg_cnt, msg):
-  # TODO: clean up conversion to and from hex
-
-  addr, payload, bus = msg
+def build_freshness_value(trip_cnt: int, reset_cnt: int, msg_cnt: int) -> bytes:
+  """Build Toyota's 48-bit SecOC freshness value."""
   reset_flag = reset_cnt & 0b11
-  msg_cnt_flag = msg_cnt & 0b11
+  return struct.pack('>HI', trip_cnt, (reset_cnt << 12) | ((msg_cnt & 0xff) << 4) | (reset_flag << 2))
+
+
+def build_authentication_data(addr: int, payload: bytes, trip_cnt: int, reset_cnt: int, msg_cnt: int) -> bytes:
+  """Build the complete address + application + freshness CMAC domain."""
+  return struct.pack('>H', addr) + payload + build_freshness_value(trip_cnt, reset_cnt, msg_cnt)
+
+
+def attach_authenticator(payload: bytes, reset_cnt: int, msg_cnt: int, cmac: bytes) -> bytes:
+  """Append freshness flags and the high 28 bits of a SecOC CMAC."""
+  if len(cmac) < 4:
+    raise ValueError("SecOC CMAC must contain at least 32 bits")
+
+  freshness_flags = ((msg_cnt & 0b11) << 2) | (reset_cnt & 0b11)
+  authenticator = int.from_bytes(cmac[:4], 'big') >> 4
+  return payload + ((freshness_flags << 28) | authenticator).to_bytes(4, 'big')
+
+
+def add_mac(key, trip_cnt, reset_cnt, msg_cnt, msg):
+  addr, payload, bus = msg
   payload = payload[:4]
 
-  # Step 1: Build Freshness Value (48 bits)
-  # [Trip Counter (16 bit)][[Reset Counter (20 bit)][Message Counter (8 bit)][Reset Flag (2 bit)][Padding (2 bit)]
-  freshness_value = struct.pack('>HI', trip_cnt, (reset_cnt << 12) | ((msg_cnt & 0xff) << 4) | (reset_flag << 2))
-
-  # Step 2: Build data to authenticate (96 bits)
-  # [Message ID (16 bits)][Payload (32 bits)][Freshness Value (48 bits)]
-  to_auth = struct.pack('>H', addr) + payload + freshness_value
-
-  # Step 3: Calculate CMAC (28 bit)
   cmac = CMAC.new(key, ciphermod=AES)
-  cmac.update(to_auth)
-  mac = cmac.digest().hex()[:7] # truncated MAC
-
-  # Step 4: Build message
-  # [Payload (32 bit)][Message Counter Flag (2 bit)][Reset Flag (2 bit)][Authenticator (28 bit)]
-  msg_cnt_rst_flag = struct.pack('>B', (msg_cnt_flag << 2) | reset_flag).hex()[1]
-  msg = payload.hex() + msg_cnt_rst_flag + mac
-  payload = bytes.fromhex(msg)
+  cmac.update(build_authentication_data(addr, payload, trip_cnt, reset_cnt, msg_cnt))
+  payload = attach_authenticator(payload, reset_cnt, msg_cnt, cmac.digest())
 
   return (addr, payload, bus)
 
