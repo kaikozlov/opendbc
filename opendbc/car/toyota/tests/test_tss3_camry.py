@@ -95,7 +95,8 @@ def update_state(ci: CarInterface, moving: bool = False, counter_offset: int = 0
 
 
 def control(angle: float, active: bool = True, accel: float = 0.0, long_active: bool = False, enabled: bool = True,
-            cancel: bool = False, left_lane: bool = False, right_lane: bool = False, steer_alert: bool = False):
+            cancel: bool = False, left_lane: bool = False, right_lane: bool = False, steer_alert: bool = False,
+            lead_distance_bars: int = 0):
   cc = structs.CarControl()
   cc.enabled = enabled
   cc.latActive = enabled and active
@@ -105,6 +106,7 @@ def control(angle: float, active: bool = True, accel: float = 0.0, long_active: 
   cc.actuators.accel = accel
   cc.hudControl.leftLaneVisible = left_lane
   cc.hudControl.rightLaneVisible = right_lane
+  cc.hudControl.leadDistanceBars = lead_distance_bars
   if steer_alert:
     cc.hudControl.visualAlert = structs.CarControl.HUDControl.VisualAlert.steerRequired
   return cc.as_reader()
@@ -481,7 +483,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     _, sends = ci.apply(control(1.0, left_lane=True, right_lane=True), 2_220_000_000)
     self.assertIn((0x412, bytes.fromhex("1400004401ee9307"), 0), sends)
 
-  def test_gap_state_and_lta_use_normal_button_events(self):
+  def test_lta_uses_normal_button_events(self):
     ci = CarInterface(self.CP)
     state = update_state(ci, hud=bytes.fromhex("1200002202ee9307"))
     self.assertEqual(list(state.buttonEvents), [])
@@ -490,10 +492,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     distance[5] = (distance[5] & 0x1F) | (2 << 5)
     state = update_state(ci, counter_offset=20, hud=bytes.fromhex("1200002202ee9307"),
                          cruise_display=bytes(distance), iterations=1)
-    self.assertEqual([(event.type, event.pressed) for event in state.buttonEvents], [
-      (structs.CarState.ButtonEvent.Type.gapAdjustCruise, True),
-      (structs.CarState.ButtonEvent.Type.gapAdjustCruise, False),
-    ])
+    self.assertEqual(list(state.buttonEvents), [])
 
     state = update_state(ci, counter_offset=21, hud=bytes.fromhex("1000002200ee9307"),
                          cruise_display=bytes(distance), iterations=1)
@@ -501,6 +500,65 @@ class TestToyotaCamryTSS3(unittest.TestCase):
       (structs.CarState.ButtonEvent.Type.lkas, True),
       (structs.CarState.ButtonEvent.Type.lkas, False),
     ])
+
+  def test_relay_gap_policy_maps_four_absolute_positions_to_three_personalities(self):
+    cp = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, relay_fingerprint(), [], True, False, False)
+    ci = CarInterface(cp)
+    distance = bytearray(CAMRY_COMMON[0x251])
+
+    def set_distance(state: int, counter: int):
+      distance[5] = (distance[5] & 0x1F) | (state << 5)
+      return update_state(ci, bus=0, source_bus=2, counter_offset=counter,
+                          cruise_display=bytes(distance), hud=CAMRY_HUD, iterations=1)
+
+    def gap_events(state):
+      return [(event.type, event.pressed) for event in state.buttonEvents
+              if event.type == structs.CarState.ButtonEvent.Type.gapAdjustCruise]
+
+    # Position 1 maps to relaxed. Starting from aggressive requires one normal
+    # decrement/wrap event, then waits for standard CarControl feedback.
+    ci.apply(control(0.0, lead_distance_bars=1), 2_000_000_000)
+    self.assertEqual(gap_events(set_distance(1, 20)), [
+      (structs.CarState.ButtonEvent.Type.gapAdjustCruise, True),
+      (structs.CarState.ButtonEvent.Type.gapAdjustCruise, False),
+    ])
+    self.assertEqual(gap_events(set_distance(1, 21)), [])
+    ci.apply(control(0.0, lead_distance_bars=3), 2_010_000_000)
+    self.assertEqual(gap_events(set_distance(1, 22)), [])
+
+    # Positions 2 and 3 both map to standard, so the middle Toyota transition
+    # cannot advance openpilot and create a four-state/three-state phase drift.
+    self.assertEqual(len(gap_events(set_distance(2, 23))), 2)
+    ci.apply(control(0.0, lead_distance_bars=2), 2_020_000_000)
+    self.assertEqual(gap_events(set_distance(3, 24)), [])
+
+    self.assertEqual(len(gap_events(set_distance(4, 25))), 2)
+    ci.apply(control(0.0, lead_distance_bars=1), 2_030_000_000)
+    self.assertEqual(len(gap_events(set_distance(1, 26))), 2)
+
+  def test_relay_gap_policy_converges_a_two_step_absolute_correction(self):
+    cp = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, relay_fingerprint(), [], True, False, False)
+    ci = CarInterface(cp)
+    distance = bytearray(CAMRY_COMMON[0x251])
+    distance[5] = (distance[5] & 0x1F) | (4 << 5)  # aggressive
+
+    ci.apply(control(0.0, lead_distance_bars=3), 2_000_000_000)  # relaxed
+    first = update_state(ci, bus=0, source_bus=2, counter_offset=20,
+                         cruise_display=bytes(distance), hud=CAMRY_HUD, iterations=1)
+    self.assertEqual(len(first.buttonEvents), 2)
+    # Do not emit the second step until the first personality change appears in
+    # the ordinary leadDistanceBars feedback.
+    waiting = update_state(ci, bus=0, source_bus=2, counter_offset=21,
+                           cruise_display=bytes(distance), hud=CAMRY_HUD, iterations=1)
+    self.assertEqual(list(waiting.buttonEvents), [])
+    ci.apply(control(0.0, lead_distance_bars=2), 2_010_000_000)  # standard
+    second = update_state(ci, bus=0, source_bus=2, counter_offset=22,
+                          cruise_display=bytes(distance), hud=CAMRY_HUD, iterations=1)
+    self.assertEqual(len(second.buttonEvents), 2)
+    ci.apply(control(0.0, lead_distance_bars=1), 2_020_000_000)  # aggressive
+    settled = update_state(ci, bus=0, source_bus=2, counter_offset=23,
+                           cruise_display=bytes(distance), hud=CAMRY_HUD, iterations=1)
+    self.assertEqual(list(settled.buttonEvents), [])
 
   def test_reengagement_does_not_reuse_the_residents_consumed_sequence(self):
     ci = CarInterface(self.CP)

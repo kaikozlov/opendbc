@@ -137,14 +137,10 @@ class CarState(CarStateBase):
       4: ButtonType.mainCruise,
     })
 
-    # TSS3 publishes the selected following distance as absolute state. A
-    # selection change is the target-native observation of one ordinary gap
-    # button press; expose it through openpilot's existing button contract.
+    # Retain Toyota's absolute four-position selector for the Toyota-local
+    # personality policy in CarInterface.
     distance_state = int(source_cp.vl["TSS3_CRUISE_DISPLAY"]["SET_VEHICLE_INTERVAL_TIME"])
     if distance_state in range(1, 5):
-      if self.tss3_distance_state is not None and distance_state != self.tss3_distance_state:
-        button_events.extend(create_button_events(1, 0, {1: ButtonType.gapAdjustCruise}) +
-                             create_button_events(0, 1, {1: ButtonType.gapAdjustCruise}))
       self.tss3_distance_state = distance_state
 
     # The canonical HUD carrier distinguishes LTA off (0x10) from enabled

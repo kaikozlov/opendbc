@@ -1,4 +1,4 @@
-from opendbc.car import Bus, structs, get_safety_config, uds
+from opendbc.car import Bus, create_button_events, structs, get_safety_config, uds
 from opendbc.car.toyota.carstate import CarState
 from opendbc.car.toyota.carcontroller import CarController
 from opendbc.car.toyota.radar_interface import RadarInterface
@@ -8,6 +8,17 @@ from opendbc.car.disable_ecu import disable_ecu
 from opendbc.car.interfaces import CarInterfaceBase
 
 SteerControlType = structs.CarParams.SteerControlType
+ButtonType = structs.CarState.ButtonEvent.Type
+
+# Toyota exposes four absolute following-distance positions while openpilot
+# has three longitudinal personalities. Positions 2 and 3 intentionally share
+# standard; this is the old 4/3/2/1-bar policy expressed entirely in Toyota.
+TSS3_DISTANCE_TO_PERSONALITY_BARS = {
+  1: 3,  # relaxed
+  2: 2,  # standard
+  3: 2,  # standard
+  4: 1,  # aggressive
+}
 
 
 class CarInterface(CarInterfaceBase):
@@ -17,6 +28,31 @@ class CarInterface(CarInterfaceBase):
 
   DRIVABLE_GEARS = (structs.CarState.GearShifter.sport,)
 
+  def __init__(self, CP):
+    super().__init__(CP)
+    self.tss3_personality_bars = 0
+    self.tss3_gap_adjust_waiting_bars = 0
+
+  def _update_tss3_gap_policy(self, ret: structs.CarState) -> None:
+    current_bars = self.tss3_personality_bars
+    desired_bars = TSS3_DISTANCE_TO_PERSONALITY_BARS.get(self.CS.tss3_distance_state)
+    if current_bars not in range(1, 4) or desired_bars is None:
+      return
+
+    # Wait for CarControl's standard leadDistanceBars feedback before emitting
+    # another step. This lets a two-step absolute correction converge without
+    # racing selfdrived's one-step gap-button handling.
+    if self.tss3_gap_adjust_waiting_bars:
+      if current_bars == self.tss3_gap_adjust_waiting_bars:
+        return
+      self.tss3_gap_adjust_waiting_bars = 0
+
+    if current_bars != desired_bars:
+      gap_events = (create_button_events(1, 0, {1: ButtonType.gapAdjustCruise}) +
+                    create_button_events(0, 1, {1: ButtonType.gapAdjustCruise}))
+      ret.buttonEvents = list(ret.buttonEvents) + gap_events
+      self.tss3_gap_adjust_waiting_bars = current_bars
+
   def update(self, can_packets):
     ret = super().update(can_packets)
     if self.CC.tss3_request_transport is not None:
@@ -24,7 +60,13 @@ class CarInterface(CarInterfaceBase):
       ret.steerFaultTemporary = ret.steerFaultTemporary or self.CC.tss3_request_transport.authority_unavailable()
       if self.CP.openpilotLongitudinalControl:
         ret.accFaulted = ret.accFaulted or self.CC.tss3_request_transport.authority_unavailable()
+        self._update_tss3_gap_policy(ret)
     return ret
+
+  def apply(self, c: structs.CarControl, now_nanos: int | None = None):
+    if self.CC.tss3_request_transport is not None and c.hudControl.leadDistanceBars in range(1, 4):
+      self.tss3_personality_bars = int(c.hudControl.leadDistanceBars)
+    return super().apply(c, now_nanos)
 
   @staticmethod
   def get_pid_accel_limits(CP, current_speed, cruise_speed):
