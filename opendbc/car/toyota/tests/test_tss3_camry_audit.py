@@ -64,8 +64,8 @@ class TestCamryEvidenceAudit(unittest.TestCase):
           state = update_state(ci)
         self.assertFalse(state.cruiseState.nonAdaptive)
 
-  def test_planner_limits_match_the_camry_actuator_envelope(self):
-    self.assertEqual(CarInterface.get_pid_accel_limits(self.cp, 15.0, 25.0), (-1.5, 1.3))
+  def test_planner_uses_standard_direct_acceleration_limits(self):
+    self.assertEqual(CarInterface.get_pid_accel_limits(self.cp, 15.0, 25.0), (-3.5, 2.0))
 
   def test_lifecycle_qualified_camry_radar_does_not_enable_other_tss3_variants(self):
     self.assertFalse(self.cp.radarUnavailable)

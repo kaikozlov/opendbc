@@ -286,11 +286,6 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
     .min_accel = -3500,  // -3.5 m/s2
   };
 
-  const LongitudinalLimits TOYOTA_F33_LONG_LIMITS = {
-    .max_accel = 1300,   // 1.3 m/s2
-    .min_accel = -1500,  // -1.5 m/s2
-  };
-
   bool tx = true;
 
   if (toyota_tss3_signer) {
@@ -431,7 +426,10 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
                                        (accel_a == accel_b);
         application_shape &= !toyota_stock_longitudinal && host_longitudinal;
         if (host_longitudinal) {
-          actuation_valid &= !longitudinal_accel_checks(accel_a, TOYOTA_F33_LONG_LIMITS);
+          // F33 0x08A is a direct desired-acceleration interface. Apply the
+          // same standard Toyota/openpilot envelope as other direct-accel
+          // ports instead of the superseded camera-0x160 experiment's limits.
+          actuation_valid &= !longitudinal_accel_checks(accel_a, TOYOTA_LONG_LIMITS);
         }
       }
 

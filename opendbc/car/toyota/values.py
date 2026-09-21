@@ -60,8 +60,14 @@ class CarControllerParams:
     if CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:
       self.ANGLE_LIMITS = self.F33_ANGLE_LIMITS
 
-    if CP.flags & ToyotaFlags.TSS3:
-      self.ACCEL_MAX = 1.3 if CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3 else 1.5
+    if CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:
+      # Exact F33 host ownership controls the chassis-facing 0x08A desired-
+      # acceleration request directly. Use openpilot's standard direct-accel
+      # envelope; the narrower values belonged to the superseded 0x160 path.
+      self.ACCEL_MAX = 2.0
+      self.ACCEL_MIN = -3.5
+    elif CP.flags & ToyotaFlags.TSS3:
+      self.ACCEL_MAX = 1.5
       self.ACCEL_MIN = -1.5
     else:
       self.ACCEL_MAX = 2.0 if CP.flags & ToyotaFlags.RAISED_ACCEL_LIMIT else 1.5

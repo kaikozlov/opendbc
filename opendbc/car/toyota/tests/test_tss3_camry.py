@@ -420,7 +420,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     ci = CarInterface(cp)
     update_state(ci, moving=True, bus=0, source_bus=2, hud=CAMRY_HUD)
 
-    for requested, expected in ((1.2, 1.2), (2.0, 1.3), (-2.0, -1.5)):
+    for requested, expected in ((1.2, 1.2), (2.0, 2.0), (-2.0, -2.0), (3.0, 2.0), (-4.0, -3.5)):
       output, sends = ci.apply(control(0.0, active=False, accel=requested, long_active=True), 2_000_000_000)
       self.assertAlmostEqual(output.accel, expected)
       self.assertFalse(any(address == 0x08A for address, _, _ in sends))
@@ -1050,11 +1050,11 @@ class TestToyotaCamryTSS3HostOwnershipSafety(unittest.TestCase):
     self.safety.set_controls_allowed(True)
 
     source = self.observe_source(target_id=0, b26=0x21)
-    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(source, accel_a=-500, accel_b=-500, mutate_mac=True)))
+    self.assertTrue(self.safety.safety_tx_hook(self.host_frame(source, accel_a=-3500, accel_b=-3500, mutate_mac=True)))
 
     idle = self.observe_source(target_id=0, b26=0x22, request_a=0x00, request_b=0x12)
     self.assertTrue(self.safety.safety_tx_hook(self.host_frame(
-      idle, request_a=0x2D, request_b=0x47, accel_a=1300, accel_b=1300, mutate_mac=True)))
+      idle, request_a=0x2D, request_b=0x47, accel_a=2000, accel_b=2000, mutate_mac=True)))
 
   def test_alpha_long_gas_override_drops_stale_generation_without_releasing(self):
     self.use_alpha_long_safety()
@@ -1100,7 +1100,7 @@ class TestToyotaCamryTSS3HostOwnershipSafety(unittest.TestCase):
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
 
   def test_alpha_long_rejects_unequal_or_out_of_range_bounds(self):
-    for accel_a, accel_b in ((-500, -499), (-1501, -1501), (1301, 1301)):
+    for accel_a, accel_b in ((-500, -499), (-3501, -3501), (2001, 2001)):
       with self.subTest(accel_a=accel_a, accel_b=accel_b):
         self.use_alpha_long_safety()
         handoff = self.observe_source(target_id=0, b26=0x20)
