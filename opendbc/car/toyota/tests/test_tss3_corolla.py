@@ -1,8 +1,9 @@
-"""Retained Corolla evidence for the shared TSS3 DBC; no Corolla control support."""
+"""Retained Corolla wire-format evidence replayed on the canonical TSS3 repin."""
 import unittest
 
 from opendbc.can import CANDefine, CANParser
 from opendbc.car import CanData
+from opendbc.car.toyota.tss3 import TSS3_CHASSIS_BUS
 
 
 SPAN_FRAMES = {
@@ -29,8 +30,11 @@ ALBINO_GEAR = {
 
 class TestToyotaTss3SharedDbc(unittest.TestCase):
   def test_retained_corolla_state_decodes_with_shared_dbc(self):
-    parser = CANParser("toyota_tss3_pt_generated", [(address, 0) for address in (0x025, 0x030, 0x101, 0x116, 0x127)], 1)
-    parser.update([(1_000_000_000, [CanData(a, d, 1) for a, d in SPAN_FRAMES.items()])])
+    # The raw Span capture used an unrepinned stock-harness bus. Bus identity is
+    # not part of this DBC regression: all maintained TSS3 integration uses the
+    # canonical repinned chassis bus.
+    parser = CANParser("toyota_tss3_pt_generated", [(address, 0) for address in (0x025, 0x030, 0x101, 0x116, 0x127)], TSS3_CHASSIS_BUS)
+    parser.update([(1_000_000_000, [CanData(a, d, TSS3_CHASSIS_BUS) for a, d in SPAN_FRAMES.items()])])
     angle = parser.vl["STEER_ANGLE_SENSOR"]
     self.assertAlmostEqual(angle["STEER_ANGLE"] + angle["STEER_FRACTION"], -11.5)
     self.assertAlmostEqual(angle["STEER_RATE"], -1.0)
@@ -40,8 +44,8 @@ class TestToyotaTss3SharedDbc(unittest.TestCase):
     self.assertGreater(parser.vl["GAS_PEDAL"]["GAS_PEDAL_USER"], 0)
 
   def test_retained_corolla_nonhybrid_gear_evidence(self):
-    parser = CANParser("toyota_tss3_pt_generated", [("TSS3_GEAR_PACKET", 0)], 1)
+    parser = CANParser("toyota_tss3_pt_generated", [("TSS3_GEAR_PACKET", 0)], TSS3_CHASSIS_BUS)
     names = CANDefine("toyota_tss3_pt_generated").dv["TSS3_GEAR_PACKET"]["GEAR"]
     for i, (expected, data) in enumerate(ALBINO_GEAR.items()):
-      parser.update([(1_000_000_000 + i * 10_000_000, [CanData(0x3BF, data, 1)])])
+      parser.update([(1_000_000_000 + i * 10_000_000, [CanData(0x3BF, data, TSS3_CHASSIS_BUS)])])
       self.assertEqual(names[int(parser.vl["TSS3_GEAR_PACKET"]["GEAR"])], expected)

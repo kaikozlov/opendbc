@@ -7,6 +7,7 @@ from opendbc.car.fw_versions import match_fw_to_car_exact
 from opendbc.car.toyota.fingerprints import FW_VERSIONS
 from opendbc.car.toyota.interface import CarInterface
 from opendbc.car.toyota.radar_interface import RadarInterface
+from opendbc.car.toyota.tss3 import TSS3_AUX_BUS, TSS3_CHASSIS_BUS, TSS3_SOURCE_BUS
 from opendbc.car.toyota.toyotacan import toyota_e2e_p05_checksum
 from opendbc.car.toyota.values import CAR, DBC, CarControllerParams, ToyotaFlags, ToyotaSafetyFlags
 
@@ -48,14 +49,14 @@ def relay_fingerprint() -> dict[int, dict[int, int]]:
   fp = {i: {} for i in range(8)}
   source_ids = {0x08A, 0x251, 0x3F6, 0x412}
   for address, data in (CAMRY_COMMON | {0x412: CAMRY_HUD}).items():
-    fp[2 if address in source_ids else 0][address] = len(data)
-  fp[1] = {address: len(data) for address, data in CAMRY_RADAR.items()}
+    fp[TSS3_SOURCE_BUS if address in source_ids else TSS3_CHASSIS_BUS][address] = len(data)
+  fp[TSS3_AUX_BUS] = {address: len(data) for address, data in CAMRY_RADAR.items()}
   return fp
 
 
 def update_state(ci: CarInterface, moving: bool = False, counter_offset: int = 0, hud: bytes | None = None,
                  eps_status: int | None = None, eps_telemetry: bytes | None = None,
-                 control_request: bytes | None = None, bus: int = 0, source_bus: int | None = 2,
+                 control_request: bytes | None = None, bus: int = TSS3_CHASSIS_BUS, source_bus: int | None = TSS3_SOURCE_BUS,
                  speed_ms: float | None = None, cruise_display: bytes | None = None, iterations: int = 20):
   state = None
   for i in range(iterations):
@@ -138,7 +139,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
   def test_tss3_radar_points_from_retained_object_bank(self):
     # Raw source frames exercise the default Camry radar interface.
     ri = RadarInterface(self.CP)
-    packets = [CanData(address, data, 1) for address, data in CAMRY_RADAR.items()]
+    packets = [CanData(address, data, TSS3_AUX_BUS) for address, data in CAMRY_RADAR.items()]
     rr = ri.update([(1_000_000_000, packets)])
     self.assertIsNotNone(rr)
     points = {point.trackId: point for point in rr.points}
@@ -165,7 +166,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
       data[3] = (data[3] + 1) & 0xFF
       data[:2] = toyota_e2e_p05_checksum(address, data).to_bytes(2, "little")
       empty[address] = bytes(data)
-    rr = ri.update([(1_050_000_000, [CanData(address, data, 1) for address, data in empty.items()])])
+    rr = ri.update([(1_050_000_000, [CanData(address, data, TSS3_AUX_BUS) for address, data in empty.items()])])
     self.assertIsNotNone(rr)
     self.assertEqual(len(rr.points), 0)
 
@@ -198,8 +199,8 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertTrue(self.CP.steerAtStandstill)
 
   def test_unified_tss3_request_and_result_dbc_layout(self):
-    request_parser = CANParser("toyota_tss3_pt_generated", [("TSS3_CONTROL_REQUEST", 0)], 1)
-    request_parser.update([(1_000_000_000, [CanData(0x08A, CAMRY_COMMON[0x08A], 1)])])
+    request_parser = CANParser("toyota_tss3_pt_generated", [("TSS3_CONTROL_REQUEST", 0)], TSS3_SOURCE_BUS)
+    request_parser.update([(1_000_000_000, [CanData(0x08A, CAMRY_COMMON[0x08A], TSS3_SOURCE_BUS)])])
     request = request_parser.vl["TSS3_CONTROL_REQUEST"]
     self.assertAlmostEqual(request["LONGITUDINAL_REQUEST_ACCEL_A"], -0.442, places=6)
     self.assertAlmostEqual(request["LONGITUDINAL_REQUEST_ACCEL_B"], -0.442, places=6)
@@ -216,8 +217,8 @@ class TestToyotaCamryTSS3(unittest.TestCase):
 
     # Retained relay-correct drive-A result frame with selected longitudinal ID11.
     result_frame = bytes.fromhex("00000018ffc80b730000000400000000000dffc8ffa2135dffa2000043d6390a")
-    result_parser = CANParser("toyota_tss3_pt_generated", [("TSS3_CONTROL_RESULT", 0)], 1)
-    result_parser.update([(1_010_000_000, [CanData(0x081, result_frame, 1)])])
+    result_parser = CANParser("toyota_tss3_pt_generated", [("TSS3_CONTROL_RESULT", 0)], TSS3_CHASSIS_BUS)
+    result_parser.update([(1_010_000_000, [CanData(0x081, result_frame, TSS3_CHASSIS_BUS)])])
     result = result_parser.vl["TSS3_CONTROL_RESULT"]
     self.assertEqual(result["LONGITUDINAL_RESULT_ID"], 11)
     self.assertEqual(result["REQUEST_LOSS_STATUS"], 0)
@@ -225,21 +226,21 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertAlmostEqual(result["LATERAL_RESULT_PINION_ANGLE"], 0.013 * 1.000121519, places=6)
     self.assertAlmostEqual(result["LONGITUDINAL_RESULT_ACCEL"], -0.094, places=6)
 
-    state_parser = CANParser("toyota_tss3_pt_generated", [("TSS3_FRC_STATE_160", 0)], 2)
-    state_parser.update([(1_020_000_000, [CanData(0x160, CAMRY_LONG, 2)])])
+    state_parser = CANParser("toyota_tss3_pt_generated", [("TSS3_FRC_STATE_160", 0)], TSS3_SOURCE_BUS)
+    state_parser.update([(1_020_000_000, [CanData(0x160, CAMRY_LONG, TSS3_SOURCE_BUS)])])
     frc_state = state_parser.vl["TSS3_FRC_STATE_160"]
     self.assertEqual(frc_state["COUNTER"], CAMRY_LONG[2])
     self.assertEqual(frc_state["BYTE_4"], CAMRY_LONG[4])
     self.assertEqual(frc_state["BYTE_5"], CAMRY_LONG[5])
 
-    display_parser = CANParser("toyota_tss3_pt_generated", [("TSS3_CRUISE_DISPLAY", 0)], 1)
-    display_parser.update([(1_030_000_000, [CanData(0x251, bytes.fromhex("a00000488088a080"), 1)])])
+    display_parser = CANParser("toyota_tss3_pt_generated", [("TSS3_CRUISE_DISPLAY", 0)], TSS3_SOURCE_BUS)
+    display_parser.update([(1_030_000_000, [CanData(0x251, bytes.fromhex("a00000488088a080"), TSS3_SOURCE_BUS)])])
     self.assertEqual(display_parser.vl["TSS3_CRUISE_DISPLAY"]["SET_VEHICLE_INTERVAL_TIME"], 4)
 
-  def test_repin_state_uses_chassis_and_source_buses(self):
+  def test_canonical_tss3_state_uses_chassis_and_source_buses(self):
     ci = CarInterface(self.CP)
-    self.assertEqual(ci.can_parsers[Bus.pt].bus, 0)
-    self.assertEqual(ci.can_parsers[Bus.cam].bus, 2)
+    self.assertEqual(ci.can_parsers[Bus.pt].bus, TSS3_CHASSIS_BUS)
+    self.assertEqual(ci.can_parsers[Bus.cam].bus, TSS3_SOURCE_BUS)
     state = update_state(ci)
     self.assertEqual(state.gearShifter, structs.CarState.GearShifter.drive)
     self.assertTrue(state.cruiseState.available)

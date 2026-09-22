@@ -5,6 +5,7 @@ from opendbc.car import Bus, DT_CTRL, create_button_events, structs
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.common.filter_simple import FirstOrderFilter
 from opendbc.car.interfaces import CarStateBase
+from opendbc.car.toyota.tss3 import TSS3_CHASSIS_BUS, TSS3_SOURCE_BUS
 from opendbc.car.toyota.values import ToyotaFlags, CAR, DBC, STEER_THRESHOLD, EPS_SCALE, TSS3_STEER_DRIVER_TORQUE_THRESHOLD
 
 ButtonType = structs.CarState.ButtonEvent.Type
@@ -330,7 +331,7 @@ class CarState(CarStateBase):
         ("BODY_CONTROL_STATE", 3),
         ("LIGHT_STALK", 1),
       ]
-      # Repinned Camry: chassis/state on bus0, source on bus2.
+      # Canonical TSS3 repin: chassis/state on bus0, source/FRC on bus2.
       pt_messages = common_messages + [
         ("TSS3_CRUISE_SWITCH", 30),
         ("BODY_CONTROL_STATE_2", 3),
@@ -343,8 +344,8 @@ class CarState(CarStateBase):
       if CP.flags & ToyotaFlags.HAS_BSM:
         source_messages.append(("BSM", 1))
       return {
-        Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, 0),
-        Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], source_messages, 2),
+        Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, TSS3_CHASSIS_BUS),
+        Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], source_messages, TSS3_SOURCE_BUS),
       }
 
     pt_messages = [

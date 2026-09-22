@@ -1,8 +1,8 @@
 # Toyota TSS3 development scope
 
-The current vehicle port is the repinned 2026 Camry Hybrid. The interface specifies that topology directly: chassis/state on bus 0, FRC source on bus 2, and radar on bus 1. It uses openpilot longitudinal control. There is no stock-harness alternative or topology eligibility detector.
+All maintained TSS3 integration uses one canonical Toyota-B repinned topology: chassis/state on bus 0, FRC/source on bus 2, and the unsplit auxiliary/radar path on bus 1. The current supported vehicle is the repinned 2026 Camry Hybrid and it uses openpilot longitudinal control. There is no stock-harness runtime alternative, topology eligibility detector, or per-vehicle bus remapping.
 
-Corolla platform registration and its separate control and safety branches have been removed. The shared TSS3 DBC remains intact. `test_tss3_corolla.py` retains captured Corolla steering, torque, pedal, and gear decoding evidence independently of vehicle support. The historical Camry fixtures remain available, and the working repin fixture is now consumed on its original buses rather than translated to stock-harness buses.
+Corolla platform registration and its separate control and safety branches have been removed. The shared TSS3 DBC remains intact. `test_tss3_corolla.py` retains captured Corolla steering, torque, pedal, and gear wire-format evidence, but replays it on the canonical repinned chassis bus. Raw historical Corolla captures that observed the target network on stock-harness logical bus 1 remain provenance only; they do not define runtime placement. The historical Camry fixtures remain available, and the working repin fixture is consumed on its original buses rather than translated to stock-harness buses.
 
 Following-distance selector changes do not adjust openpilot personality. The personality feedback adapter and its synthetic gap-button events have been removed. Other existing button behavior remains.
 

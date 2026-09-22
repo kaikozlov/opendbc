@@ -2,6 +2,7 @@ from opendbc.car import Bus, structs, get_safety_config, uds
 from opendbc.car.toyota.carstate import CarState
 from opendbc.car.toyota.carcontroller import CarController
 from opendbc.car.toyota.radar_interface import RadarInterface
+from opendbc.car.toyota.tss3 import TSS3_SOURCE_BUS
 from opendbc.car.toyota.values import Ecu, CAR, DBC, ToyotaFlags, CarControllerParams, MIN_ACC_SPEED, \
                                                   EPS_SCALE, ToyotaSafetyFlags
 from opendbc.car.disable_ecu import disable_ecu
@@ -38,7 +39,7 @@ class CarInterface(CarInterfaceBase):
     ret.brand = "toyota"
 
     if ret.flags & ToyotaFlags.TSS3:
-      # The Camry port uses the repinned topology.
+      # TSS3 uses the canonical repinned Toyota-B topology.
       ret.steerControlType = SteerControlType.angle
       ret.dashcamOnly = False
       ret.radarUnavailable = False
@@ -57,7 +58,7 @@ class CarInterface(CarInterfaceBase):
         structs.CarParams.SafetyModel.toyota,
         EPS_SCALE[candidate] | ToyotaSafetyFlags.TSS3_SIGNER.value | ToyotaSafetyFlags.TSS3_08A_HOST.value,
       )]
-      if 0x3F6 in fingerprint.get(2, {}):
+      if 0x3F6 in fingerprint.get(TSS3_SOURCE_BUS, {}):
         ret.flags |= ToyotaFlags.HAS_BSM.value
       return ret
 

@@ -109,7 +109,7 @@ static void toyota_rx_hook(const CANPacket_t *msg) {
   }
 
   if (toyota_tss3_signer) {
-    // Repinned Camry chassis observations are on bus 0.
+    // Canonical repinned TSS3 chassis observations are on bus 0.
     const uint8_t tss3_state_bus = 0U;
     if (msg_matches(msg, 0x25U, tss3_state_bus)) {
       int angle_coarse = ((msg->data[0] & 0xFU) << 8U) | msg->data[1];

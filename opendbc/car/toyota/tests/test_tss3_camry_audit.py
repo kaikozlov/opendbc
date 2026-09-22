@@ -9,6 +9,7 @@ from unittest.mock import patch
 from opendbc.car import CanData
 from opendbc.car.toyota.interface import CarInterface
 from opendbc.car.toyota.radar_interface import RadarInterface
+from opendbc.car.toyota.tss3 import TSS3_AUX_BUS, TSS3_CHASSIS_BUS
 from opendbc.car.toyota.tests.test_tss3_camry import CAMRY_COMMON, CAMRY_RADAR, relay_fingerprint, update_state
 from opendbc.car.toyota.toyotacan import toyota_e2e_p05_checksum
 from opendbc.car.toyota.values import CAR
@@ -27,13 +28,13 @@ class TestCamryEvidenceAudit(unittest.TestCase):
     vm.update_params(1.0, 15.3)
     self.assertAlmostEqual(vm.cF, 163310.546875, delta=0.05)
 
-  def test_radar_uses_repin_bus_one(self):
+  def test_radar_uses_canonical_aux_bus(self):
     self.cp.radarUnavailable = False
     ri = RadarInterface(self.cp)
-    self.assertEqual(ri.rcp.bus, 1)
-    wrong_bus = ri.update([(1_000_000_000, [CanData(a, d, 0) for a, d in CAMRY_RADAR.items()])])
+    self.assertEqual(ri.rcp.bus, TSS3_AUX_BUS)
+    wrong_bus = ri.update([(1_000_000_000, [CanData(a, d, TSS3_CHASSIS_BUS) for a, d in CAMRY_RADAR.items()])])
     self.assertTrue(wrong_bus is None or not wrong_bus.points)
-    correct_bus = ri.update([(1_050_000_000, [CanData(a, d, 1) for a, d in CAMRY_RADAR.items()])])
+    correct_bus = ri.update([(1_050_000_000, [CanData(a, d, TSS3_AUX_BUS) for a, d in CAMRY_RADAR.items()])])
     self.assertIsNotNone(correct_bus)
     self.assertGreater(len(correct_bus.points), 0)
 

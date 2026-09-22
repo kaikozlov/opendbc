@@ -4,6 +4,7 @@ import unittest
 from opendbc.car import CanData
 from opendbc.car.toyota.interface import CarInterface
 from opendbc.car.toyota.radar_interface import RadarInterface
+from opendbc.car.toyota.tss3 import TSS3_AUX_BUS, TSS3_CHASSIS_BUS
 from opendbc.car.toyota.values import CAR, ToyotaSafetyFlags
 
 
@@ -28,7 +29,7 @@ def cycle(counter, state=2, new=False, ended=False, occupied=True, cycle_byte=No
   frames[0x183 + bank][offset + 1:offset + 3] = bytes.fromhex("3fd8")  # -1 m/s
   frames[0x183 + bank][offset + 4] = 0x80 if new else 0
   frames[0x183 + bank][offset + 5] = (0x10 if ended else 0) | state
-  return [CanData(a, checksum(a, d), 1) for a, d in frames.items()]
+  return [CanData(a, checksum(a, d), TSS3_AUX_BUS) for a, d in frames.items()]
 
 
 class TestToyotaTSS3Radar(unittest.TestCase):
@@ -159,20 +160,20 @@ class TestToyotaTSS3Radar(unittest.TestCase):
     rr = self.update(cycle(1))
     self.assertNotEqual(rr.points[0].trackId, first)
 
-  def test_relay_correct_camry_radar_uses_unsplit_bus1(self):
+  def test_canonical_tss3_radar_uses_unsplit_aux_bus(self):
     cp = CarInterface.get_non_essential_params(CAR.TOYOTA_CAMRY_TSS3)
     cp.radarUnavailable = False
     cp.safetyConfigs[0].safetyParam |= ToyotaSafetyFlags.TSS3_08A_HOST.value
     ri = RadarInterface(cp)
-    self.assertEqual(ri.rcp.bus, 1)
-    frames = [CanData(frame.address, frame.dat, 1) for frame in cycle(0)]
+    self.assertEqual(ri.rcp.bus, TSS3_AUX_BUS)
+    frames = [CanData(frame.address, frame.dat, TSS3_AUX_BUS) for frame in cycle(0)]
     rr = ri.update([(self.time, frames)])
     self.assertIsNotNone(rr)
     self.assertFalse(rr.errors.canError)
     self.assertEqual(len(rr.points), 1)
 
   def test_unrelated_and_wrong_bus_traffic_cannot_publish_radar(self):
-    frames = [CanData(frame.address, frame.dat, 0) for frame in cycle(0)]
+    frames = [CanData(frame.address, frame.dat, TSS3_CHASSIS_BUS) for frame in cycle(0)]
     rr = self.update(frames)
     self.assertIsNone(rr)
     self.assertFalse(self.ri.pts)
