@@ -1,4 +1,5 @@
 """TSS3 request construction and EPS signer transport helpers."""
+from collections import deque
 from dataclasses import dataclass
 from math import isfinite
 
@@ -28,7 +29,7 @@ ORACLE_RESPONSE_ADDR = 0x7A9
 ORACLE_BUS = 0
 ORACLE_PRIVATE_SID = 0xC9
 ORACLE_SEQUENCE_MAX = 0x1F
-ORACLE_RETRY_TIMEOUT_NS = 50_000_000
+ORACLE_MAX_PENDING_GENERATIONS = 8
 ORACLE_PUBLICATION_DEADLINE_NS = 90_000_000
 
 
@@ -101,16 +102,20 @@ class SignRequest:
   application: bytes
   control_epoch: int
   generation_started_ns: int
-  sent_ns: int
+  trailer: bytes | None = None
+  failed: bool = False
+  superseded: bool = False
 
 
 class ToyotaTss3RequestTransport:
-  """Single-flight transport for the latest normal CarController output.
+  """Bounded 100 Hz transport for normal CarController output.
 
-  Native 0x08A arrivals provide publication cadence. Multiple arrivals while a
-  signature is in flight coalesce into one next publication; actuator commands
-  are never queued. Engagement and lat/long activity edges invalidate any
-  unfinished or not-yet-transmitted application.
+  CarController owns application cadence and actuator state. Every 10 ms control
+  tick can enqueue one fresh application for the EPS signer; the EPS owns all
+  SecOC freshness and returns only FV4||MAC28. A small pipeline hides signer
+  round-trip latency without replaying historical control after a missing
+  private response. Native 0x08A remains a liveness input to CANParser, not the
+  host publication clock.
   """
 
   def __init__(self, packer):
@@ -123,18 +128,18 @@ class ToyotaTss3RequestTransport:
     self.control_accel = 0.0
     self.control_set_speed_kph = 0.0
     self.control_epoch = 0
+    self.control_started_ns = 0
 
     self.next_oracle_sequence = 1
     self.next_request_sequence = 0
-    self.inflight: SignRequest | None = None
-    self.publication_due = False
-    self.publication_due_since_ns = 0
-    self.ready_host_frame: tuple[bytes, int] | None = None
+    self.pending_requests: deque[SignRequest] = deque()
+    self.requests_by_sequence: dict[int, SignRequest] = {}
     self.pending_sends: list[CanData] = []
 
     self.active = False
     self.arm_pending = False
     self.arm_host_frame: bytes | None = None
+    self.last_publication_ns = 0
     self.authority_failed = False
     self.last_failure_reason = ""
 
@@ -145,9 +150,21 @@ class ToyotaTss3RequestTransport:
     self.last_failure_reason = reason
     carlog.error(f"Toyota F33 request plane failure: {reason}")
 
+  def _remove_request(self, request: SignRequest) -> None:
+    if self.requests_by_sequence.get(request.sequence) is request:
+      del self.requests_by_sequence[request.sequence]
+
+  def _prune_head(self) -> None:
+    while self.pending_requests:
+      request = self.pending_requests[0]
+      if request.control_epoch == self.control_epoch and not request.failed and not request.superseded:
+        break
+      self.pending_requests.popleft()
+      self._remove_request(request)
+
   def _invalidate_actuation(self) -> None:
-    self.inflight = None
-    self.ready_host_frame = None
+    self.pending_requests.clear()
+    self.requests_by_sequence.clear()
 
   def _release(self) -> None:
     if self.active or self.arm_pending:
@@ -155,47 +172,38 @@ class ToyotaTss3RequestTransport:
     self.active = False
     self.arm_pending = False
     self.arm_host_frame = None
-    self.publication_due = False
-    self.publication_due_since_ns = 0
+    self.last_publication_ns = 0
+    self.control_started_ns = 0
     self._invalidate_actuation()
 
   def _authority_failure(self, reason: str) -> None:
+    if self.authority_failed:
+      return
     self.authority_failed = True
     self._record_failure(reason)
     self._release()
 
-  def _mark_publication_due(self, now_ns: int) -> None:
-    if not self.publication_due:
-      self.publication_due_since_ns = now_ns
-    self.publication_due = True
-
-  def _retry_latest(self, now_ns: int, reason: str) -> None:
-    if self.inflight is None:
-      return
-    generation_started_ns = self.inflight.generation_started_ns
-    self.inflight = None
-    if now_ns - generation_started_ns > ORACLE_PUBLICATION_DEADLINE_NS:
-      self._authority_failure("oracle_dead")
-      return
-    self.publication_due = True
-    self.publication_due_since_ns = generation_started_ns
-    carlog.warning(f"Toyota F33 request plane retrying latest control: {reason}")
-
-  def _observe_tx_echo(self, address: int, data: bytes, src: int) -> None:
+  def _observe_tx_echo(self, address: int, data: bytes, src: int, now_ns: int) -> None:
     if address == ADMIN_ADDR and self.arm_pending and data == make_request_plane_admin(True).dat:
       if src == ADMIN_BUS + PANDA_REJECTED_OFFSET:
         self._authority_failure("arm_admin_rejected")
       return
     if address != NATIVE_08A_ADDR:
       return
-    if src == DOWNSTREAM_BUS + PANDA_RETURNED_OFFSET and self.arm_pending and data == self.arm_host_frame:
-      self.active = True
-      self.arm_pending = False
-      self.arm_host_frame = None
-    elif src == DOWNSTREAM_BUS + PANDA_REJECTED_OFFSET and self.arm_pending and data == self.arm_host_frame:
-      self._authority_failure("handoff_host_frame_rejected")
-    elif src == DOWNSTREAM_BUS + PANDA_REJECTED_OFFSET and self.active:
-      carlog.warning("Toyota F33 request plane TX rejected")
+
+    if src == DOWNSTREAM_BUS + PANDA_RETURNED_OFFSET:
+      if self.arm_pending and data == self.arm_host_frame:
+        self.active = True
+        self.arm_pending = False
+        self.arm_host_frame = None
+        self.last_publication_ns = now_ns
+      elif self.active:
+        self.last_publication_ns = now_ns
+    elif src == DOWNSTREAM_BUS + PANDA_REJECTED_OFFSET:
+      if self.arm_pending and data == self.arm_host_frame:
+        self._authority_failure("handoff_host_frame_rejected")
+      elif self.active:
+        carlog.warning("Toyota F33 request plane TX rejected")
 
   def _observe_oracle_response(self, data: bytes, now_ns: int) -> None:
     if len(data) != 8 or data[0] != ORACLE_PRIVATE_SID:
@@ -203,18 +211,30 @@ class ToyotaTss3RequestTransport:
     seq, status = data[1], data[2]
     if not 1 <= seq <= ORACLE_SEQUENCE_MAX or data[3] != (seq ^ 0xFF):
       return
-    if self.inflight is None or seq != self.inflight.sequence:
+
+    request = self.requests_by_sequence.get(seq)
+    if request is None or request.control_epoch != self.control_epoch:
       return
-    if now_ns - self.inflight.generation_started_ns > ORACLE_PUBLICATION_DEADLINE_NS:
-      self._authority_failure("oracle_dead")
-      return
-    if status != 0:
-      self._retry_latest(now_ns, "oracle_sign_status")
+    if now_ns - request.generation_started_ns > ORACLE_PUBLICATION_DEADLINE_NS:
+      request.superseded = True
       return
 
-    request = self.inflight
-    self.inflight = None
-    self.ready_host_frame = (request.application + data[4:8], request.control_epoch)
+    # The resident drains requests serially. Seeing a later response proves it
+    # has already moved past every earlier request. Preserve earlier responses
+    # already ready for publication, but never stall on an earlier response
+    # that was lost between EPS and card.
+    for older in self.pending_requests:
+      if older is request:
+        break
+      if older.trailer is None:
+        older.superseded = True
+
+    if status != 0:
+      request.failed = True
+      carlog.warning(f"Toyota F33 request plane signer status {status}")
+    else:
+      request.trailer = data[4:8]
+    self._prune_head()
 
   def observe(self, can_packets: list[tuple[int, list[CanData]]], can_valid: bool) -> None:
     self.can_valid = bool(can_valid)
@@ -222,27 +242,55 @@ class ToyotaTss3RequestTransport:
       self._authority_failure("can_invalid")
 
     for nanos, packets in can_packets:
+      now_ns = int(nanos)
       for address, data, src in packets:
         address_i, src_i, payload = int(address), int(src), bytes(data)
         if src_i >= PANDA_RETURNED_OFFSET:
-          self._observe_tx_echo(address_i, payload, src_i)
+          self._observe_tx_echo(address_i, payload, src_i, now_ns)
         elif src_i == ORACLE_BUS and address_i == ORACLE_RESPONSE_ADDR:
-          self._observe_oracle_response(payload, int(nanos))
-        elif src_i == SOURCE_BUS and address_i == NATIVE_08A_ADDR and len(payload) == 32:
-          self._mark_publication_due(int(nanos))
+          self._observe_oracle_response(payload, now_ns)
 
   def _expire(self, now_ns: int) -> None:
-    if self.inflight is None:
+    self._prune_head()
+    if not self.control_enabled or not self.can_valid or self.authority_failed:
       return
-    if now_ns - self.inflight.generation_started_ns > ORACLE_PUBLICATION_DEADLINE_NS:
+
+    reference_ns = self.last_publication_ns if self.active else self.control_started_ns
+    if reference_ns and now_ns - reference_ns > ORACLE_PUBLICATION_DEADLINE_NS:
       self._authority_failure("oracle_dead")
-    elif now_ns - self.inflight.sent_ns > ORACLE_RETRY_TIMEOUT_NS:
-      self._retry_latest(now_ns, "oracle_response_timeout")
 
-  def _start_signing_latest(self, now_ns: int) -> None:
-    if not self.control_enabled or not self.can_valid or not self.publication_due or self.inflight is not None:
+  def _take_ready_host_frame(self) -> bytes | None:
+    self._prune_head()
+    if not self.pending_requests:
+      return None
+    request = self.pending_requests[0]
+    if request.trailer is None:
+      return None
+    self.pending_requests.popleft()
+    self._remove_request(request)
+    if request.control_epoch != self.control_epoch:
+      return None
+    return request.application + request.trailer
+
+  def _allocate_oracle_sequence(self) -> int | None:
+    for _ in range(ORACLE_SEQUENCE_MAX):
+      seq = self.next_oracle_sequence
+      self.next_oracle_sequence = (seq % ORACLE_SEQUENCE_MAX) + 1
+      if seq not in self.requests_by_sequence:
+        return seq
+    return None
+
+  def _queue_signing_latest(self, now_ns: int) -> None:
+    self._prune_head()
+    if (not self.control_enabled or not self.can_valid or self.authority_failed or
+        len(self.pending_requests) >= ORACLE_MAX_PENDING_GENERATIONS):
       return
 
+    seq = self._allocate_oracle_sequence()
+    if seq is None:
+      return
+    if self.control_started_ns == 0:
+      self.control_started_ns = now_ns
     application = build_host_application(
       self.packer,
       lat_active=self.control_lat_active,
@@ -252,21 +300,25 @@ class ToyotaTss3RequestTransport:
       set_speed_kph=self.control_set_speed_kph,
       request_sequence=self.next_request_sequence,
     )
-    seq = self.next_oracle_sequence
-    self.next_oracle_sequence = (seq % ORACLE_SEQUENCE_MAX) + 1
     self.next_request_sequence = (self.next_request_sequence + 1) & 0x3F
-    generation_started_ns = self.publication_due_since_ns or now_ns
-    self.publication_due = False
-    self.publication_due_since_ns = 0
-    self.inflight = SignRequest(seq, application, self.control_epoch, generation_started_ns, now_ns)
+    request = SignRequest(seq, application, self.control_epoch, now_ns)
+    self.pending_requests.append(request)
+    self.requests_by_sequence[seq] = request
     self.pending_sends.extend(build_oracle_transport(seq, application))
 
   def control_generation_due(self, *, enabled: bool, lat_active: bool, long_active: bool) -> bool:
-    """Whether the next update will create a new actuator application."""
-    control_state = (bool(enabled), bool(enabled and lat_active), bool(enabled and long_active))
+    """Whether this 100 Hz controller tick can create a new application."""
+    enabled = bool(enabled)
+    control_state = (enabled, bool(enabled and lat_active), bool(enabled and long_active))
     previous_state = (self.control_enabled, self.control_lat_active, self.control_long_active)
-    return bool(enabled and self.can_valid and self.publication_due and
-                (self.inflight is None or control_state != previous_state))
+    if not enabled or not self.can_valid or self.authority_failed:
+      return False
+    if control_state != previous_state:
+      return True
+
+    active_pending = sum(not request.failed and not request.superseded for request in self.pending_requests)
+    front_ready = bool(self.pending_requests and self.pending_requests[0].trailer is not None)
+    return active_pending - int(front_ready) < ORACLE_MAX_PENDING_GENERATIONS
 
   def update_control(self, *, enabled: bool, lat_active: bool, target_angle_deg: float,
                      long_active: bool, accel: float, set_speed_kph: float,
@@ -283,6 +335,8 @@ class ToyotaTss3RequestTransport:
         self.authority_failed = False
         self.last_failure_reason = ""
         self.next_request_sequence = 0
+        self.control_started_ns = 0
+        self.last_publication_ns = 0
 
     self.control_enabled = enabled
     self.control_lat_active = lat_active
@@ -295,21 +349,22 @@ class ToyotaTss3RequestTransport:
       self._release()
     else:
       self._expire(now_nanos)
+      if not self.authority_failed:
+        # Do not send a second host frame before Panda confirms the arm frame.
+        # Once active, publish at most one signed application per 10 ms control
+        # tick even if multiple EPS responses arrived in the same CAN batch.
+        if not self.arm_pending:
+          frame = self._take_ready_host_frame()
+          if frame is not None:
+            if not self.active:
+              self.pending_sends.append(make_request_plane_admin(True))
+              self.arm_pending = True
+              self.arm_host_frame = frame
+            self.pending_sends.append(CanData(NATIVE_08A_ADDR, frame, DOWNSTREAM_BUS))
 
-      if self.ready_host_frame is not None:
-        frame, epoch = self.ready_host_frame
-        self.ready_host_frame = None
-        if epoch == self.control_epoch:
-          if not self.active and not self.arm_pending:
-            # Keep stock publication live while the EPS signs. Switch ownership
-            # only when the first replacement is ready, with admin immediately
-            # followed by that frame in the ordinary CarController send batch.
-            self.pending_sends.append(make_request_plane_admin(True))
-            self.arm_pending = True
-            self.arm_host_frame = frame
-          self.pending_sends.append(CanData(NATIVE_08A_ADDR, frame, DOWNSTREAM_BUS))
-
-      self._start_signing_latest(now_nanos)
+        # Normal CarController cadence is the only publication scheduler. Keep
+        # enough requests in flight to hide the EPS signer round-trip latency.
+        self._queue_signing_latest(now_nanos)
 
     sends, self.pending_sends = self.pending_sends, []
     return sends

@@ -334,25 +334,21 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     output, sends = ci.apply(control(0.0, active=False, enabled=False), 2_000_000_000)
     self.assertAlmostEqual(output.steeringAngleDeg, measured, delta=0.01)
 
-    # Engagement between source publications holds the ordinary inactive
-    # baseline. It is acquisition latency, not a steering/ACC fault.
+    # Engagement immediately creates one normally rate-limited application on
+    # the next 10 ms CarController tick; native 0x08A is not the host clock.
     output, sends = ci.apply(control(5.0), 2_010_000_000)
     self.assertFalse(any(address == 0x777 and data[1] == 0xC7 for address, data, _ in sends))
-    self.assertAlmostEqual(output.steeringAngleDeg, measured, delta=0.01)
-
-    # The next native publication creates exactly one normally rate-limited
-    # actuator application. Toyota's source ID is not a controller veto.
-    request[21] = request[21] & 0xC0
-    update_state(ci, moving=True, control_request=bytes(request), bus=0, source_bus=2, hud=CAMRY_HUD)
-    output, sends = ci.apply(control(20.0), 2_020_000_000)
-    self.assertFalse(any(address == 0x777 and data[1] == 0xC7 for address, data, _ in sends))
+    self.assertEqual(sum(address == 0x777 and data[0] == 0xC8 for address, data, _ in sends), 6)
     self.assertGreater(output.steeringAngleDeg, measured)
-    self.assertLessEqual(output.steeringAngleDeg, measured + max_delta)
+    self.assertLessEqual(output.steeringAngleDeg, measured + max_delta + 1e-6)
 
-    # No new application generation means no hidden 100 Hz actuator advance.
-    held_angle = output.steeringAngleDeg
-    output, _ = ci.apply(control(20.0), 2_030_000_000)
-    self.assertAlmostEqual(output.steeringAngleDeg, held_angle, delta=0.001)
+    # The next controller tick creates the next application without waiting for
+    # another Toyota source publication.
+    previous_angle = output.steeringAngleDeg
+    output, sends = ci.apply(control(20.0), 2_020_000_000)
+    self.assertEqual(sum(address == 0x777 and data[0] == 0xC8 for address, data, _ in sends), 6)
+    self.assertGreater(output.steeringAngleDeg, previous_angle)
+    self.assertLessEqual(output.steeringAngleDeg, previous_angle + max_delta + 1e-6)
 
   def test_host_request_plane_exposes_bounded_alpha_long_acceleration(self):
     cp = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, relay_fingerprint(), [], True, False, False)
@@ -375,10 +371,10 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     # Test controller limiting independently of authentication availability.
     with patch.object(ci.CC.tss3_request_transport, "control_generation_due", return_value=True):
       output, _ = ci.apply(control(20.0), 2_000_000_000)
-    # The repinned controller uses two control ticks per application. Its
+    # The repinned controller now creates one application per 10 ms tick. Its
     # vehicle-model jerk envelope remains distinct from the TSS2 rate curve.
-    self.assertGreater(output.steeringAngleDeg, 0.40)
-    self.assertLess(output.steeringAngleDeg, 0.44)
+    self.assertGreater(output.steeringAngleDeg, 0.20)
+    self.assertLess(output.steeringAngleDeg, 0.22)
 
   def test_host_request_plane_cancel_clones_native_brake_status_to_source_side(self):
     cp = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, relay_fingerprint(), [], True, False, False)

@@ -256,7 +256,7 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
     static const AngleSteeringLimits TOYOTA_F33_08A_ANGLE_STEERING_LIMITS = {
       .max_angle = 1745,
       .angle_deg_to_can = 17.451171875F,
-      .frequency = 40U,
+      .frequency = 100U,
     };
 
     // Exact 2026 Camry parameters used by CarController's VehicleModel.

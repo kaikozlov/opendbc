@@ -77,10 +77,6 @@ class CarController(CarControllerBase):
     self.secoc_acc_message_counter = 0
     self.secoc_prev_reset_counter = 0
 
-    if self.CP.flags & ToyotaFlags.TSS3:
-      # Signed applications are generated at roughly 40 Hz. Two normal
-      # controller ticks conservatively match that application cadence.
-      self.params.STEER_STEP = 2
     self.tss3_request_transport = ToyotaTss3RequestTransport(self.packer) if self.CP.flags & ToyotaFlags.TSS3 else None
 
   def observe_tss3_request_plane(self, can_packets, can_valid: bool) -> None:

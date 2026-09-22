@@ -35,7 +35,7 @@ class TestToyotaTss3CamrySafety(common.CarSafetyTest, common.AngleSteeringSafety
   ANGLE_RATE_BP = None
   ANGLE_RATE_UP = None
   ANGLE_RATE_DOWN = None
-  LATERAL_FREQUENCY = 40
+  LATERAL_FREQUENCY = 100
 
   def setUp(self):
     self.packer = CANPackerSafety("toyota_tss3_pt_generated")

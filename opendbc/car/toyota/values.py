@@ -36,9 +36,9 @@ class CarControllerParams:
   )
 
   # Exact F33 mode-2 (LTA/LCA) firmware clamps the B6 target to +/-1745 raw
-  # and permits 78 raw counts per effective sequence step. The host request
-  # plane applies limits with STEER_STEP=2, so this standard controller-side
-  # EPS fault limit is normalized to 39 raw per controller tick.
+  # and permits 78 raw counts per effective sequence step. At the normal 100 Hz
+  # CarController cadence, 39 raw per host frame retains a 2x margin to that
+  # recovered per-step receiver bound; the vehicle-model jerk limit is usually tighter.
   # Vehicle-model limiting supplies the speed-dependent lateral accel/jerk
   # envelope using this platform's geometry instead of inherited TSS2 curves.
   F33_ANGLE_LIMITS: AngleSteeringLimitsVM = AngleSteeringLimitsVM(

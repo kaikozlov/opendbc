@@ -4,9 +4,9 @@ from opendbc.can import CANPacker
 from opendbc.car.can_definitions import CanData
 from opendbc.car.toyota.tss3 import (
   ADMIN_ADDR, ADMIN_BUS, DOWNSTREAM_BUS, NATIVE_08A_ADDR, ORACLE_BUS,
-  ORACLE_REQUEST_ADDR, ORACLE_RESPONSE_ADDR, PANDA_REJECTED_OFFSET,
-  PANDA_RETURNED_OFFSET, SOURCE_BUS, ToyotaTss3RequestTransport,
-  build_host_application, build_oracle_transport,
+  ORACLE_MAX_PENDING_GENERATIONS, ORACLE_REQUEST_ADDR, ORACLE_RESPONSE_ADDR,
+  PANDA_REJECTED_OFFSET, PANDA_RETURNED_OFFSET, SOURCE_BUS,
+  ToyotaTss3RequestTransport, build_host_application, build_oracle_transport,
 )
 
 
@@ -27,10 +27,17 @@ def response(nanos: int, sequence: int, status: int = 0, trailer: bytes = KNOWN_
   return packets(nanos, CanData(ORACLE_RESPONSE_ADDR, data, ORACLE_BUS))
 
 
+def request_sequence_from_sends(sends: list[CanData]) -> int:
+  first = next(msg for msg in sends
+               if msg.address == ORACLE_REQUEST_ADDR and msg.dat[0] == 0xC8 and (msg.dat[1] >> 5) == 0)
+  return first.dat[1] & 0x1F
+
+
 class TestToyotaTss3RequestTransport(unittest.TestCase):
   def setUp(self):
     self.packer = CANPacker("toyota_tss3_pt_generated")
     self.transport = ToyotaTss3RequestTransport(self.packer)
+    self.transport.observe([], True)
 
   def update_control(self, now_nanos: int, *, enabled: bool = True, lat_active: bool = True,
                      long_active: bool = True, angle: float = 0.0, accel: float = 0.0):
@@ -45,21 +52,20 @@ class TestToyotaTss3RequestTransport(unittest.TestCase):
     )
 
   def start_request(self, now_nanos: int = 1_000_000_000):
-    self.transport.observe(source_tick(now_nanos), True)
     sends = self.update_control(now_nanos)
     self.assertFalse(any(msg.address == ADMIN_ADDR and msg.dat[0] == 7 for msg in sends))
     self.assertEqual(sum(msg.address == ORACLE_REQUEST_ADDR and msg.dat[0] == 0xC8 for msg in sends), 6)
-    self.assertIsNotNone(self.transport.inflight)
-    return self.transport.inflight.sequence
+    self.assertEqual(len(self.transport.pending_requests), 1)
+    return request_sequence_from_sends(sends)
 
-  def finish_handoff(self, now_nanos: int = 1_020_000_000):
-    sequence = self.transport.inflight.sequence
-    self.transport.observe(response(now_nanos, sequence), True)
-    sends = self.update_control(now_nanos)
+  def finish_handoff(self, now_nanos: int = 1_000_000_000):
+    sequence = self.start_request(now_nanos)
+    self.transport.observe(response(now_nanos + 15_000_000, sequence), True)
+    sends = self.update_control(now_nanos + 20_000_000)
     self.assertEqual(sends[0], CanData(ADMIN_ADDR, bytes.fromhex("07c9a80100000000"), ADMIN_BUS))
     host = next(msg for msg in sends if msg.address == NATIVE_08A_ADDR)
-    self.transport.observe(packets(now_nanos + 1, CanData(host.address, host.dat,
-                                                         DOWNSTREAM_BUS + PANDA_RETURNED_OFFSET)), True)
+    self.transport.observe(packets(now_nanos + 20_000_001, CanData(host.address, host.dat,
+                                                                   DOWNSTREAM_BUS + PANDA_RETURNED_OFFSET)), True)
     self.assertTrue(self.transport.active)
     return host
 
@@ -85,81 +91,178 @@ class TestToyotaTss3RequestTransport(unittest.TestCase):
     )
     self.assertEqual(application.hex(), "0000000880002d47fe0c46fe0c7fff007fffff85c00b100064000c00")
 
-  def test_native_ticks_coalesce_while_one_signature_is_inflight(self):
-    sequence = self.start_request()
-    first_application = self.transport.inflight.application
-
-    for nanos in (1_025_000_000, 1_050_000_000):
-      self.transport.observe(source_tick(nanos), True)
-      sends = self.update_control(nanos, angle=4.0, accel=-0.5)
-      self.assertEqual(sends, [])
-      self.assertEqual(self.transport.inflight.sequence, sequence)
-
-    self.transport.observe(response(1_055_000_000, sequence), True)
-    sends = self.update_control(1_055_000_000, angle=4.0, accel=-0.5)
-    self.assertEqual(sum(msg.address == NATIVE_08A_ADDR for msg in sends), 1)
-    self.assertEqual(sum(msg.address == ORACLE_REQUEST_ADDR and msg.dat[0] == 0xC8 for msg in sends), 6)
-    self.assertNotEqual(self.transport.inflight.application, first_application)
-    self.assertEqual(self.transport.inflight.application[8:10], (-500).to_bytes(2, "big", signed=True))
-
-  def test_controller_advances_only_for_a_new_application_generation(self):
-    self.assertFalse(self.transport.control_generation_due(enabled=True, lat_active=True, long_active=True))
-
-    self.transport.observe(source_tick(1_000_000_000), True)
+  def test_controller_clock_generates_without_a_native_08a_tick(self):
     self.assertTrue(self.transport.control_generation_due(enabled=True, lat_active=True, long_active=True))
-    self.update_control(1_000_000_000)
-    self.assertFalse(self.transport.control_generation_due(enabled=True, lat_active=True, long_active=True))
+    sends = self.update_control(1_000_000_000)
+    self.assertEqual(sum(msg.dat[0] == 0xC8 for msg in sends), 6)
+    first_sequence = request_sequence_from_sends(sends)
 
-    # A long-active pedal edge invalidates the stale in-flight application and
-    # creates one new generation from CarController's last published target.
-    self.transport.observe(source_tick(1_010_000_000), True)
-    self.assertTrue(self.transport.control_generation_due(enabled=True, lat_active=True, long_active=False))
+    # Native source traffic is still parser/liveness input, but it neither
+    # creates nor gates host generations.
+    self.transport.observe(source_tick(1_005_000_000), True)
+    self.assertEqual(len(self.transport.pending_requests), 1)
+
+    self.assertTrue(self.transport.control_generation_due(enabled=True, lat_active=True, long_active=True))
+    sends = self.update_control(1_010_000_000, angle=1.0, accel=-0.25)
+    self.assertEqual(sum(msg.dat[0] == 0xC8 for msg in sends), 6)
+    self.assertNotEqual(request_sequence_from_sends(sends), first_sequence)
+    self.assertEqual(len(self.transport.pending_requests), 2)
+
+  def test_100hz_pipeline_allows_multiple_signatures_in_flight(self):
+    sequences = []
+    for i in range(4):
+      now = 1_000_000_000 + i * 10_000_000
+      sends = self.update_control(now, angle=float(i), accel=-0.1 * i)
+      self.assertEqual(sum(msg.dat[0] == 0xC8 for msg in sends), 6)
+      sequences.append(request_sequence_from_sends(sends))
+
+    self.assertEqual(len(self.transport.pending_requests), 4)
+    self.assertEqual([request.sequence for request in self.transport.pending_requests], sequences)
+    self.assertEqual([request.application[26] for request in self.transport.pending_requests], [0, 1, 2, 3])
+
+  def test_pipeline_publishes_at_100hz_after_signer_latency_is_hidden(self):
+    seq0 = self.start_request(1_000_000_000)
+
+    sends = self.update_control(1_010_000_000, angle=1.0)
+    seq1 = request_sequence_from_sends(sends)
+
+    self.transport.observe(response(1_019_000_000, seq0), True)
+    sends = self.update_control(1_020_000_000, angle=2.0)
+    host0 = next(msg for msg in sends if msg.address == NATIVE_08A_ADDR)
+    self.assertEqual(host0.dat[26], 0)
+    seq2 = request_sequence_from_sends(sends)
+
+    # Confirm the first host publication so subsequent signed frames can flow.
+    self.transport.observe(packets(1_020_000_001, CanData(host0.address, host0.dat,
+                                                         DOWNSTREAM_BUS + PANDA_RETURNED_OFFSET)), True)
+
+    self.transport.observe(response(1_029_000_000, seq1), True)
+    sends = self.update_control(1_030_000_000, angle=3.0)
+    host1 = next(msg for msg in sends if msg.address == NATIVE_08A_ADDR)
+    self.assertEqual(host1.dat[26], 1)
+    seq3 = request_sequence_from_sends(sends)
+
+    self.transport.observe(response(1_039_000_000, seq2), True)
+    sends = self.update_control(1_040_000_000, angle=4.0)
+    host2 = next(msg for msg in sends if msg.address == NATIVE_08A_ADDR)
+    self.assertEqual(host2.dat[26], 2)
+
+    self.assertNotEqual(seq0, seq1)
+    self.assertNotEqual(seq1, seq2)
+    self.assertNotEqual(seq2, seq3)
+
+  def test_later_response_supersedes_one_missing_response_without_stalling(self):
+    seq0 = self.start_request(1_000_000_000)
+    sends = self.update_control(1_010_000_000, angle=1.0, accel=-0.25)
+    seq1 = request_sequence_from_sends(sends)
+
+    # Response 0 is lost. Response 1 proves the resident advanced past it, so
+    # publish generation 1 on the next ordinary controller tick rather than
+    # waiting 50 ms and retrying stale control.
+    self.transport.observe(response(1_019_000_000, seq1), True)
+    sends = self.update_control(1_020_000_000, angle=2.0, accel=-0.5)
+    host = next(msg for msg in sends if msg.address == NATIVE_08A_ADDR)
+    self.assertEqual(host.dat[26], 1)
+    self.assertEqual(host.dat[8:10], (-250).to_bytes(2, "big", signed=True))
+    self.assertNotIn(seq0, self.transport.requests_by_sequence)
+
+  def test_ready_responses_are_preserved_in_order(self):
+    seq0 = self.start_request(1_000_000_000)
+    seq1 = request_sequence_from_sends(self.update_control(1_010_000_000, angle=1.0))
+
+    frames = [
+      CanData(ORACLE_RESPONSE_ADDR, bytes((0xC9, seq0, 0, seq0 ^ 0xFF)) + KNOWN_TRAILER, ORACLE_BUS),
+      CanData(ORACLE_RESPONSE_ADDR, bytes((0xC9, seq1, 0, seq1 ^ 0xFF)) + bytes.fromhex("2d64e2a5"), ORACLE_BUS),
+    ]
+    self.transport.observe(packets(1_019_000_000, *frames), True)
+
+    sends = self.update_control(1_020_000_000)
+    host0 = next(msg for msg in sends if msg.address == NATIVE_08A_ADDR)
+    self.assertEqual(host0.dat[26], 0)
+    self.transport.observe(packets(1_020_000_001, CanData(host0.address, host0.dat,
+                                                         DOWNSTREAM_BUS + PANDA_RETURNED_OFFSET)), True)
+
+    sends = self.update_control(1_030_000_000)
+    host1 = next(msg for msg in sends if msg.address == NATIVE_08A_ADDR)
+    self.assertEqual(host1.dat[26], 1)
+
+  def test_signer_error_skips_failed_generation_instead_of_retrying_it(self):
+    seq0 = self.start_request(1_000_000_000)
+    seq1 = request_sequence_from_sends(self.update_control(1_010_000_000, angle=1.0, accel=-0.25))
+
+    self.transport.observe(response(1_018_000_000, seq0, status=2), True)
+    self.transport.observe(response(1_019_000_000, seq1), True)
+    sends = self.update_control(1_020_000_000, angle=2.0, accel=-0.5)
+
+    host = next(msg for msg in sends if msg.address == NATIVE_08A_ADDR)
+    self.assertEqual(host.dat[26], 1)
+    self.assertEqual(host.dat[8:10], (-250).to_bytes(2, "big", signed=True))
+    self.assertNotIn(seq0, self.transport.requests_by_sequence)
 
   def test_control_edge_discards_stale_signer_response(self):
-    sequence = self.start_request()
-    self.transport.observe(response(1_020_000_000, sequence), True)
+    seq0 = self.start_request(1_000_000_000)
 
-    # The response was produced for active longitudinal control. A pedal or
-    # disengagement edge updates longActive before CarController drains sends.
+    # A pedal edge creates a new control epoch and immediately queues the new
+    # 100 Hz application; the old response can no longer publish.
+    sends = self.update_control(1_010_000_000, long_active=False)
+    seq1 = request_sequence_from_sends(sends)
+    self.assertNotEqual(seq0, seq1)
+    self.assertEqual(self.transport.pending_requests[0].application[8:10], bytes(2))
+
+    self.transport.observe(response(1_015_000_000, seq0), True)
+    self.assertNotIn(seq0, self.transport.requests_by_sequence)
+
+    self.transport.observe(response(1_019_000_000, seq1), True)
     sends = self.update_control(1_020_000_000, long_active=False)
-    self.assertFalse(any(msg.address == NATIVE_08A_ADDR for msg in sends))
-
-    self.transport.observe(source_tick(1_025_000_000), True)
-    sends = self.update_control(1_025_000_000, long_active=False)
-    self.assertEqual(sum(msg.address == ORACLE_REQUEST_ADDR and msg.dat[0] == 0xC8 for msg in sends), 6)
-    self.assertEqual(self.transport.inflight.application[8:10], bytes(2))
-
-  def test_timeout_retries_latest_control_without_historical_queue(self):
-    first_sequence = self.start_request()
-    sends = self.update_control(1_051_000_000, angle=3.0, accel=-0.75)
-    self.assertEqual(sum(msg.address == ORACLE_REQUEST_ADDR and msg.dat[0] == 0xC8 for msg in sends), 6)
-    self.assertNotEqual(self.transport.inflight.sequence, first_sequence)
-    self.assertEqual(self.transport.inflight.application[8:10], (-750).to_bytes(2, "big", signed=True))
-
-  def test_signer_error_retries_latest_control(self):
-    first_sequence = self.start_request()
-    self.transport.observe(response(1_020_000_000, first_sequence, status=2), True)
-    sends = self.update_control(1_020_000_000, angle=2.0, accel=-0.25)
-    self.assertEqual(sum(msg.dat[0] == 0xC8 for msg in sends), 6)
-    self.assertNotEqual(self.transport.inflight.sequence, first_sequence)
-    self.assertEqual(self.transport.inflight.application[8:10], (-250).to_bytes(2, "big", signed=True))
+    host = next(msg for msg in sends if msg.address == NATIVE_08A_ADDR)
+    self.assertEqual(host.dat[8:10], bytes(2))
 
   def test_unmatched_signer_response_is_ignored(self):
-    sequence = self.start_request()
-    other_sequence = (sequence % 0x1F) + 1
-    self.transport.observe(response(1_020_000_000, other_sequence), True)
-    self.assertEqual(self.update_control(1_020_000_000), [])
-    self.assertEqual(self.transport.inflight.sequence, sequence)
+    seq = self.start_request(1_000_000_000)
+    other = (seq % 0x1F) + 1
+    self.transport.observe(response(1_005_000_000, other), True)
+    self.assertIn(seq, self.transport.requests_by_sequence)
+    self.assertIsNone(self.transport.requests_by_sequence[seq].trailer)
+
+  def test_watchdog_starts_when_signing_can_actually_start(self):
+    self.transport.observe([], False)
+    sends = self.update_control(1_000_000_000)
+    self.assertEqual(sends, [])
+    self.assertEqual(self.transport.control_started_ns, 0)
+    self.assertFalse(self.transport.authority_unavailable())
+
+    # Recovering CAN well after 90 ms must start acquisition normally rather
+    # than inheriting a watchdog deadline from the earlier enable edge.
+    self.transport.observe([], True)
+    sends = self.update_control(2_000_000_000)
+    self.assertEqual(sum(msg.dat[0] == 0xC8 for msg in sends), 6)
+    self.assertEqual(self.transport.control_started_ns, 2_000_000_000)
+    self.assertFalse(self.transport.authority_unavailable())
+
+  def test_pipeline_is_bounded_when_signer_stops_responding(self):
+    for i in range(ORACLE_MAX_PENDING_GENERATIONS):
+      sends = self.update_control(1_000_000_000 + i * 10_000_000, angle=float(i))
+      self.assertEqual(sum(msg.dat[0] == 0xC8 for msg in sends), 6)
+
+    self.assertEqual(len(self.transport.pending_requests), ORACLE_MAX_PENDING_GENERATIONS)
+    self.assertFalse(self.transport.control_generation_due(enabled=True, lat_active=True, long_active=True))
+
+    sends = self.update_control(1_080_000_000, angle=20.0)
+    self.assertFalse(any(msg.dat[0] == 0xC8 for msg in sends))
+    self.assertFalse(self.transport.authority_unavailable())
+
+    sends = self.update_control(1_100_000_000, angle=20.0)
+    self.assertEqual(self.transport.last_failure_reason, "oracle_dead")
+    self.assertTrue(self.transport.authority_unavailable())
+    self.assertFalse(any(msg.dat[0] == 0xC8 for msg in sends))
 
   def test_disable_releases_request_plane(self):
-    self.start_request()
     self.finish_handoff()
     sends = self.update_control(1_030_000_000, enabled=False, lat_active=False, long_active=False)
     self.assertIn(CanData(ADMIN_ADDR, bytes.fromhex("07c9a80000000000"), ADMIN_BUS), sends)
     self.assertFalse(self.transport.active)
 
   def test_invalid_can_releases_request_plane(self):
-    self.start_request()
     self.finish_handoff()
     self.transport.observe([], False)
     sends = self.update_control(1_030_000_000)
@@ -168,9 +271,8 @@ class TestToyotaTss3RequestTransport(unittest.TestCase):
     self.assertFalse(self.transport.active)
 
   def test_handoff_reject_reports_unavailable_authority(self):
-    self.start_request()
-    sequence = self.transport.inflight.sequence
-    self.transport.observe(response(1_020_000_000, sequence), True)
+    sequence = self.start_request()
+    self.transport.observe(response(1_015_000_000, sequence), True)
     sends = self.update_control(1_020_000_000)
     host = next(msg for msg in sends if msg.address == NATIVE_08A_ADDR)
     self.transport.observe(packets(1_021_000_000, CanData(host.address, host.dat,
@@ -178,19 +280,9 @@ class TestToyotaTss3RequestTransport(unittest.TestCase):
     self.assertEqual(self.transport.last_failure_reason, "handoff_host_frame_rejected")
     self.assertTrue(self.transport.authority_unavailable())
 
-  def test_waiting_for_native_publication_is_not_an_authority_failure(self):
-    # Engagement can arrive just after a native 0x08A tick. Waiting for the
-    # next source publication is ordinary acquisition, not an ACC/EPS fault.
-    self.update_control(1_000_000_000)
-    self.assertFalse(self.transport.active)
-    self.assertFalse(self.transport.arm_pending)
-    self.assertFalse(self.transport.publication_due)
-    self.assertFalse(self.transport.authority_unavailable())
-
   def test_new_engagement_clears_a_previous_authority_failure(self):
-    self.start_request()
-    sequence = self.transport.inflight.sequence
-    self.transport.observe(response(1_020_000_000, sequence), True)
+    sequence = self.start_request()
+    self.transport.observe(response(1_015_000_000, sequence), True)
     sends = self.update_control(1_020_000_000)
     host = next(msg for msg in sends if msg.address == NATIVE_08A_ADDR)
     self.transport.observe(packets(1_021_000_000, CanData(host.address, host.dat,
@@ -198,9 +290,10 @@ class TestToyotaTss3RequestTransport(unittest.TestCase):
     self.assertTrue(self.transport.authority_unavailable())
 
     self.update_control(1_022_000_000, enabled=False, lat_active=False, long_active=False)
-    self.update_control(1_023_000_000)
+    sends = self.update_control(1_030_000_000)
     self.assertFalse(self.transport.authority_unavailable())
     self.assertEqual(self.transport.last_failure_reason, "")
+    self.assertEqual(sum(msg.dat[0] == 0xC8 for msg in sends), 6)
 
 
 if __name__ == "__main__":
