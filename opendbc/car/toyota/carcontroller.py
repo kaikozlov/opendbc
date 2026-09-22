@@ -8,8 +8,8 @@ from opendbc.car.common.pid import PIDController
 from opendbc.car.secoc import add_mac, build_sync_mac
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.toyota import toyotacan
-from opendbc.car.toyota.tss3 import ToyotaTss3RequestTransport, build_signer_control, target_angle_deg_to_raw
-from opendbc.car.toyota.values import CAR, CarControllerParams, ToyotaFlags, ToyotaSafetyFlags
+from opendbc.car.toyota.tss3 import ToyotaTss3RequestTransport
+from opendbc.car.toyota.values import CAR, CarControllerParams, ToyotaFlags
 from opendbc.car.vehicle_model import VehicleModel
 from opendbc.can import CANPacker
 
@@ -77,14 +77,11 @@ class CarController(CarControllerBase):
     self.secoc_acc_message_counter = 0
     self.secoc_prev_reset_counter = 0
 
-    self.tss3_control_sequence = 0
-    self.tss3_host_request_plane = (self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3 and self.CP.safetyConfigs and
-                                    bool(self.CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.TSS3_08A_HOST.value))
-    if self.tss3_host_request_plane:
+    if self.CP.flags & ToyotaFlags.TSS3:
       # Signed applications are generated at roughly 40 Hz. Two normal
       # controller ticks conservatively match that application cadence.
       self.params.STEER_STEP = 2
-    self.tss3_request_transport = ToyotaTss3RequestTransport(self.packer) if self.tss3_host_request_plane else None
+    self.tss3_request_transport = ToyotaTss3RequestTransport(self.packer) if self.CP.flags & ToyotaFlags.TSS3 else None
 
   def observe_tss3_request_plane(self, can_packets, can_valid: bool) -> None:
     if self.tss3_request_transport is not None:
@@ -99,7 +96,6 @@ class CarController(CarControllerBase):
       output = CC.actuators.as_builder()
       can_sends = []
 
-      host_request_plane = self.tss3_host_request_plane
       lateral_command_active = CC.latActive
       longitudinal_command_active = self.CP.openpilotLongitudinalControl and CC.longActive
       hud_control = CC.hudControl
@@ -109,49 +105,30 @@ class CarController(CarControllerBase):
       # transport for that application and owns no actuator state.
       desired_angle = CC.actuators.steeringAngleDeg + CS.out.steeringAngleOffsetDeg
       measured_angle = CS.out.steeringAngleDeg + CS.out.steeringAngleOffsetDeg
-      create_lateral_application = not host_request_plane or not lateral_command_active or \
+      create_lateral_application = not lateral_command_active or \
         self.tss3_request_transport.control_generation_due(
           enabled=CC.enabled,
           lat_active=CC.latActive,
           long_active=longitudinal_command_active,
         )
-      if self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:
-        if create_lateral_application:
-          self.last_angle = apply_steer_angle_limits_vm(
-            desired_angle, self.last_angle, CS.out.vEgoRaw, measured_angle,
-            lateral_command_active, self.params, self.VM,
-          )
-      else:
-        self.last_angle = apply_std_steer_angle_limits(
+      if create_lateral_application:
+        self.last_angle = apply_steer_angle_limits_vm(
           desired_angle, self.last_angle, CS.out.vEgoRaw, measured_angle,
-          lateral_command_active, self.params.TSS3_ANGLE_LIMITS,
+          lateral_command_active, self.params, self.VM,
         )
-
-      if not host_request_plane:
-        if CC.latActive:
-          self.tss3_control_sequence = self.tss3_control_sequence % 0xFF + 1
-        # Corolla and the legacy Camry bring-up path command the EPS-resident
-        # B6 signer directly. The F33 request-plane path instead consumes this
-        # same rate-limited target through the Toyota signer transport.
-        can_sends.append(build_signer_control(
-          target_angle_deg_to_raw(self.last_angle), self.tss3_control_sequence if CC.latActive else 0,
-        ))
       output.steeringAngleDeg = self.last_angle
 
       # Cancel remains the ordinary Brake Module command observed on each
       # topology; it is independent of the protected 0x08A actuation plane.
       if CC.cruiseControl.cancel:
-        if self.CP.carFingerprint == CAR.TOYOTA_COROLLA_TSS3:
-          can_sends.append(toyotacan.create_tss3_brake_cancel_command(self.packer, CS.tss3_brake_module, 1))
-        elif self.CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3 and host_request_plane:
-          can_sends.append(toyotacan.create_tss3_brake_cancel_command(self.packer, CS.tss3_brake_module, 2))
+        can_sends.append(toyotacan.create_tss3_brake_cancel_command(self.packer, CS.tss3_brake_module, 2))
 
       # Match Toyota's ordinary HUD ownership pattern: suppress the source
       # frame in Panda and regenerate it at 5 Hz, with immediate alert edges.
       steer_alert = hud_control.visualAlert in (VisualAlert.steerRequired, VisualAlert.ldw)
       send_ui = steer_alert != self.alert_active
       self.alert_active = steer_alert
-      if host_request_plane and CS.tss3_lkas_hud and (self.frame % 20 == 0 or send_ui):
+      if CS.tss3_lkas_hud and (self.frame % 20 == 0 or send_ui):
         can_sends.append(toyotacan.create_tss3_hud_command(
           CS.tss3_lkas_hud, hud_control.leftLaneVisible, hud_control.rightLaneVisible,
           CC.latActive, steer_alert,

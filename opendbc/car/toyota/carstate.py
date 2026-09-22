@@ -5,7 +5,7 @@ from opendbc.car import Bus, DT_CTRL, create_button_events, structs
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.common.filter_simple import FirstOrderFilter
 from opendbc.car.interfaces import CarStateBase
-from opendbc.car.toyota.values import ToyotaFlags, ToyotaSafetyFlags, CAR, DBC, STEER_THRESHOLD, EPS_SCALE, TSS3_STEER_DRIVER_TORQUE_THRESHOLD
+from opendbc.car.toyota.values import ToyotaFlags, CAR, DBC, STEER_THRESHOLD, EPS_SCALE, TSS3_STEER_DRIVER_TORQUE_THRESHOLD
 
 ButtonType = structs.CarState.ButtonEvent.Type
 SteerControlType = structs.CarParams.SteerControlType
@@ -31,10 +31,7 @@ class CarState(CarStateBase):
     self.cluster_min_speed = CV.KPH_TO_MS / 2.
 
     if CP.flags & ToyotaFlags.TSS3:
-      # TSS3 Corolla variants share the platform/EPS API but not the best available
-      # gear carrier. The HV keeps Toyota's high-rate 0x127 ordinal packet; the
-      # retained 2023 route uses the generation-native one-hot 0x3BF packet.
-      self.tss3_gear_packet = "GEAR_PACKET_HYBRID" if CP.flags & ToyotaFlags.HYBRID else "TSS3_GEAR_PACKET"
+      self.tss3_gear_packet = "GEAR_PACKET_HYBRID"
       self.shifter_values = can_define.dv[self.tss3_gear_packet]["GEAR"]
     elif CP.flags & ToyotaFlags.SECOC.value:
       self.shifter_values = can_define.dv["GEAR_PACKET_HYBRID"]["GEAR"]
@@ -51,7 +48,6 @@ class CarState(CarStateBase):
     self.distance_button = 0
     self.tss3_cruise_button = 0
     self.tss3_lta_switch_state = None
-    self.tss3_distance_state = None
 
     self.pcm_follow_distance = 0
 
@@ -107,11 +103,7 @@ class CarState(CarStateBase):
       ret.rightBlindspot = bool(source_cp.vl["BSM"]["R_ADJACENT"] or source_cp.vl["BSM"]["R_APPROACHING"])
 
   def _update_tss3(self, cp: CANParser, cp_src: CANParser) -> structs.CarState:
-    if self.CP.carFingerprint == CAR.TOYOTA_COROLLA_TSS3:
-      return self._update_tss3_corolla(cp)
-
-    relay_correct_f33 = bool(self.CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.TSS3_08A_HOST.value)
-    source_cp = cp_src if relay_correct_f33 else cp
+    source_cp = cp_src
 
     ret = structs.CarState()
     if source_cp.vl_all["TSS3_LKAS_HUD"]["BYTE_0"]:
@@ -136,12 +128,6 @@ class CarState(CarStateBase):
       3: ButtonType.accelCruise,
       4: ButtonType.mainCruise,
     })
-
-    # Retain Toyota's absolute four-position selector for the Toyota-local
-    # personality policy in CarInterface.
-    distance_state = int(source_cp.vl["TSS3_CRUISE_DISPLAY"]["SET_VEHICLE_INTERVAL_TIME"])
-    if distance_state in range(1, 5):
-      self.tss3_distance_state = distance_state
 
     # The canonical HUD carrier distinguishes LTA off (0x10) from enabled
     # states (0x12 available, 0x14 active). Ignore active/available transitions;
@@ -173,29 +159,6 @@ class CarState(CarStateBase):
     if ret.cruiseState.speed != 0 and cluster_set_speed > 0:
       is_metric = cp.vl["BODY_CONTROL_STATE_2"]["UNITS"] in (1, 2)
       ret.cruiseState.speedCluster = cluster_set_speed * (CV.KPH_TO_MS if is_metric else CV.MPH_TO_MS)
-
-    return ret
-
-  def _update_tss3_corolla(self, cp: CANParser) -> structs.CarState:
-    ret = structs.CarState()
-    self._update_tss3_common(ret, cp, cp, cluster_speed_from_ui=False)
-    request = cp.vl["TSS3_CONTROL_REQUEST"]
-    longitudinal_id_b = int(request["LONGITUDINAL_REQUEST_ID_B"])
-    allocation_b = int(request["LONGITUDINAL_ALLOCATION_METHOD_B"])
-    ret.cruiseState.enabled = bool(request["COROLLA_ACC_ENGAGED"])
-    # The former raw-B7 ACC state decomposes into a six-bit request ID plus a
-    # two-bit allocation method. Idle/request states retain a nonzero B ID;
-    # delayed hold is ID25 with allocation method 2/3 (raw 0x66/0x67).
-    ret.cruiseState.available = longitudinal_id_b != 0
-    ret.cruiseState.standstill = ret.cruiseState.enabled and longitudinal_id_b == 25 and allocation_b in (2, 3)
-
-    # The contributor's live capture establishes 0x251 byte 2 as the retained
-    # dash set speed in mph. It remains populated while disengaged, matching
-    # openpilot's PCM-cruise expectation.
-    set_speed_mph = float(cp.vl["TSS3_CRUISE_DISPLAY"]["UI_SET_SPEED"])
-    if set_speed_mph > 0:
-      ret.cruiseState.speed = set_speed_mph * CV.MPH_TO_MS
-      ret.cruiseState.speedCluster = ret.cruiseState.speed
 
     return ret
 
@@ -360,57 +323,28 @@ class CarState(CarStateBase):
         ("WHEEL_SPEEDS", 100),
         ("BRAKE_MODULE", 50),
         ("GAS_PEDAL", 40),
-        ("GEAR_PACKET_HYBRID", 50) if CP.flags & ToyotaFlags.HYBRID else ("TSS3_GEAR_PACKET", 1),
+        ("GEAR_PACKET_HYBRID", 50),
         ("TSS3_READY_STATUS", 1),
         ("ESP_CONTROL", 3),
         ("BLINKERS_STATE", 1),
         ("BODY_CONTROL_STATE", 3),
         ("LIGHT_STALK", 1),
       ]
-      if CP.carFingerprint == CAR.TOYOTA_COROLLA_TSS3:
-        pt_messages = common_messages + [
-          ("TSS3_CONTROL_REQUEST", 40),
-          ("TSS3_CRUISE_DISPLAY", 1),
-        ]
-        if CP.flags & ToyotaFlags.HAS_BSM:
-          pt_messages.append(("BSM", 1))
-        return {
-          Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, 1),
-          Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], [], 2),
-        }
-
-      relay_correct_f33 = bool(CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.TSS3_08A_HOST.value)
-      if relay_correct_f33:
-        # Physical repin splits exact F33 into a chassis/state side on bus0 and
-        # the FRC-owned source vocabulary on bus2. Require both parsers healthy.
-        pt_messages = common_messages + [
-          ("TSS3_CRUISE_SWITCH", 30),
-          ("BODY_CONTROL_STATE_2", 3),
-        ]
-        source_messages = [
-          ("TSS3_CONTROL_REQUEST", 40),
-          ("TSS3_CRUISE_DISPLAY", 1),
-          ("TSS3_LKAS_HUD", 1),
-        ]
-        if CP.flags & ToyotaFlags.HAS_BSM:
-          source_messages.append(("BSM", 1))
-        return {
-          Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, 0),
-          Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], source_messages, 2),
-        }
-
+      # Repinned Camry: chassis/state on bus0, source on bus2.
       pt_messages = common_messages + [
         ("TSS3_CRUISE_SWITCH", 30),
         ("BODY_CONTROL_STATE_2", 3),
+      ]
+      source_messages = [
         ("TSS3_CONTROL_REQUEST", 40),
         ("TSS3_CRUISE_DISPLAY", 1),
         ("TSS3_LKAS_HUD", 1),
       ]
       if CP.flags & ToyotaFlags.HAS_BSM:
-        pt_messages.append(("BSM", 1))
+        source_messages.append(("BSM", 1))
       return {
-        Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, 1),
-        Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], [], 2),
+        Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, 0),
+        Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], source_messages, 2),
       }
 
     pt_messages = [

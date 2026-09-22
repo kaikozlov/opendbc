@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from opendbc.can import CANParser
 from opendbc.car import Bus, CanData, structs
@@ -43,26 +44,18 @@ CAMRY_RADAR = {
 }
 
 
-def fingerprint() -> dict[int, dict[int, int]]:
-  fp = {i: {} for i in range(8)}
-  fp[1] = {address: len(data) for address, data in CAMRY_COMMON.items()}
-  return fp
-
-
 def relay_fingerprint() -> dict[int, dict[int, int]]:
-  fp = fingerprint()
-  # Exact measured repin: chassis/state side on bus0, FRC source on bus2,
-  # radar/object family remains on bus1. Only the topology discriminators are
-  # required here; parser behavior is covered separately below.
-  fp[0][0x025] = len(CAMRY_COMMON[0x025])
-  fp[2][0x08A] = len(CAMRY_COMMON[0x08A])
-  fp[2][0x3F6] = len(CAMRY_COMMON[0x3F6])
+  fp = {i: {} for i in range(8)}
+  source_ids = {0x08A, 0x251, 0x3F6, 0x412}
+  for address, data in (CAMRY_COMMON | {0x412: CAMRY_HUD}).items():
+    fp[2 if address in source_ids else 0][address] = len(data)
+  fp[1] = {address: len(data) for address, data in CAMRY_RADAR.items()}
   return fp
 
 
 def update_state(ci: CarInterface, moving: bool = False, counter_offset: int = 0, hud: bytes | None = None,
                  eps_status: int | None = None, eps_telemetry: bytes | None = None,
-                 control_request: bytes | None = None, bus: int = 1, source_bus: int | None = None,
+                 control_request: bytes | None = None, bus: int = 0, source_bus: int | None = 2,
                  speed_ms: float | None = None, cruise_display: bytes | None = None, iterations: int = 20):
   state = None
   for i in range(iterations):
@@ -112,7 +105,7 @@ def control(angle: float, active: bool = True, accel: float = 0.0, long_active: 
 
 class TestToyotaCamryTSS3(unittest.TestCase):
   def setUp(self):
-    self.CP = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint(), [], True, False, False)
+    self.CP = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, relay_fingerprint(), [], True, False, False)
 
   def test_platform_contract(self):
     self.assertTrue(self.CP.flags & ToyotaFlags.TSS3)
@@ -120,9 +113,9 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertFalse(self.CP.flags & ToyotaFlags.TSS2)
     self.assertFalse(self.CP.dashcamOnly)
     self.assertFalse(self.CP.secOcRequired)
-    self.assertFalse(self.CP.openpilotLongitudinalControl)
+    self.assertTrue(self.CP.openpilotLongitudinalControl)
     self.assertFalse(self.CP.alphaLongitudinalAvailable)
-    self.assertFalse(self.CP.autoResumeSng)
+    self.assertTrue(self.CP.autoResumeSng)
     self.assertFalse(self.CP.radarUnavailable)
     self.assertEqual(DBC[CAR.TOYOTA_CAMRY_TSS3][Bus.radar], "toyota_tss3_pt_generated")
     self.assertAlmostEqual(self.CP.steerRatio, 15.3, places=3)
@@ -133,39 +126,9 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertEqual(self.CP.steerControlType, structs.CarParams.SteerControlType.angle)
     self.assertEqual(self.CP.safetyConfigs[0].safetyModel, structs.CarParams.SafetyModel.toyota)
     self.assertTrue(self.CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.TSS3_SIGNER)
-    self.assertTrue(self.CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.STOCK_LONGITUDINAL)
+    self.assertFalse(self.CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.STOCK_LONGITUDINAL)
     self.assertEqual(DBC[CAR.TOYOTA_CAMRY_TSS3][Bus.pt], "toyota_tss3_pt_generated")
     self.assertTrue(self.CP.flags & ToyotaFlags.HAS_BSM)
-
-  def test_relay_request_plane_is_selected_from_fingerprint_topology(self):
-    stock = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint(), [], True, False, False)
-    self.assertFalse(stock.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.TSS3_08A_HOST.value)
-
-    relay = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, relay_fingerprint(), [], True, False, False)
-    self.assertTrue(relay.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.TSS3_08A_HOST.value)
-    self.assertTrue(relay.flags & ToyotaFlags.HAS_BSM)
-    self.assertFalse(relay.alphaLongitudinalAvailable)
-    self.assertTrue(relay.openpilotLongitudinalControl)
-    self.assertTrue(relay.autoResumeSng)
-    self.assertTrue(relay.pcmCruise)
-    self.assertAlmostEqual(relay.longitudinalActuatorDelay, 0.2)
-    self.assertEqual(list(relay.longitudinalTuning.kiBP), [0.])
-    self.assertEqual(list(relay.longitudinalTuning.kiV), [0.])
-    self.assertFalse(relay.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.STOCK_LONGITUDINAL.value)
-
-    relay_without_toggle = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, relay_fingerprint(), [], False, False, False)
-    self.assertFalse(relay_without_toggle.alphaLongitudinalAvailable)
-    self.assertTrue(relay_without_toggle.openpilotLongitudinalControl)
-    self.assertTrue(relay_without_toggle.pcmCruise)
-    self.assertFalse(relay_without_toggle.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.STOCK_LONGITUDINAL.value)
-
-  def test_unqualified_camry_longitudinal_is_not_advertised(self):
-    for alpha_long in (False, True):
-      cp = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint(), [], alpha_long, False, False)
-      self.assertFalse(cp.alphaLongitudinalAvailable)
-      self.assertFalse(cp.openpilotLongitudinalControl)
-      self.assertFalse(cp.autoResumeSng)
-      self.assertTrue(cp.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.STOCK_LONGITUDINAL)
 
   def test_exact_identity(self):
     fw = FW_VERSIONS[CAR.TOYOTA_CAMRY_TSS3]
@@ -175,7 +138,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
   def test_tss3_radar_points_from_retained_object_bank(self):
     # Raw source frames exercise the default Camry radar interface.
     ri = RadarInterface(self.CP)
-    packets = [CanData(address, data, 0) for address, data in CAMRY_RADAR.items()]
+    packets = [CanData(address, data, 1) for address, data in CAMRY_RADAR.items()]
     rr = ri.update([(1_000_000_000, packets)])
     self.assertIsNotNone(rr)
     points = {point.trackId: point for point in rr.points}
@@ -202,7 +165,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
       data[3] = (data[3] + 1) & 0xFF
       data[:2] = toyota_e2e_p05_checksum(address, data).to_bytes(2, "little")
       empty[address] = bytes(data)
-    rr = ri.update([(1_050_000_000, [CanData(address, data, 0) for address, data in empty.items()])])
+    rr = ri.update([(1_050_000_000, [CanData(address, data, 1) for address, data in empty.items()])])
     self.assertIsNotNone(rr)
     self.assertEqual(len(rr.points), 0)
 
@@ -273,9 +236,10 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     display_parser.update([(1_030_000_000, [CanData(0x251, bytes.fromhex("a00000488088a080"), 1)])])
     self.assertEqual(display_parser.vl["TSS3_CRUISE_DISPLAY"]["SET_VEHICLE_INTERVAL_TIME"], 4)
 
-  def test_stock_toyota_b_state_is_entirely_on_bus_one(self):
+  def test_repin_state_uses_chassis_and_source_buses(self):
     ci = CarInterface(self.CP)
-    self.assertEqual(ci.can_parsers[Bus.pt].bus, 1)
+    self.assertEqual(ci.can_parsers[Bus.pt].bus, 0)
+    self.assertEqual(ci.can_parsers[Bus.cam].bus, 2)
     state = update_state(ci)
     self.assertEqual(state.gearShifter, structs.CarState.GearShifter.drive)
     self.assertTrue(state.cruiseState.available)
@@ -357,32 +321,6 @@ class TestToyotaCamryTSS3(unittest.TestCase):
         self.assertFalse(state.steerFaultPermanent)
         self.assertEqual(state.vehicleSensorsInvalid, bool(status & 1))
 
-  def test_controller_emits_c7_without_unqualified_camry_longitudinal_output(self):
-    ci = CarInterface(self.CP)
-    update_state(ci, moving=True)
-    output, sends = ci.apply(control(5.0, accel=1.2, long_active=True), 2_000_000_000)
-    self.assertEqual(len(sends), 1)
-    address, data, bus = sends[0]
-    self.assertEqual((address, bus, len(data)), (0x777, 1, 8))
-    self.assertEqual(data[:4], b"\x07\xC7\xC7\x01")
-    self.assertEqual(data[6:], b"\x00\x00")
-    self.assertAlmostEqual(output.steeringAngleDeg,
-                           int.from_bytes(data[4:6], "big", signed=True) * (1024 / 17870), delta=0.03)
-    self.assertEqual(output.accel, 0.0)
-    self.assertFalse(any(address == 0x160 for address, _, _ in sends))
-
-  def test_controller_emits_c7_at_native_100hz(self):
-    ci = CarInterface(self.CP)
-    update_state(ci, moving=True)
-    sequences = []
-    for i in range(4):
-      _, sends = ci.apply(control(5.0), 2_000_000_000 + i * 10_000_000)
-      self.assertEqual(len(sends), 1)
-      address, data, bus = sends[0]
-      self.assertEqual((address, bus), (0x777, 1))
-      sequences.append(data[3])
-    self.assertEqual(sequences, [1, 2, 3, 4])
-
   def test_host_request_plane_uses_normal_angle_control_without_emitting_c7(self):
     cp = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, relay_fingerprint(), [], True, False, False)
     ci = CarInterface(cp)
@@ -431,14 +369,16 @@ class TestToyotaCamryTSS3(unittest.TestCase):
 
   def test_f33_uses_vehicle_model_limits_instead_of_tss2_rate_curve(self):
     ci = CarInterface(self.CP)
-    state = update_state(ci, speed_ms=25.0)
+    state = update_state(ci, speed_ms=25.0, hud=CAMRY_HUD)
     self.assertAlmostEqual(state.vEgoRaw, 25.0, delta=0.05)
 
-    output, _ = ci.apply(control(20.0), 2_000_000_000)
-    # The exact value comes from the Camry vehicle model's common lateral-jerk
-    # envelope. It is deliberately above the inherited TSS2 0.075 deg/tick.
-    self.assertGreater(output.steeringAngleDeg, 0.19)
-    self.assertLess(output.steeringAngleDeg, 0.23)
+    # Test controller limiting independently of authentication availability.
+    with patch.object(ci.CC.tss3_request_transport, "control_generation_due", return_value=True):
+      output, _ = ci.apply(control(20.0), 2_000_000_000)
+    # The repinned controller uses two control ticks per application. Its
+    # vehicle-model jerk envelope remains distinct from the TSS2 rate curve.
+    self.assertGreater(output.steeringAngleDeg, 0.40)
+    self.assertLess(output.steeringAngleDeg, 0.44)
 
   def test_host_request_plane_cancel_clones_native_brake_status_to_source_side(self):
     cp = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, relay_fingerprint(), [], True, False, False)
@@ -446,26 +386,6 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     update_state(ci, bus=0, source_bus=2, hud=CAMRY_HUD)
     _, sends = ci.apply(control(0.0, active=False, cancel=True), 2_000_000_000)
     self.assertIn((0x101, bytes.fromhex("8800000100000093"), 2), sends)
-
-  def test_inactive_c7_tracks_measured_angle_with_neutral_sequence(self):
-    ci = CarInterface(self.CP)
-    state = update_state(ci)
-    _, sends = ci.apply(control(20.0, False), 2_000_000_000)
-    _, data, bus = next(msg for msg in sends if msg[0] == 0x777)
-    self.assertEqual(bus, 1)
-    self.assertEqual(data[:4], b"\x07\xC7\xC7\x00")
-    angle = int.from_bytes(data[4:6], "big", signed=True) * (1024 / 17870)
-    self.assertAlmostEqual(angle, state.steeringAngleDeg, delta=0.12)
-
-  def test_stock_harness_hud_is_observed_not_replaced(self):
-    ci = CarInterface(self.CP)
-    update_state(ci, hud=CAMRY_HUD)
-    self.assertEqual(ci.can_parsers[Bus.pt].vl["TSS3_LKAS_HUD"]["BYTE_0"], 0x14)
-    self.assertNotIn(0x412, ci.can_parsers[Bus.cam].addresses)
-    for i in range(110):
-      _, sends = ci.apply(control(1.0, cancel=True, left_lane=True, right_lane=True, steer_alert=True),
-                          2_000_000_000 + i * 10_000_000)
-      self.assertFalse(any(address in (0x101, 0x412) for address, _, _ in sends))
 
   def test_relay_hud_replaces_source_at_five_hz_and_on_alert_edges(self):
     cp = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, relay_fingerprint(), [], True, False, False)
@@ -505,74 +425,17 @@ class TestToyotaCamryTSS3(unittest.TestCase):
       (structs.CarState.ButtonEvent.Type.lkas, False),
     ])
 
-  def test_relay_gap_policy_maps_four_absolute_positions_to_three_personalities(self):
-    cp = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, relay_fingerprint(), [], True, False, False)
-    ci = CarInterface(cp)
-    distance = bytearray(CAMRY_COMMON[0x251])
-
-    def set_distance(state: int, counter: int):
-      distance[5] = (distance[5] & 0x1F) | (state << 5)
-      return update_state(ci, bus=0, source_bus=2, counter_offset=counter,
-                          cruise_display=bytes(distance), hud=CAMRY_HUD, iterations=1)
-
-    def gap_events(state):
-      return [(event.type, event.pressed) for event in state.buttonEvents
-              if event.type == structs.CarState.ButtonEvent.Type.gapAdjustCruise]
-
-    # Position 1 maps to relaxed. Starting from aggressive requires one normal
-    # decrement/wrap event, then waits for standard CarControl feedback.
-    ci.apply(control(0.0, lead_distance_bars=1), 2_000_000_000)
-    self.assertEqual(gap_events(set_distance(1, 20)), [
-      (structs.CarState.ButtonEvent.Type.gapAdjustCruise, True),
-      (structs.CarState.ButtonEvent.Type.gapAdjustCruise, False),
-    ])
-    self.assertEqual(gap_events(set_distance(1, 21)), [])
-    ci.apply(control(0.0, lead_distance_bars=3), 2_010_000_000)
-    self.assertEqual(gap_events(set_distance(1, 22)), [])
-
-    # Positions 2 and 3 both map to standard, so the middle Toyota transition
-    # cannot advance openpilot and create a four-state/three-state phase drift.
-    self.assertEqual(len(gap_events(set_distance(2, 23))), 2)
-    ci.apply(control(0.0, lead_distance_bars=2), 2_020_000_000)
-    self.assertEqual(gap_events(set_distance(3, 24)), [])
-
-    self.assertEqual(len(gap_events(set_distance(4, 25))), 2)
-    ci.apply(control(0.0, lead_distance_bars=1), 2_030_000_000)
-    self.assertEqual(len(gap_events(set_distance(1, 26))), 2)
-
-  def test_relay_gap_policy_converges_a_two_step_absolute_correction(self):
-    cp = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, relay_fingerprint(), [], True, False, False)
-    ci = CarInterface(cp)
-    distance = bytearray(CAMRY_COMMON[0x251])
-    distance[5] = (distance[5] & 0x1F) | (4 << 5)  # aggressive
-
-    ci.apply(control(0.0, lead_distance_bars=3), 2_000_000_000)  # relaxed
-    first = update_state(ci, bus=0, source_bus=2, counter_offset=20,
-                         cruise_display=bytes(distance), hud=CAMRY_HUD, iterations=1)
-    self.assertEqual(len(first.buttonEvents), 2)
-    # Do not emit the second step until the first personality change appears in
-    # the ordinary leadDistanceBars feedback.
-    waiting = update_state(ci, bus=0, source_bus=2, counter_offset=21,
-                           cruise_display=bytes(distance), hud=CAMRY_HUD, iterations=1)
-    self.assertEqual(list(waiting.buttonEvents), [])
-    ci.apply(control(0.0, lead_distance_bars=2), 2_010_000_000)  # standard
-    second = update_state(ci, bus=0, source_bus=2, counter_offset=22,
-                          cruise_display=bytes(distance), hud=CAMRY_HUD, iterations=1)
-    self.assertEqual(len(second.buttonEvents), 2)
-    ci.apply(control(0.0, lead_distance_bars=1), 2_020_000_000)  # aggressive
-    settled = update_state(ci, bus=0, source_bus=2, counter_offset=23,
-                           cruise_display=bytes(distance), hud=CAMRY_HUD, iterations=1)
-    self.assertEqual(list(settled.buttonEvents), [])
-
-  def test_reengagement_does_not_reuse_the_residents_consumed_sequence(self):
+  def test_distance_selector_and_ui_feedback_never_emit_personality_events(self):
     ci = CarInterface(self.CP)
-    update_state(ci)
-    frames = []
-    for active in (True, False, True):
-      _, sends = ci.apply(control(1.0, active=active), 2_000_000_000)
-      frames.append(next(data for address, data, _ in sends if address == 0x777))
-      ci.apply(control(1.0, active=active), 2_010_000_000)
-    self.assertEqual([frame[3] for frame in frames], [1, 0, 3])
+    distance = bytearray(CAMRY_COMMON[0x251])
+    counter = 0
+    for bars in (1, 3, 2, 1):
+      ci.apply(control(0.0, active=False, enabled=False, lead_distance_bars=bars), 2_000_000_000)
+      for position in (1, 2, 3, 4, 1):
+        distance[5] = (distance[5] & 0x1F) | (position << 5)
+        state = update_state(ci, counter_offset=counter, cruise_display=bytes(distance), hud=CAMRY_HUD, iterations=1)
+        self.assertFalse(any(event.type == structs.CarState.ButtonEvent.Type.gapAdjustCruise for event in state.buttonEvents))
+        counter += 1
 
 if __name__ == "__main__":
   unittest.main()

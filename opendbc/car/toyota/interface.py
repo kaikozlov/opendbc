@@ -1,4 +1,4 @@
-from opendbc.car import Bus, create_button_events, structs, get_safety_config, uds
+from opendbc.car import Bus, structs, get_safety_config, uds
 from opendbc.car.toyota.carstate import CarState
 from opendbc.car.toyota.carcontroller import CarController
 from opendbc.car.toyota.radar_interface import RadarInterface
@@ -8,17 +8,6 @@ from opendbc.car.disable_ecu import disable_ecu
 from opendbc.car.interfaces import CarInterfaceBase
 
 SteerControlType = structs.CarParams.SteerControlType
-ButtonType = structs.CarState.ButtonEvent.Type
-
-# Toyota exposes four absolute following-distance positions while openpilot
-# has three longitudinal personalities. Positions 2 and 3 intentionally share
-# standard; this is the old 4/3/2/1-bar policy expressed entirely in Toyota.
-TSS3_DISTANCE_TO_PERSONALITY_BARS = {
-  1: 3,  # relaxed
-  2: 2,  # standard
-  3: 2,  # standard
-  4: 1,  # aggressive
-}
 
 
 class CarInterface(CarInterfaceBase):
@@ -28,45 +17,17 @@ class CarInterface(CarInterfaceBase):
 
   DRIVABLE_GEARS = (structs.CarState.GearShifter.sport,)
 
-  def __init__(self, CP):
-    super().__init__(CP)
-    self.tss3_personality_bars = 0
-    self.tss3_gap_adjust_waiting_bars = 0
-
-  def _update_tss3_gap_policy(self, ret: structs.CarState) -> None:
-    current_bars = self.tss3_personality_bars
-    desired_bars = TSS3_DISTANCE_TO_PERSONALITY_BARS.get(self.CS.tss3_distance_state)
-    if current_bars not in range(1, 4) or desired_bars is None:
-      return
-
-    # Wait for CarControl's standard leadDistanceBars feedback before emitting
-    # another step. This lets a two-step absolute correction converge without
-    # racing selfdrived's one-step gap-button handling.
-    if self.tss3_gap_adjust_waiting_bars:
-      if current_bars == self.tss3_gap_adjust_waiting_bars:
-        return
-      self.tss3_gap_adjust_waiting_bars = 0
-
-    if current_bars != desired_bars:
-      gap_events = (create_button_events(1, 0, {1: ButtonType.gapAdjustCruise}) +
-                    create_button_events(0, 1, {1: ButtonType.gapAdjustCruise}))
-      ret.buttonEvents = list(ret.buttonEvents) + gap_events
-      self.tss3_gap_adjust_waiting_bars = current_bars
-
   def update(self, can_packets):
+    # Match CANParser's single-publication and batch input forms.
+    if can_packets and not isinstance(can_packets[0], list | tuple):
+      can_packets = [can_packets]
     ret = super().update(can_packets)
     if self.CC.tss3_request_transport is not None:
       self.CC.observe_tss3_request_plane(can_packets, ret.canValid)
       ret.steerFaultTemporary = ret.steerFaultTemporary or self.CC.tss3_request_transport.authority_unavailable()
       if self.CP.openpilotLongitudinalControl:
         ret.accFaulted = ret.accFaulted or self.CC.tss3_request_transport.authority_unavailable()
-        self._update_tss3_gap_policy(ret)
     return ret
-
-  def apply(self, c: structs.CarControl, now_nanos: int | None = None):
-    if self.CC.tss3_request_transport is not None and c.hudControl.leadDistanceBars in range(1, 4):
-      self.tss3_personality_bars = int(c.hudControl.leadDistanceBars)
-    return super().apply(c, now_nanos)
 
   @staticmethod
   def get_pid_accel_limits(CP, current_speed, cruise_speed):
@@ -76,91 +37,28 @@ class CarInterface(CarInterfaceBase):
   def _get_params(ret: structs.CarParams, candidate, fingerprint, car_fw, alpha_long, is_release, docs) -> structs.CarParams:
     ret.brand = "toyota"
 
-    # TSS3 Corolla powertrains share one openpilot platform and the same EPS application.
-    # Keep the normal HYBRID flag meaningful even though TSS3 returns before the
-    # legacy Toyota detection. Normalize Cap'n Proto enum values before set
-    # membership: _DynamicEnum hashes differ from their equal integer Ecu values.
-    # GTS independently distinguishes Corolla HV by an added category-466 Brake
-    # Booster; the retained HV route also carries the generation-native 0x127.
-    found_ecus = {fw.ecu.raw for fw in car_fw}
-    if candidate == CAR.TOYOTA_COROLLA_TSS3 and (found_ecus & {Ecu.hybrid, Ecu.electricBrakeBooster} or
-                                                    0x127 in fingerprint.get(1, {})):
-      ret.flags |= ToyotaFlags.HYBRID.value
-
     if ret.flags & ToyotaFlags.TSS3:
+      # The Camry port uses the repinned topology.
       ret.steerControlType = SteerControlType.angle
-      # Camry object geometry, qualifier and lifecycle are verified against
-      # retained source frames; other TSS3 platforms have no radar DBC mapping.
-      ret.radarUnavailable = Bus.radar not in DBC[candidate]
-      ret.openpilotLongitudinalControl = False
-      ret.autoResumeSng = False
+      ret.dashcamOnly = False
+      ret.radarUnavailable = False
+      ret.openpilotLongitudinalControl = True
+      ret.autoResumeSng = True
+      ret.pcmCruise = True
+      ret.secOcRequired = False  # no host key; external authentication is still required
       ret.minEnableSpeed = -1.
+      ret.minSteerSpeed = 0.
+      ret.steerAtStandstill = True
       ret.centerToFront = ret.wheelbase * 0.44
-
-      if candidate == CAR.TOYOTA_CAMRY_TSS3:
-        ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.toyota)]
-        ret.safetyConfigs[0].safetyParam = (EPS_SCALE[candidate] |
-                                             ToyotaSafetyFlags.TSS3_SIGNER.value)
-        # The physical request-plane harness is self-identifying: chassis/state
-        # lives on bus0 while the FRC-native 0x08A source lives on bus2. Select
-        # host 0x08A ownership from that observed topology, not a private Param.
-        relay_request_plane = 0x025 in fingerprint.get(0, {}) and 0x08A in fingerprint.get(2, {})
-        if relay_request_plane:
-          ret.safetyConfigs[0].safetyParam |= ToyotaSafetyFlags.TSS3_08A_HOST.value
-          # The repinned 0x08A plane has one publisher for both axes. Blanket
-          # comma ownership therefore cannot coexist with stock longitudinal.
-          ret.openpilotLongitudinalControl = True
-          ret.autoResumeSng = True
-          # FRC remains the native cruise engagement input, but contributes no
-          # control request fields to the host-owned application.
-          ret.pcmCruise = True
-        ret.dashcamOnly = False
-        # The EPS-resident helper owns native B6 signing; openpilot owns only
-        # the bounded C7 sideband and therefore needs no host SecOC key.
-        ret.secOcRequired = False
-        ret.minSteerSpeed = 0.
-        ret.steerAtStandstill = True
-        # Stock Toyota-B exposes this source on bus1; the request-plane repin
-        # moves the FRC vocabulary, including BSM, to bus2.
-        if 0x3F6 in fingerprint[2 if relay_request_plane else 1]:
-          ret.flags |= ToyotaFlags.HAS_BSM.value
-        ret.steerActuatorDelay = 0.18
-        ret.steerLimitTimer = 0.8
-        # F33's 0x08A request is a desired-acceleration interface: retained
-        # drives show near-unity request-to-aEgo tracking with about 0.2 s of
-        # lag. Match other direct-acceleration ports by using feedforward with
-        # the measured delay and no second vehicle-response integrator.
-        ret.longitudinalActuatorDelay = 0.2
-      elif candidate == CAR.TOYOTA_COROLLA_TSS3:
-        ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.toyota)]
-        ret.safetyConfigs[0].safetyParam = (EPS_SCALE[candidate] |
-                                             ToyotaSafetyFlags.TSS3_SIGNER.value |
-                                             ToyotaSafetyFlags.COROLLA_HF.value)
-        ret.dashcamOnly = False
-        # The RAM-resident helper signs a native EPS-local B6. openpilot sends
-        # only the unified functional-0x777 C7 control used across TSS3 targets.
-        ret.secOcRequired = False
-        ret.minSteerSpeed = 0.
-        ret.steerAtStandstill = True
-        # Corolla TSS3 can follow stock ACC through a stop, but the retained
-        # contributor drives require the driver to establish/resume cruise below
-        # Toyota's 19 mph set-speed floor. Keep the native no-entry threshold.
-        ret.minEnableSpeed = MIN_ACC_SPEED
-        if 0x3F6 in fingerprint[1]:
-          ret.flags |= ToyotaFlags.HAS_BSM.value
-        ret.steerActuatorDelay = 0.18
-        ret.steerLimitTimer = 0.8
-      else:
-        ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.noOutput)]
-        ret.dashcamOnly = True
-
-      if not ret.dashcamOnly:
-        # Stock Toyota-B has no independently suppressible 0x08A source. The
-        # Camry request-plane repin does. It owns both axes, so longitudinal is
-        # always enabled rather than exposed as a non-functional Alpha toggle.
-        if not ret.openpilotLongitudinalControl:
-          ret.safetyConfigs[0].safetyParam |= ToyotaSafetyFlags.STOCK_LONGITUDINAL.value
-
+      ret.steerActuatorDelay = 0.18
+      ret.steerLimitTimer = 0.8
+      ret.longitudinalActuatorDelay = 0.2
+      ret.safetyConfigs = [get_safety_config(
+        structs.CarParams.SafetyModel.toyota,
+        EPS_SCALE[candidate] | ToyotaSafetyFlags.TSS3_SIGNER.value | ToyotaSafetyFlags.TSS3_08A_HOST.value,
+      )]
+      if 0x3F6 in fingerprint.get(2, {}):
+        ret.flags |= ToyotaFlags.HAS_BSM.value
       return ret
 
     ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.toyota)]

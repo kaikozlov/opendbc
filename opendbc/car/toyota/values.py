@@ -35,14 +35,6 @@ class CarControllerParams:
     ([5, 25], [0.36, 0.26]),
   )
 
-  # Retained for TSS3 platforms without a target-native vehicle-model safety
-  # contract. Exact F33 uses F33_ANGLE_LIMITS below.
-  TSS3_ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(
-    1745 * TSS3_TARGET_ANGLE_SCALE_DEG,
-    ([5, 25], [0.15, 0.075]),
-    ([5, 25], [0.18, 0.13]),
-  )
-
   # Exact F33 mode-2 (LTA/LCA) firmware clamps the B6 target to +/-1745 raw
   # and permits 78 raw counts per effective sequence step. The host request
   # plane applies limits with STEER_STEP=2, so this standard controller-side
@@ -66,9 +58,6 @@ class CarControllerParams:
       # envelope; the narrower values belonged to the superseded 0x160 path.
       self.ACCEL_MAX = 2.0
       self.ACCEL_MIN = -3.5
-    elif CP.flags & ToyotaFlags.TSS3:
-      self.ACCEL_MAX = 1.5
-      self.ACCEL_MIN = -1.5
     else:
       self.ACCEL_MAX = 2.0 if CP.flags & ToyotaFlags.RAISED_ACCEL_LIMIT else 1.5
       self.ACCEL_MIN = -3.5
@@ -88,7 +77,6 @@ class ToyotaSafetyFlags(IntFlag):
   LTA = (4 << 8)
   SECOC = (8 << 8)
   TSS3_SIGNER = (16 << 8)
-  COROLLA_HF = (32 << 8)
   TSS3_08A_HOST = (64 << 8)
 
 
@@ -227,7 +215,7 @@ class CAR(Platforms):
     TOYOTA_CAMRY.specs,
   )
   TOYOTA_CAMRY_TSS3 = ToyotaTSS3PlatformConfig(
-    [ToyotaTSS3CarDocs("Toyota Camry Hybrid 2026")],
+    [ToyotaTSS3CarDocs("Toyota Camry Hybrid 2026", package="Repinned harness")],
     TOYOTA_CAMRY.specs.override(steerRatio=15.3),
     dbc_dict={Bus.pt: 'toyota_tss3_pt_generated', Bus.radar: 'toyota_tss3_pt_generated'},
     flags=ToyotaFlags.HYBRID,
@@ -267,15 +255,6 @@ class CAR(Platforms):
       ToyotaCarDocs("Lexus UX Hybrid 2019-24"),
     ],
     CarSpecs(mass=3060. * CV.LB_TO_KG, wheelbase=2.67, steerRatio=13.9, tireStiffnessFactor=0.444),
-  )
-  TOYOTA_COROLLA_TSS3 = ToyotaTSS3PlatformConfig(
-    [
-      ToyotaTSS3CarDocs("Toyota Corolla 2023-25", min_enable_speed=MIN_ACC_SPEED),
-      ToyotaTSS3CarDocs("Toyota Corolla Hybrid 2023-25", min_enable_speed=MIN_ACC_SPEED),
-    ],
-    # TSS3 here is the E210 sedan only; the older aggregate also covered Corolla
-    # Cross/Lexus UX and therefore carried a shorter representative wheelbase.
-    CarSpecs(mass=3060. * CV.LB_TO_KG, wheelbase=2.70, steerRatio=13.9, tireStiffnessFactor=0.444),
   )
   TOYOTA_HIGHLANDER = PlatformConfig(
     [
@@ -621,13 +600,12 @@ FW_QUERY_CONFIG = FwQueryConfig(
   ],
   non_essential_ecus={
     # FIXME: On some models, abs can sometimes be missing
-    Ecu.abs: [CAR.TOYOTA_RAV4, CAR.TOYOTA_COROLLA, CAR.TOYOTA_HIGHLANDER, CAR.TOYOTA_SIENNA, CAR.LEXUS_IS, CAR.TOYOTA_ALPHARD_TSS2,
-              CAR.TOYOTA_COROLLA_TSS3],
+    Ecu.abs: [CAR.TOYOTA_RAV4, CAR.TOYOTA_COROLLA, CAR.TOYOTA_HIGHLANDER, CAR.TOYOTA_SIENNA, CAR.LEXUS_IS, CAR.TOYOTA_ALPHARD_TSS2],
     # F33 can transiently miss EPS F181 during NRTD startup. Its exact ABS
     # identity remains sufficient to identify the Camry; if EPS does respond,
     # the generic exact matcher still requires that response to match.
     Ecu.eps: [CAR.TOYOTA_CAMRY_TSS3],
-    Ecu.fwdCamera: [CAR.TOYOTA_CAMRY_TSS3, CAR.TOYOTA_COROLLA_TSS3],
+    Ecu.fwdCamera: [CAR.TOYOTA_CAMRY_TSS3],
     # On some models, the engine can show on two different addresses
     Ecu.engine: [CAR.TOYOTA_HIGHLANDER, CAR.TOYOTA_CAMRY, CAR.TOYOTA_COROLLA_TSS2, CAR.TOYOTA_CHR, CAR.TOYOTA_CHR_TSS2, CAR.LEXUS_IS,
                  CAR.LEXUS_IS_TSS2, CAR.LEXUS_RC, CAR.LEXUS_NX, CAR.LEXUS_NX_TSS2, CAR.LEXUS_RX, CAR.LEXUS_RX_TSS2],

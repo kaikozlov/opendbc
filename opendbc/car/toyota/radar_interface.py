@@ -2,7 +2,7 @@
 from opendbc.can import CANParser
 from opendbc.car import Bus
 from opendbc.car.structs import RadarData
-from opendbc.car.toyota.values import CAR, DBC, ToyotaFlags, ToyotaSafetyFlags
+from opendbc.car.toyota.values import DBC, ToyotaFlags
 from opendbc.car.interfaces import RadarInterfaceBase
 
 
@@ -26,13 +26,7 @@ def _create_radar_can_parser(CP):
     messages = list(zip(RADAR_A_MSGS + RADAR_B_MSGS, [20] * (msg_a_n + msg_b_n), strict=True))
     messages.append(('STATUS_MSG', 10))
 
-  if CP.flags & ToyotaFlags.TSS3:
-    relay_correct_f33 = (CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3 and CP.safetyConfigs and
-                         bool(CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.TSS3_08A_HOST.value))
-    radar_bus = 1 if relay_correct_f33 else 0
-  else:
-    radar_bus = 1
-  return CANParser(DBC[CP.carFingerprint][Bus.radar], messages, radar_bus)
+  return CANParser(DBC[CP.carFingerprint][Bus.radar], messages, 1)
 
 
 class RadarInterface(RadarInterfaceBase):
@@ -63,6 +57,8 @@ class RadarInterface(RadarInterfaceBase):
       return super().update(None)
 
     if self.CP.flags & ToyotaFlags.TSS3:
+      if can_strings and not isinstance(can_strings[0], list | tuple):
+        can_strings = [can_strings]
       return self._update_tss3(can_strings)
 
     vls = self.rcp.update(can_strings)
@@ -151,14 +147,6 @@ class RadarInterface(RadarInterfaceBase):
     ret = RadarData()
     if not self.rcp.can_valid:
       ret.errors.canError = True
-
-    if self.CP.flags & ToyotaFlags.TSS3:
-      cycles = {(int(self.rcp.vl[a]["COUNTER"]), int(self.rcp.vl[a]["CYCLE_BYTE"])) for a in self.rcp.addresses}
-      if ret.errors.canError or set(updated_messages) != self.rcp.addresses or len(cycles) != 1:
-        self.pts.clear()
-        ret.errors.canError = True
-        return ret
-      return self._update_tss3_points()
 
     if self.rcp.vl['STATUS_MSG']['RADAR_STATUS'] != 1 or self.rcp.vl['STATUS_MSG']['RADAR_PRE_FAULT'] != 0:
       ret.errors.radarUnavailableTemporary = True

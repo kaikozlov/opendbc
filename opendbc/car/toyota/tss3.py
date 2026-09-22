@@ -36,22 +36,6 @@ def target_angle_deg_to_raw(angle_deg: float) -> int:
   return int(round(angle_deg / TSS3_B6_TARGET_ANGLE_SCALE_DEG))
 
 
-def build_signer_control(target_angle_raw: int, control_sequence: int) -> tuple[int, bytes, int]:
-  """Build the bounded sideband consumed by a TSS3 EPS-resident signer.
-
-  Zero is the neutral sequence. Active commands use 1..255 and wrap without
-  passing through zero.
-  """
-  if not -(1 << 15) <= target_angle_raw < (1 << 15):
-    raise ValueError("target angle must fit signed16")
-  if not 0 <= control_sequence <= 0xFF:
-    raise ValueError("signer control sequence must be 0..255")
-
-  data = (TSS3_SIGNER_CONTROL_MAGIC + bytes((control_sequence,)) +
-          target_angle_raw.to_bytes(2, "big", signed=True) + bytes(2))
-  return TSS3_SIGNER_CONTROL_ADDR, data, TSS3_SIGNER_BUS
-
-
 def build_host_application(packer, *, lat_active: bool, target_angle_raw: int,
                            long_active: bool, accel: float,
                            set_speed_kph: float, request_sequence: int) -> bytes:

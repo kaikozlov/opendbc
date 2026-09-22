@@ -51,6 +51,9 @@ class CarTestRoute(NamedTuple):
 routes = [
   CarTestRoute("efdf9af95e71cd84/2022-05-13--19-03-31", COMMA.COMMA_BODY),
 
+  # Repinned 2026 Camry. See Toyota fixture provenance for local cache availability.
+  CarTestRoute("5211e3c6c7b088d3/00000051--894db634a8", TOYOTA.TOYOTA_CAMRY_TSS3, segment=2),
+
   CarTestRoute("c5e3aa51055c8f47|2023-12-06--20-01-44", CHRYSLER.JEEP_CHEROKEE_5TH_GEN),
   CarTestRoute("0c94aa1e1296d7c6/2021-05-05--19-48-37", CHRYSLER.JEEP_GRAND_CHEROKEE),
   CarTestRoute("91dfedae61d7bd75/2021-05-22--20-07-52", CHRYSLER.JEEP_GRAND_CHEROKEE_2019),

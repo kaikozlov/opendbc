@@ -28,7 +28,7 @@ def cycle(counter, state=2, new=False, ended=False, occupied=True, cycle_byte=No
   frames[0x183 + bank][offset + 1:offset + 3] = bytes.fromhex("3fd8")  # -1 m/s
   frames[0x183 + bank][offset + 4] = 0x80 if new else 0
   frames[0x183 + bank][offset + 5] = (0x10 if ended else 0) | state
-  return [CanData(a, checksum(a, d), 0) for a, d in frames.items()]
+  return [CanData(a, checksum(a, d), 1) for a, d in frames.items()]
 
 
 class TestToyotaTSS3Radar(unittest.TestCase):
@@ -172,7 +172,7 @@ class TestToyotaTSS3Radar(unittest.TestCase):
     self.assertEqual(len(rr.points), 1)
 
   def test_unrelated_and_wrong_bus_traffic_cannot_publish_radar(self):
-    frames = [CanData(frame.address, frame.dat, 1) for frame in cycle(0)]
+    frames = [CanData(frame.address, frame.dat, 0) for frame in cycle(0)]
     rr = self.update(frames)
     self.assertIsNone(rr)
     self.assertFalse(self.ri.pts)
