@@ -131,6 +131,25 @@ class TestToyotaTss3CamrySafety(common.CarSafetyTest, common.AngleSteeringSafety
         self.safety.set_desired_angle_last(0)
         self.assertFalse(self._tx(self._angle_raw_cmd_msg(sign * (max_delta_raw + 1))))
 
+  def test_angle_rate_budget_tracks_publication_interval(self):
+    # Route 55: -549 -> -520 is too large for one 10 ms generation, but is
+    # valid when one signer generation is absent and 20 ms actually elapsed.
+    self._reset_speed_measurement(9.95)
+    self.safety.set_controls_allowed(True)
+    self.safety.set_desired_angle_last(-549)
+    self.safety.set_timer(10_000)
+    self.assertTrue(self._tx(self._application_raw_msg(angle_raw=-549, lat_active=True)))
+    self.safety.set_timer(20_000)
+    self.assertFalse(self._tx(self._application_raw_msg(angle_raw=-520, lat_active=True)))
+
+    self.safety.set_timer(30_000)
+    self.assertTrue(self._tx(self._admin_msg(True)))
+    self.safety.set_desired_angle_last(-549)
+    self.safety.set_timer(40_000)
+    self.assertTrue(self._tx(self._application_raw_msg(angle_raw=-549, lat_active=True)))
+    self.safety.set_timer(60_000)
+    self.assertTrue(self._tx(self._application_raw_msg(angle_raw=-520, lat_active=True)))
+
   def test_vehicle_speed_measurements(self):
     self._common_measurement_test(self._speed_msg, 0, 71.6, 1,
                                   self.safety.get_vehicle_speed_min, self.safety.get_vehicle_speed_max)
@@ -178,6 +197,8 @@ class TestToyotaTss3CamrySafety(common.CarSafetyTest, common.AngleSteeringSafety
 
   def test_request_plane_watchdog_and_release(self):
     self.assertTrue(self._tx(self._application_raw_msg()))
+    self.safety.set_timer(90_000)
+    self.assertFalse(self._tx(self._application_raw_msg(accel=2.01)))
     self.safety.set_timer(99_999)
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
     self.safety.set_timer(100_001)

@@ -64,6 +64,7 @@ static bool toyota_tss3_signer = false;
 static bool toyota_tss3_08a_host = false;
 static bool toyota_tss3_08a_replacement_active = false;
 static uint32_t toyota_tss3_08a_last_publication_ts = 0U;
+static uint32_t toyota_tss3_08a_last_angle_check_ts = 0U;
 static int toyota_dbc_eps_torque_factor = 100;   // conversion factor for STEER_TORQUE_EPS in %: see dbc file
 
 static uint32_t toyota_compute_checksum(const CANPacket_t *msg) {
@@ -299,6 +300,9 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
           if (tx) {
             toyota_tss3_08a_replacement_active = true;
             toyota_tss3_08a_last_publication_ts = microsecond_timer_get();
+            // Admin and the first replacement are emitted in one send batch.
+            // Give that first frame one nominal 100 Hz interval of rate budget.
+            toyota_tss3_08a_last_angle_check_ts = microsecond_timer_get() - 10000U;
             desired_angle_last = SAFETY_CLAMP(angle_meas.values[0],
                                               -TOYOTA_F33_08A_ANGLE_STEERING_LIMITS.max_angle,
                                                TOYOTA_F33_08A_ANGLE_STEERING_LIMITS.max_angle);
@@ -311,6 +315,7 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
     }
     if (host_08a) {
       tx = false;
+      const uint32_t now = microsecond_timer_get();
       bool application_shape = toyota_tss3_08a_replacement_active &&
                                msg->fd && (GET_LEN(msg) == 32U);
       bool actuation_valid = true;
@@ -335,14 +340,18 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
         int target_angle = (msg->data[18] << 8U) | msg->data[19];
         target_angle = to_signed(target_angle, 16);
         bool angle_violation = false;
+        const uint32_t angle_rate_interval_us = safety_get_ts_elapsed(now, toyota_tss3_08a_last_angle_check_ts);
         if (host_lateral_active) {
-          angle_violation = steer_angle_cmd_checks_vm(target_angle, true, TOYOTA_F33_08A_ANGLE_STEERING_LIMITS,
-                                                       TOYOTA_F33_ANGLE_STEERING_PARAMS);
+          angle_violation = steer_angle_cmd_checks_vm_timed(target_angle, true, TOYOTA_F33_08A_ANGLE_STEERING_LIMITS,
+                                                             TOYOTA_F33_ANGLE_STEERING_PARAMS, angle_rate_interval_us);
         } else if (host_lateral_inactive) {
-          angle_violation = steer_angle_cmd_checks_vm(target_angle, false, TOYOTA_F33_08A_ANGLE_STEERING_LIMITS,
-                                                       TOYOTA_F33_ANGLE_STEERING_PARAMS);
+          angle_violation = steer_angle_cmd_checks_vm_timed(target_angle, false, TOYOTA_F33_08A_ANGLE_STEERING_LIMITS,
+                                                             TOYOTA_F33_ANGLE_STEERING_PARAMS, angle_rate_interval_us);
         } else {
           // The application-shape check above rejects every other lateral ID.
+        }
+        if (host_lateral_active || host_lateral_inactive) {
+          toyota_tss3_08a_last_angle_check_ts = now;
         }
         const bool max_angle_violation = safety_max_limit_check(target_angle, TOYOTA_F33_08A_ANGLE_STEERING_LIMITS.max_angle,
                                                                 -TOYOTA_F33_08A_ANGLE_STEERING_LIMITS.max_angle);
@@ -369,11 +378,12 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
       }
 
       if (application_shape) {
-        // The watchdog covers host publication liveness, independently of the
-        // ordinary actuator checks below. A well-formed rejected application
-        // is blocked, but it does not mean that the host disappeared.
-        toyota_tss3_08a_last_publication_ts = microsecond_timer_get();
         tx = actuation_valid;
+        if (tx) {
+          // Rejected applications do not renew replacement ownership. This
+          // keeps a safety rejection from suppressing stock traffic forever.
+          toyota_tss3_08a_last_publication_ts = now;
+        }
       }
     }
     if (camry_brake_cancel) {
@@ -581,6 +591,8 @@ static safety_config toyota_init(uint16_t param) {
   toyota_tss3_signer = GET_FLAG(param, TOYOTA_PARAM_TSS3_SIGNER);
   toyota_tss3_08a_host = GET_FLAG(param, TOYOTA_PARAM_TSS3_08A_HOST);
   toyota_tss3_08a_replacement_active = false;
+  toyota_tss3_08a_last_publication_ts = 0U;
+  toyota_tss3_08a_last_angle_check_ts = 0U;
   toyota_dbc_eps_torque_factor = param & TOYOTA_EPS_FACTOR;
 
   safety_config ret;
