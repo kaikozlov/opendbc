@@ -150,6 +150,19 @@ class TestToyotaTss3CamrySafety(common.CarSafetyTest, common.AngleSteeringSafety
     self.safety.set_timer(60_000)
     self.assertTrue(self._tx(self._application_raw_msg(angle_raw=-520, lat_active=True)))
 
+  def test_angle_rate_budget_has_nominal_generation_floor(self):
+    # Route 5f published adjacent 100 Hz generations 6.9 ms apart after signer
+    # jitter. The controller already limited their delta for one 10 ms tick.
+    speed = 9.95
+    self._reset_speed_measurement(speed + 1.)
+    nominal_delta_raw = min(int(get_max_angle_delta_vm(speed, self.VM, self.params) * self.DEG_TO_CAN) + 1, 1745)
+    self.safety.set_controls_allowed(True)
+    self.safety.set_desired_angle_last(0)
+    self.safety.set_timer(100_000)
+    self.assertTrue(self._tx(self._application_raw_msg(angle_raw=0, lat_active=True)))
+    self.safety.set_timer(107_000)
+    self.assertTrue(self._tx(self._application_raw_msg(angle_raw=nominal_delta_raw, lat_active=True)))
+
   def test_vehicle_speed_measurements(self):
     self._common_measurement_test(self._speed_msg, 0, 71.6, 1,
                                   self.safety.get_vehicle_speed_min, self.safety.get_vehicle_speed_max)

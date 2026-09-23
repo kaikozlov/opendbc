@@ -40,6 +40,7 @@ ORACLE_PRIVATE_SID = 0xC9
 ORACLE_SEQUENCE_MAX = 0xFF
 ORACLE_MAX_PENDING_GENERATIONS = 8
 ORACLE_PUBLICATION_DEADLINE_NS = 90_000_000
+ORACLE_GENERATION_INTERVAL_NS = 10_000_000
 
 
 def target_angle_deg_to_raw(angle_deg: float) -> int:
@@ -150,6 +151,8 @@ class ToyotaTss3RequestTransport:
     self.arm_pending = False
     self.arm_host_frame: bytes | None = None
     self.last_publication_ns = 0
+    self.last_host_send_ns = 0
+    self.last_host_request_sequence: int | None = None
     self.authority_failed = False
     self.last_failure_reason = ""
 
@@ -183,6 +186,8 @@ class ToyotaTss3RequestTransport:
     self.arm_pending = False
     self.arm_host_frame = None
     self.last_publication_ns = 0
+    self.last_host_send_ns = 0
+    self.last_host_request_sequence = None
     self.control_started_ns = 0
     self._invalidate_actuation()
 
@@ -269,17 +274,29 @@ class ToyotaTss3RequestTransport:
     if reference_ns and now_ns - reference_ns > ORACLE_PUBLICATION_DEADLINE_NS:
       self._authority_failure("oracle_dead")
 
-  def _take_ready_host_frame(self) -> bytes | None:
+  def _take_ready_host_frame(self, now_ns: int) -> bytes | None:
     self._prune_head()
     if not self.pending_requests:
       return None
     request = self.pending_requests[0]
     if request.trailer is None:
       return None
+
+    request_sequence = request.application[26] & 0x3F
+    if self.last_host_request_sequence is not None:
+      generation_delta = (request_sequence - self.last_host_request_sequence) & 0x3F
+      # A lost signer response can skip an application generation. Preserve
+      # the controller's 10 ms-per-generation timing instead of compressing a
+      # multi-generation steering step into the next publication slot.
+      if generation_delta > 1 and now_ns - self.last_host_send_ns < generation_delta * ORACLE_GENERATION_INTERVAL_NS:
+        return None
+
     self.pending_requests.popleft()
     self._remove_request(request)
     if request.control_epoch != self.control_epoch:
       return None
+    self.last_host_send_ns = now_ns
+    self.last_host_request_sequence = request_sequence
     return request.application + request.trailer
 
   def _allocate_oracle_sequence(self) -> int | None:
@@ -364,7 +381,7 @@ class ToyotaTss3RequestTransport:
         # Once active, publish at most one signed application per 10 ms control
         # tick even if multiple EPS responses arrived in the same CAN batch.
         if not self.arm_pending:
-          frame = self._take_ready_host_frame()
+          frame = self._take_ready_host_frame(now_nanos)
           if frame is not None:
             if not self.active:
               self.pending_sends.append(make_request_plane_admin(True))

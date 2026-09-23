@@ -339,7 +339,15 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
         int target_angle = (msg->data[18] << 8U) | msg->data[19];
         target_angle = to_signed(target_angle, 16);
         bool angle_violation = false;
-        const uint32_t angle_rate_interval_us = safety_get_ts_elapsed(now, toyota_tss3_08a_last_angle_check_ts);
+        // CarController creates one angle-limited generation per nominal 10 ms
+        // control tick. Signer and CAN scheduling jitter can publish adjacent
+        // completed generations less than 10 ms apart, but that must not shrink
+        // the budget already applied when the command was generated. Longer
+        // publication gaps still receive their actual elapsed-time budget.
+        const uint32_t nominal_generation_interval_us = 1000000U / TOYOTA_F33_08A_ANGLE_STEERING_LIMITS.frequency;
+        const uint32_t angle_rate_interval_us = SAFETY_MAX(
+          safety_get_ts_elapsed(now, toyota_tss3_08a_last_angle_check_ts), nominal_generation_interval_us
+        );
         if (host_lateral_active) {
           angle_violation = steer_angle_cmd_checks_vm_timed(target_angle, true, TOYOTA_F33_08A_ANGLE_STEERING_LIMITS,
                                                              TOYOTA_F33_ANGLE_STEERING_PARAMS, angle_rate_interval_us);

@@ -5,7 +5,7 @@ from opendbc.car.can_definitions import CanData
 from opendbc.car.toyota.tss3 import (
   ADMIN_ADDR, ADMIN_BUS, DOWNSTREAM_BUS, NATIVE_08A_ADDR, ORACLE_BUS,
   ORACLE_MAX_PENDING_GENERATIONS, ORACLE_REQUEST_ADDR, ORACLE_RESPONSE_ADDR, ORACLE_SEQUENCE_MAX,
-  PANDA_REJECTED_OFFSET, PANDA_RETURNED_OFFSET, SOURCE_BUS,
+  ORACLE_GENERATION_INTERVAL_NS, PANDA_REJECTED_OFFSET, PANDA_RETURNED_OFFSET, SOURCE_BUS,
   ToyotaTss3RequestTransport, build_host_application, build_oracle_transport,
 )
 
@@ -175,6 +175,26 @@ class TestToyotaTss3RequestTransport(unittest.TestCase):
     self.assertEqual(host.dat[26], 1)
     self.assertEqual(host.dat[8:10], (-250).to_bytes(2, "big", signed=True))
     self.assertNotIn(seq0, self.transport.requests_by_sequence)
+
+  def test_missing_response_preserves_generation_timing_after_handoff(self):
+    self.finish_handoff(1_000_000_000)
+    first_host_send_ns = 1_020_000_000
+    missing = self.transport.pending_requests[0].sequence
+
+    sends = self.update_control(1_030_000_000, angle=1.0)
+    later = request_sequence_from_sends(sends)
+    self.assertNotEqual(missing, later)
+
+    # The later response proves the missing generation was consumed. It is
+    # ready only 19 ms after generation 0 was published, so generation 2 must
+    # wait for its full two-generation (20 ms) command interval.
+    self.transport.observe(response(1_038_000_000, later), True)
+    sends = self.update_control(first_host_send_ns + (2 * ORACLE_GENERATION_INTERVAL_NS) - 1, angle=2.0)
+    self.assertFalse(any(msg.address == NATIVE_08A_ADDR for msg in sends))
+
+    sends = self.update_control(first_host_send_ns + (2 * ORACLE_GENERATION_INTERVAL_NS), angle=2.0)
+    host = next(msg for msg in sends if msg.address == NATIVE_08A_ADDR)
+    self.assertEqual(host.dat[26], 2)
 
   def test_ready_responses_are_preserved_in_order(self):
     seq0 = self.start_request(1_000_000_000)
