@@ -155,16 +155,20 @@ class TestToyotaTss3CamrySafety(common.CarSafetyTest, common.AngleSteeringSafety
                                   self.safety.get_vehicle_speed_min, self.safety.get_vehicle_speed_max)
 
   def test_private_transport_envelopes(self):
-    for fragment in range(6):
-      header = (fragment << 5) | 1
-      msg = libsafety_py.make_CANPacket(0x777, 0, bytes((0xC8, header, 0, 0, 0, 0, 0, 0)))
-      self.assertTrue(self._tx(msg))
+    # Four classic-CAN fragments carry seven application bytes each. The high
+    # nibble identifies fragments 0..3; the low nibble carries alternating
+    # halves of the request sequence and is therefore intentionally unrestricted.
+    for header in (0x80, 0x8F, 0x90, 0x9F, 0xA0, 0xAF, 0xB0, 0xBF):
+      msg = libsafety_py.make_CANPacket(0x777, 0, bytes((header, 1, 2, 3, 4, 5, 6, 7)))
+      self.assertTrue(self._tx(msg), hex(header))
 
     invalid_oracle = (
       bytes((0xC9, 1, 0, 0, 0, 0, 0, 0)),
       bytes((0xC8, 6 << 5 | 1, 0, 0, 0, 0, 0, 0)),
       bytes((0xC8, 0, 0, 0, 0, 0, 0, 0)),
       bytes((0xC8, 1, 0, 0, 0, 0, 0, 1)),
+      bytes((0x7F, 1, 2, 3, 4, 5, 6, 7)),
+      bytes((0xC0, 1, 2, 3, 4, 5, 6, 7)),
     )
     for data in invalid_oracle:
       self.assertFalse(self._tx(libsafety_py.make_CANPacket(0x777, 0, data)))

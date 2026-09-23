@@ -273,8 +273,7 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
     // remains the safety boundary for all resulting actuation.
     const bool oracle_transport = toyota_tss3_08a_host && !msg->fd &&
                                   (GET_LEN(msg) == 8U) && (msg->bus == 0U) && (msg->addr == 0x777U) &&
-                                  (msg->data[0] == 0xC8U) && ((msg->data[1] >> 5U) <= 5U) &&
-                                  ((msg->data[1] & 0x1FU) != 0U) && (msg->data[7] == 0U);
+                                  ((msg->data[0] & 0xC0U) == 0x80U);
     const bool host_08a = toyota_tss3_08a_host &&
                           (msg->bus == 0U) && (msg->addr == 0x8AU);
     const bool camry_brake_cancel = toyota_tss3_08a_host &&
