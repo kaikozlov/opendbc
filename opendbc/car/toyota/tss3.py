@@ -184,10 +184,11 @@ class ToyotaTss3RequestTransport:
       elif self.active:
         self.last_publication_ns = now_ns
     elif src == TSS3_CHASSIS_BUS + PANDA_REJECTED_OFFSET:
+      # panda forwards the FRC's CONTROL_REQUEST again after a rejection, re-arm with the next signed frame
       if self.arm_pending and data == self.arm_host_frame:
         self._restart_after_failure("handoff_host_frame_rejected")
       elif self.active:
-        carlog.warning("Toyota TSS3 request plane TX rejected")
+        self._restart_after_failure("host_frame_rejected")
 
   def _observe_signer_response(self, data: bytes, now_ns: int) -> None:
     if len(data) != 8 or data[0] != SIGNER_SID:

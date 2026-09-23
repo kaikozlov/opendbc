@@ -343,6 +343,9 @@ static bool toyota_tss3_tx_hook(const CANPacket_t *msg, const LongitudinalLimits
     tx = valid && !violation;
     if (tx) {
       toyota_tss3_08a_last_tx_ts = now;
+    } else {
+      // the car always needs a CONTROL_REQUEST, forward the FRC's again
+      toyota_tss3_08a_active = false;
     }
   }
 

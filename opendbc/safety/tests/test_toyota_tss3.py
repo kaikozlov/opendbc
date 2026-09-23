@@ -60,6 +60,13 @@ class TestToyotaTss3CamrySafety(common.CarSafetyTest, common.AngleSteeringSafety
     data = bytes((7, 0xC9, 0xA8, int(arm), 0, 0, 0, 0))
     return libsafety_py.make_CANPacket(0x777, 1, data)
 
+  def _tx(self, msg):
+    # a rejected CONTROL_REQUEST hands 0x08A back to the FRC, openpilot re-arms like the transport does
+    ret = super()._tx(msg)
+    if not ret and msg[0].addr == 0x08A:
+      super()._tx(self._admin_msg(True))
+    return ret
+
   def _application_msg(self, *, angle: float = 0.0, lat_active: bool = False, accel: float = 0.0):
     angle_raw = round(angle * 17870 / 1024)
     return self._application_raw_msg(angle_raw=angle_raw, lat_active=lat_active, accel=accel)
@@ -197,15 +204,30 @@ class TestToyotaTss3CamrySafety(common.CarSafetyTest, common.AngleSteeringSafety
 
     fixed_bytes = (0, 1, 2, 3, 4, 5, 6, 7, 13, 14, 15, 16, 17, 20, 22, 23, 25, 27)
     for index in fixed_bytes:
-      data = bytearray(canonical[0].data)
+      data = bytearray(canonical[0].data)[:32]
       data[index] ^= 1
       msg = libsafety_py.make_CANPacket(0x08A, 0, bytes(data))
       msg[0].fd = 1
-      self.assertFalse(self._tx(msg), index)
-      self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
+      self.assertFalse(self.safety.safety_tx_hook(msg), index)
+      self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
+      self.assertTrue(self._tx(self._admin_msg(True)))
 
-    classic = libsafety_py.make_CANPacket(0x08A, 0, bytes(canonical[0].data))
-    self.assertFalse(self._tx(classic))
+    classic = libsafety_py.make_CANPacket(0x08A, 0, bytes(canonical[0].data)[:32])
+    self.assertFalse(self.safety.safety_tx_hook(classic))
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
+
+  def test_rejected_request_yields_to_frc(self):
+    self.assertTrue(self._tx(self._application_raw_msg()))
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
+
+    # a rejected frame forwards the FRC's request immediately, and openpilot's stay blocked until re-armed
+    self.safety.set_controls_allowed(False)
+    self.assertFalse(self.safety.safety_tx_hook(self._application_raw_msg(angle_raw=100, lat_active=True)))
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
+    self.assertFalse(self.safety.safety_tx_hook(self._application_raw_msg()))
+
+    self.assertTrue(self._tx(self._admin_msg(True)))
+    self.assertTrue(self._tx(self._application_raw_msg()))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
 
   def test_gas_pressed_does_not_block_accel(self):
@@ -219,8 +241,6 @@ class TestToyotaTss3CamrySafety(common.CarSafetyTest, common.AngleSteeringSafety
 
   def test_request_plane_watchdog_and_release(self):
     self.assertTrue(self._tx(self._application_raw_msg()))
-    self.safety.set_timer(90_000)
-    self.assertFalse(self._tx(self._application_raw_msg(accel=2.01)))
     self.safety.set_timer(99_999)
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
     self.safety.set_timer(100_001)
@@ -316,6 +336,8 @@ class TestToyotaTss3CamryStockLongitudinalSafety(unittest.TestCase):
         msg = self._host_msg()
         msg[0].data[index] ^= 1
         self.assertFalse(self.safety.safety_tx_hook(msg))
+        self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
+        self.assertTrue(self.safety.safety_tx_hook(self._admin_msg(True)))
 
     self.assertTrue(self.safety.safety_tx_hook(self._host_msg()))
 

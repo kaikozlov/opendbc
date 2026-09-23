@@ -446,6 +446,26 @@ class TestToyotaTss3RequestTransport(unittest.TestCase):
     self.assertIn(CanData(SIGNER_ADDR, bytes.fromhex("07c9a80000000000"), TSS3_AUX_BUS), sends)
     self.assertEqual(len(signer_request_frames(sends)), 4)
 
+  def test_active_reject_releases_and_rearms(self):
+    sequence = self.start_request()
+    self.transport.observe(response(1_015_000_000, sequence), True)
+    sends = self.update_control(1_020_000_000)
+    host = next(msg for msg in sends if msg.address == CONTROL_REQUEST_ADDR)
+    self.transport.observe(packets(1_020_000_001, CanData(host.address, host.dat, TSS3_CHASSIS_BUS + PANDA_RETURNED_OFFSET)), True)
+    self.assertTrue(self.transport.active)
+
+    # panda hands 0x08A back to the FRC after rejecting a frame, so the transport must re-arm
+    self.transport.observe(packets(1_030_000_001, CanData(host.address, host.dat, TSS3_CHASSIS_BUS + PANDA_REJECTED_OFFSET)), True)
+    self.assertFalse(self.transport.active)
+    self.assertEqual(self.transport.last_failure_reason, "host_frame_rejected")
+    sends = self.update_control(1_031_000_000)
+    self.assertIn(make_admin_msg(False), sends)
+    retry_sequence = request_sequence_from_sends(sends)
+    self.transport.observe(response(1_045_000_000, retry_sequence), True)
+    sends = self.update_control(1_050_000_000)
+    self.assertIn(make_admin_msg(True), sends)
+    self.assertTrue(any(msg.address == CONTROL_REQUEST_ADDR for msg in sends))
+
   def test_handoff_reject_recovers_without_new_engagement(self):
     sequence = self.start_request()
     self.transport.observe(response(1_015_000_000, sequence), True)
