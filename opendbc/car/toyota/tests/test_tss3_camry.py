@@ -1,22 +1,13 @@
 import unittest
 from unittest.mock import patch
 
-from opendbc.can import CANParser
 from opendbc.car import Bus, CanData, structs
-from opendbc.car.fw_versions import match_fw_to_car_exact
-from opendbc.car.toyota.fingerprints import FW_VERSIONS
 from opendbc.car.toyota.interface import CarInterface
-from opendbc.car.toyota.radar_interface import RadarInterface
-from opendbc.car.toyota.tss3 import TSS3_AUX_BUS, TSS3_CHASSIS_BUS, TSS3_SOURCE_BUS
-from opendbc.car.toyota.toyotacan import toyota_e2e_p05_checksum
-from opendbc.car.toyota.values import CAR, DBC, CarControllerParams, ToyotaFlags, ToyotaSafetyFlags
-
-
-Ecu = structs.CarParams.Ecu
+from opendbc.car.toyota.tss3 import TSS3_CHASSIS_BUS, TSS3_SOURCE_BUS
+from opendbc.car.toyota.values import CAR, CarControllerParams, ToyotaSafetyFlags
 
 CAMRY_COMMON = {
   0x025: bytes.fromhex("000100005000007e0000000000000000000000000000000000000000bb6fee54"),
-  # Operating zero-torque source: route 8d, segment 6, logMonoTime 3057008786467.
   0x030: bytes.fromhex("000000ffc400201b00ffc0ff9e00003f22000000ff9e007000000000b96152f6"),
   0x08A: bytes.fromhex("0000000880002d47fe462afe467fff007fffff35c000100064003c005db7797f"),
   0x0AA: bytes.fromhex("1a6f1a6f1a6f1a6f"),
@@ -33,16 +24,7 @@ CAMRY_COMMON = {
   0x620: bytes.fromhex("000000008000001a"),
   0x622: bytes.fromhex("0000000000730000"),
 }
-CAMRY_LONG = bytes.fromhex("e2420d82800040034deffb000008008000bfff100a5fffd40000000000000000")
 CAMRY_HUD = bytes.fromhex("140c404401ee9307")
-CAMRY_RADAR = {
-  0x180: bytes.fromhex("2fbd1016074a010003ff0a0e08062001ff5e0879f7eff5ff400160004000ff100901ff7005ff650291fae000ffff069df96004ff0a085405afffffff00000000"),
-  0x181: bytes.fromhex("228f1016fff8000000fffffff8000000fffffff8000000fffffff8000000fffffff8000000fffffff8000000fffffff8000000fffffff8000000ffff00000000"),
-  0x182: bytes.fromhex("71da1016fff8000000fffffff8000000fffffff8000000fffffff8000000fffffff8000000fffffff8000000fffffff8000000fffffff8000000ffff00000000"),
-  0x183: bytes.fromhex("44fa1016080000000001420000000000010200bffcff000902018000000083000800000000010200000000048b40080001ff00094200000000040b4200000000"),
-  0x184: bytes.fromhex("c3621016000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
-  0x185: bytes.fromhex("f2511016000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
-}
 
 
 def relay_fingerprint() -> dict[int, dict[int, int]]:
@@ -50,7 +32,6 @@ def relay_fingerprint() -> dict[int, dict[int, int]]:
   source_ids = {0x08A, 0x251, 0x3F6, 0x412}
   for address, data in (CAMRY_COMMON | {0x412: CAMRY_HUD}).items():
     fp[TSS3_SOURCE_BUS if address in source_ids else TSS3_CHASSIS_BUS][address] = len(data)
-  fp[TSS3_AUX_BUS] = {address: len(data) for address, data in CAMRY_RADAR.items()}
   return fp
 
 
@@ -87,8 +68,7 @@ def update_state(ci: CarInterface, moving: bool = False, counter_offset: int = 0
 
 
 def control(angle: float, active: bool = True, accel: float = 0.0, long_active: bool = False, enabled: bool = True,
-            cancel: bool = False, left_lane: bool = False, right_lane: bool = False, steer_alert: bool = False,
-            lead_distance_bars: int = 0):
+            cancel: bool = False, left_lane: bool = False, right_lane: bool = False, steer_alert: bool = False):
   cc = structs.CarControl()
   cc.enabled = enabled
   cc.latActive = enabled and active
@@ -98,7 +78,6 @@ def control(angle: float, active: bool = True, accel: float = 0.0, long_active: 
   cc.actuators.accel = accel
   cc.hudControl.leftLaneVisible = left_lane
   cc.hudControl.rightLaneVisible = right_lane
-  cc.hudControl.leadDistanceBars = lead_distance_bars
   if steer_alert:
     cc.hudControl.visualAlert = structs.CarControl.HUDControl.VisualAlert.steerRequired
   return cc.as_reader()
@@ -107,29 +86,6 @@ def control(angle: float, active: bool = True, accel: float = 0.0, long_active: 
 class TestToyotaCamryTSS3(unittest.TestCase):
   def setUp(self):
     self.CP = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, relay_fingerprint(), [], True, False, False)
-
-  def test_platform_contract(self):
-    self.assertTrue(self.CP.flags & ToyotaFlags.TSS3)
-    self.assertFalse(self.CP.flags & ToyotaFlags.SECOC)
-    self.assertFalse(self.CP.flags & ToyotaFlags.TSS2)
-    self.assertFalse(self.CP.dashcamOnly)
-    self.assertFalse(self.CP.secOcRequired)
-    self.assertTrue(self.CP.openpilotLongitudinalControl)
-    self.assertTrue(self.CP.alphaLongitudinalAvailable)
-    self.assertTrue(self.CP.autoResumeSng)
-    self.assertFalse(self.CP.radarUnavailable)
-    self.assertEqual(DBC[CAR.TOYOTA_CAMRY_TSS3][Bus.radar], "toyota_tss3_pt_generated")
-    self.assertAlmostEqual(self.CP.steerRatio, 15.3, places=3)
-    # paramsd learns a multiplier of CP.tireStiffnessFront/Rear, not a
-    # replacement for the factor already used to construct those values.
-    self.assertAlmostEqual(self.CP.tireStiffnessFactor, 0.7933, places=4)
-    self.assertAlmostEqual(self.CP.steerActuatorDelay, 0.18, places=3)
-    self.assertEqual(self.CP.steerControlType, structs.CarParams.SteerControlType.angle)
-    self.assertEqual(self.CP.safetyConfigs[0].safetyModel, structs.CarParams.SafetyModel.toyota)
-    self.assertTrue(self.CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.TSS3_SIGNER)
-    self.assertFalse(self.CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.STOCK_LONGITUDINAL)
-    self.assertEqual(DBC[CAR.TOYOTA_CAMRY_TSS3][Bus.pt], "toyota_tss3_pt_generated")
-    self.assertTrue(self.CP.flags & ToyotaFlags.HAS_BSM)
 
   def test_alpha_long_gates_longitudinal_ownership(self):
     cp = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, relay_fingerprint(), [], False, False, False)
@@ -144,121 +100,6 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     output, _ = ci.apply(control(0.0, active=False, accel=1.0, long_active=True), 2_000_000_000)
     self.assertEqual(output.accel, 0.0)
 
-  def test_exact_identity(self):
-    fw = FW_VERSIONS[CAR.TOYOTA_CAMRY_TSS3]
-    self.assertEqual(fw[(Ecu.eps, 0x7A1, None)], [
-      bytes.fromhex("023839363546333330373030300000000038413331313333303331303000000000")])
-
-  def test_tss3_radar_points_from_retained_object_bank(self):
-    # Raw source frames exercise the default Camry radar interface.
-    ri = RadarInterface(self.CP)
-    packets = [CanData(address, data, TSS3_AUX_BUS) for address, data in CAMRY_RADAR.items()]
-    rr = ri.update([(1_000_000_000, packets)])
-    self.assertIsNotNone(rr)
-    points = {point.trackId: point for point in rr.points}
-    self.assertEqual(set(points), set(range(8)))
-    self.assertAlmostEqual(points[0].dRel, 9.33, places=2)
-    self.assertAlmostEqual(points[0].yRel, 0.64, places=2)
-    self.assertAlmostEqual(points[2].dRel, 10.845, places=2)
-    self.assertAlmostEqual(points[2].yRel, -5.2, places=2)
-    self.assertAlmostEqual(points[2].vRel, -0.1, places=2)
-
-    empty = {}
-    sentinel = bytes.fromhex("fff8000000ffff") * 8
-    for address in range(0x180, 0x183):
-      data = bytearray(CAMRY_RADAR[address])
-      data[4:60] = sentinel
-      data[2] = (data[2] + 1) & 0xFF
-      data[3] = (data[3] + 1) & 0xFF
-      data[:2] = toyota_e2e_p05_checksum(address, data).to_bytes(2, "little")
-      empty[address] = bytes(data)
-    for address in range(0x183, 0x186):
-      data = bytearray(CAMRY_RADAR[address])
-      data[4:60] = bytes(56)
-      data[2] = (data[2] + 1) & 0xFF
-      data[3] = (data[3] + 1) & 0xFF
-      data[:2] = toyota_e2e_p05_checksum(address, data).to_bytes(2, "little")
-      empty[address] = bytes(data)
-    rr = ri.update([(1_050_000_000, [CanData(address, data, TSS3_AUX_BUS) for address, data in empty.items()])])
-    self.assertIsNotNone(rr)
-    self.assertEqual(len(rr.points), 0)
-
-  def test_exact_identity_survives_nrtd_diagnostic_eps_miss(self):
-    fw = FW_VERSIONS[CAR.TOYOTA_CAMRY_TSS3]
-    eps_version = fw[(Ecu.eps, 0x7A1, None)][0]
-    abs_version = fw[(Ecu.abs, 0x7B0, None)][0]
-
-    # Normal startup: both exact control-API and corroborating chassis identities match.
-    live_fw = {(0x7A1, None): {eps_version}, (0x7B0, None): {abs_version}}
-    self.assertEqual(match_fw_to_car_exact(live_fw, match_brand="toyota", log=False),
-                     {str(CAR.TOYOTA_CAMRY_TSS3)})
-
-    # NRTD startup can transiently miss EPS F181. The exact ABS identity is
-    # enough to retain the platform instead of falling through to MOCK/dashcam mode.
-    self.assertEqual(match_fw_to_car_exact({(0x7B0, None): {abs_version}}, match_brand="toyota", log=False),
-                     {str(CAR.TOYOTA_CAMRY_TSS3)})
-
-    # Optional means "may be absent", not "ignore it": a present wrong EPS
-    # identity must still reject the Camry even when the ABS identity matches.
-    wrong_eps = bytearray(eps_version)
-    wrong_eps[13] ^= 1
-    mismatch = {(0x7A1, None): {bytes(wrong_eps)}, (0x7B0, None): {abs_version}}
-    self.assertNotIn(str(CAR.TOYOTA_CAMRY_TSS3),
-                     match_fw_to_car_exact(mismatch, match_brand="toyota", log=False))
-
-    # Production control is not downgraded based on a transient diagnostic
-    # response failure; runtime capability comes from source-real CAN state.
-    self.assertEqual(self.CP.minSteerSpeed, 0.)
-    self.assertTrue(self.CP.steerAtStandstill)
-
-  def test_unified_tss3_request_and_result_dbc_layout(self):
-    request_parser = CANParser("toyota_tss3_pt_generated", [("TSS3_CONTROL_REQUEST", 0)], TSS3_SOURCE_BUS)
-    request_parser.update([(1_000_000_000, [CanData(0x08A, CAMRY_COMMON[0x08A], TSS3_SOURCE_BUS)])])
-    request = request_parser.vl["TSS3_CONTROL_REQUEST"]
-    self.assertAlmostEqual(request["LONGITUDINAL_REQUEST_ACCEL_UPPER"], -0.442, places=6)
-    self.assertAlmostEqual(request["LONGITUDINAL_REQUEST_ACCEL_LOWER"], -0.442, places=6)
-    self.assertEqual(request["REQUEST_STATUS_B4_BIT7"], 1)
-    self.assertEqual(request["DELAYED_HOLD_STATE"], 0)
-    self.assertEqual(request["LONGITUDINAL_REQUEST_ID_UPPER"], 11)
-    self.assertEqual(request["LONGITUDINAL_ALLOCATION_METHOD_UPPER"], 1)
-    self.assertEqual(request["LONGITUDINAL_REQUEST_ID_LOWER"], 17)
-    self.assertEqual(request["LONGITUDINAL_ALLOCATION_METHOD_LOWER"], 3)
-    self.assertEqual(request["REQUEST_SENTINEL_B13_B14"], 0x7FFF)
-    self.assertEqual(request["REQUEST_SENTINEL_B16_B17"], 0x7FFF)
-    self.assertEqual(request["CRUISE_STATE_MIRROR"], 3)
-    self.assertEqual(request["LATERAL_REQUEST_ID"], 0)
-    self.assertEqual(request["CRUISE_REQUEST_ACTIVE"], 1)
-    self.assertEqual(request["LATERAL_REQUEST_ATTRIBUTE_B23_BIT5"], 0)
-    self.assertAlmostEqual(request["LATERAL_REQUEST_PINION_ANGLE"], -0.203 * 1.000121519, places=6)
-    self.assertAlmostEqual(request["LATERAL_ASSIST_GAIN"], 1.0, places=6)
-    self.assertAlmostEqual(request["LATERAL_DAMPING_GAIN"], 0.0, places=6)
-    self.assertEqual(request["REQUEST_SEQUENCE"], 60)
-    self.assertEqual(request["MSG_CNT_LOWER"], 1)
-    self.assertEqual(request["RESET_FLAG"], 1)
-    self.assertEqual(request["AUTHENTICATOR"], 0xDB7797F)
-
-    # Retained relay-correct drive-A result frame with selected longitudinal ID11.
-    result_frame = bytes.fromhex("00000018ffc80b730000000400000000000dffc8ffa2135dffa2000043d6390a")
-    result_parser = CANParser("toyota_tss3_pt_generated", [("TSS3_CONTROL_RESULT", 0)], TSS3_CHASSIS_BUS)
-    result_parser.update([(1_010_000_000, [CanData(0x081, result_frame, TSS3_CHASSIS_BUS)])])
-    result = result_parser.vl["TSS3_CONTROL_RESULT"]
-    self.assertEqual(result["LONGITUDINAL_RESULT_ID"], 11)
-    self.assertEqual(result["REQUEST_LOSS_STATUS"], 0)
-    self.assertEqual(result["LATERAL_RESULT_ID"], 0)
-    self.assertAlmostEqual(result["LATERAL_RESULT_PINION_ANGLE"], 0.013 * 1.000121519, places=6)
-    self.assertAlmostEqual(result["LONGITUDINAL_RESULT_ACCEL"], -0.094, places=6)
-
-    state_parser = CANParser("toyota_tss3_pt_generated", [("TSS3_FRC_STATE_160", 0)], TSS3_SOURCE_BUS)
-    state_parser.update([(1_020_000_000, [CanData(0x160, CAMRY_LONG, TSS3_SOURCE_BUS)])])
-    frc_state = state_parser.vl["TSS3_FRC_STATE_160"]
-    self.assertEqual(frc_state["COUNTER"], CAMRY_LONG[2])
-    self.assertEqual(frc_state["BYTE_4"], CAMRY_LONG[4])
-    self.assertEqual(frc_state["BYTE_5"], CAMRY_LONG[5])
-
-    display_parser = CANParser("toyota_tss3_pt_generated", [("TSS3_CRUISE_DISPLAY", 0)], TSS3_SOURCE_BUS)
-    display_parser.update([(1_030_000_000, [CanData(0x251, bytes.fromhex("a00000488088a080"), TSS3_SOURCE_BUS)])])
-    self.assertEqual(display_parser.vl["TSS3_CRUISE_DISPLAY"]["SET_VEHICLE_INTERVAL_TIME"], 4)
-
   def test_canonical_tss3_state_uses_chassis_and_source_buses(self):
     ci = CarInterface(self.CP)
     self.assertEqual(ci.can_parsers[Bus.pt].bus, TSS3_CHASSIS_BUS)
@@ -268,14 +109,6 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertTrue(state.cruiseState.available)
     self.assertTrue(state.cruiseState.enabled)
     self.assertFalse(state.carNotReady)
-    self.assertFalse(state.steerFaultTemporary)
-    self.assertFalse(state.steerFaultPermanent)
-
-  def test_request_transport_diagnostic_is_not_reported_as_a_vehicle_fault(self):
-    ci = CarInterface(self.CP)
-    ci.CC.tss3_request_transport.last_failure_reason = "oracle_dead"
-    state = update_state(ci)
-    self.assertFalse(state.accFaulted)
     self.assertFalse(state.steerFaultTemporary)
     self.assertFalse(state.steerFaultPermanent)
 
@@ -452,17 +285,6 @@ class TestToyotaCamryTSS3(unittest.TestCase):
       (structs.CarState.ButtonEvent.Type.lkas, False),
     ])
 
-  def test_distance_selector_and_ui_feedback_never_emit_personality_events(self):
-    ci = CarInterface(self.CP)
-    distance = bytearray(CAMRY_COMMON[0x251])
-    counter = 0
-    for bars in (1, 3, 2, 1):
-      ci.apply(control(0.0, active=False, enabled=False, lead_distance_bars=bars), 2_000_000_000)
-      for position in (1, 2, 3, 4, 1):
-        distance[5] = (distance[5] & 0x1F) | (position << 5)
-        state = update_state(ci, counter_offset=counter, cruise_display=bytes(distance), hud=CAMRY_HUD, iterations=1)
-        self.assertFalse(any(event.type == structs.CarState.ButtonEvent.Type.gapAdjustCruise for event in state.buttonEvents))
-        counter += 1
 
 if __name__ == "__main__":
   unittest.main()

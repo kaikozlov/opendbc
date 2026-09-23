@@ -10,11 +10,6 @@ BS_:
 
 BU_: XXX EPS ESP SCM
 
-BO_ 15 SECOC_SYNCHRONIZATION: 8 XXX
- SG_ TRIP_CNT : 7|16@0+ (1,0) [0|65535] "" XXX
- SG_ RESET_CNT : 23|20@0+ (1,0) [0|1048575] "" XXX
- SG_ AUTHENTICATOR : 35|28@0+ (1,0) [0|268435455] "" XXX
-
 BO_ 37 STEER_ANGLE_SENSOR: 32 XXX
  SG_ STEER_ANGLE : 3|12@0- (1.5,0) [-500|500] "deg" XXX
  SG_ STEER_FRACTION : 39|4@0- (0.1,0) [-0.7|0.7] "deg" XXX
@@ -41,13 +36,6 @@ BO_ 254 TSS3_CRUISE_SWITCH: 32 XXX
  SG_ CANCEL_BUTTON : 38|1@0+ (1,0) [0|1] "" XXX
  SG_ CANCEL_BUTTON_MIRROR_N : 61|1@0+ (1,0) [0|1] "" XXX
 
-BO_ 129 TSS3_CONTROL_RESULT: 32 XXX
- SG_ LONGITUDINAL_RESULT_ID : 53|6@0+ (1,0) [0|63] "" XXX
- SG_ REQUEST_LOSS_STATUS : 92|1@0+ (1,0) [0|1] "" XXX
- SG_ LATERAL_RESULT_ID : 109|6@0+ (1,0) [0|63] "" XXX
- SG_ LATERAL_RESULT_PINION_ANGLE : 135|16@0- (0.001000121519,0) [-32.772|32.771] "rad" XXX
- SG_ LONGITUDINAL_RESULT_ACCEL : 167|16@0- (0.001,0) [-32.768|32.767] "m/s^2" XXX
-
 BO_ 138 TSS3_CONTROL_REQUEST: 32 XXX
  SG_ CRUISE_OPERATING_LATCH : 27|1@0+ (1,0) [0|1] "" XXX
  SG_ REQUEST_STATUS_B4_BIT7 : 39|1@0+ (1,0) [0|1] "" XXX
@@ -73,39 +61,6 @@ BO_ 138 TSS3_CONTROL_REQUEST: 32 XXX
  SG_ RESET_FLAG : 229|2@0+ (1,0) [0|3] "" XXX
  SG_ MSG_CNT_LOWER : 231|2@0+ (1,0) [0|3] "" XXX
 
-BO_ 352 TSS3_FRC_STATE_160: 32 XXX
- SG_ CHECKSUM : 0|16@1+ (1,0) [0|65535] "" XXX
- SG_ COUNTER : 16|8@1+ (1,0) [0|255] "" XXX
- SG_ BYTE_3 : 24|8@1+ (1,0) [0|255] "" XXX
- SG_ BYTE_4 : 32|8@1+ (1,0) [0|255] "" XXX
- SG_ BYTE_5 : 40|8@1+ (1,0) [0|255] "" XXX
- SG_ BYTE_6 : 48|8@1+ (1,0) [0|255] "" XXX
- SG_ BYTE_7 : 56|8@1+ (1,0) [0|255] "" XXX
- SG_ BYTE_8 : 64|8@1+ (1,0) [0|255] "" XXX
- SG_ BYTE_9 : 72|8@1+ (1,0) [0|255] "" XXX
- SG_ BYTE_10 : 80|8@1+ (1,0) [0|255] "" XXX
- SG_ BYTE_11 : 88|8@1+ (1,0) [0|255] "" XXX
- SG_ BYTE_12 : 96|8@1+ (1,0) [0|255] "" XXX
- SG_ BYTE_13 : 104|8@1+ (1,0) [0|255] "" XXX
- SG_ BYTE_14 : 112|8@1+ (1,0) [0|255] "" XXX
- SG_ BYTE_15 : 120|8@1+ (1,0) [0|255] "" XXX
- SG_ BYTE_16 : 128|8@1+ (1,0) [0|255] "" XXX
- SG_ BYTE_17 : 136|8@1+ (1,0) [0|255] "" XXX
- SG_ BYTE_18 : 144|8@1+ (1,0) [0|255] "" XXX
- SG_ BYTE_19 : 152|8@1+ (1,0) [0|255] "" XXX
- SG_ BYTE_20 : 160|8@1+ (1,0) [0|255] "" XXX
- SG_ BYTE_21 : 168|8@1+ (1,0) [0|255] "" XXX
- SG_ BYTE_22 : 176|8@1+ (1,0) [0|255] "" XXX
- SG_ BYTE_23 : 184|8@1+ (1,0) [0|255] "" XXX
- SG_ BYTE_24 : 192|8@1+ (1,0) [0|255] "" XXX
- SG_ BYTE_25 : 200|8@1+ (1,0) [0|255] "" XXX
- SG_ BYTE_26 : 208|8@1+ (1,0) [0|255] "" XXX
- SG_ BYTE_27 : 216|8@1+ (1,0) [0|255] "" XXX
- SG_ BYTE_28 : 224|8@1+ (1,0) [0|255] "" XXX
- SG_ BYTE_29 : 232|8@1+ (1,0) [0|255] "" XXX
- SG_ BYTE_30 : 240|8@1+ (1,0) [0|255] "" XXX
- SG_ BYTE_31 : 248|8@1+ (1,0) [0|255] "" XXX
-
 BO_ 170 WHEEL_SPEEDS: 8 XXX
  SG_ WHEEL_SPEED_FR_FAULT : 7|1@0+ (1,0) [0|1] "" XXX
  SG_ WHEEL_SPEED_FR : 6|15@0+ (0.01,-67.67) [-67.67|260] "km/h" XXX
@@ -115,185 +70,6 @@ BO_ 170 WHEEL_SPEEDS: 8 XXX
  SG_ WHEEL_SPEED_RR : 38|15@0+ (0.01,-67.67) [-67.67|260] "km/h" XXX
  SG_ WHEEL_SPEED_RL_FAULT : 55|1@0+ (1,0) [0|1] "" XXX
  SG_ WHEEL_SPEED_RL : 54|15@0+ (0.01,-67.67) [-67.67|260] "km/h" XXX
-
-BO_ 182 TSS3_LATERAL_CONTROL: 32 XXX
- SG_ TARGET_LATERAL_ID : 29|6@0+ (1,0) [0|63] "" XXX
- SG_ TARGET_STEERING_ANGLE : 39|16@0- (0.057302742,0) [-1877|1877] "deg" XXX
- SG_ SEQUENCE : 61|6@0+ (1,0) [0|63] "" XXX
-
-BO_ 384 TSS3_OBJECT_GEOMETRY_0: 64 XXX
- SG_ CHECKSUM : 0|16@1+ (1,0) [0|65535] "" XXX
- SG_ COUNTER : 16|8@1+ (1,0) [0|255] "" XXX
- SG_ CYCLE_BYTE : 24|8@1+ (1,0) [0|255] "" XXX
- SG_ DIST_0 : 39|16@0+ (0.005,0) [0|327.675] "m" XXX
- SG_ LAT_0 : 55|12@0- (0.04,0) [-81.92|81.88] "m" XXX
- SG_ DIST_1 : 95|16@0+ (0.005,0) [0|327.675] "m" XXX
- SG_ LAT_1 : 111|12@0- (0.04,0) [-81.92|81.88] "m" XXX
- SG_ DIST_2 : 151|16@0+ (0.005,0) [0|327.675] "m" XXX
- SG_ LAT_2 : 167|12@0- (0.04,0) [-81.92|81.88] "m" XXX
- SG_ DIST_3 : 207|16@0+ (0.005,0) [0|327.675] "m" XXX
- SG_ LAT_3 : 223|12@0- (0.04,0) [-81.92|81.88] "m" XXX
- SG_ DIST_4 : 263|16@0+ (0.005,0) [0|327.675] "m" XXX
- SG_ LAT_4 : 279|12@0- (0.04,0) [-81.92|81.88] "m" XXX
- SG_ DIST_5 : 319|16@0+ (0.005,0) [0|327.675] "m" XXX
- SG_ LAT_5 : 335|12@0- (0.04,0) [-81.92|81.88] "m" XXX
- SG_ DIST_6 : 375|16@0+ (0.005,0) [0|327.675] "m" XXX
- SG_ LAT_6 : 391|12@0- (0.04,0) [-81.92|81.88] "m" XXX
- SG_ DIST_7 : 431|16@0+ (0.005,0) [0|327.675] "m" XXX
- SG_ LAT_7 : 447|12@0- (0.04,0) [-81.92|81.88] "m" XXX
-
-BO_ 385 TSS3_OBJECT_GEOMETRY_1: 64 XXX
- SG_ CHECKSUM : 0|16@1+ (1,0) [0|65535] "" XXX
- SG_ COUNTER : 16|8@1+ (1,0) [0|255] "" XXX
- SG_ CYCLE_BYTE : 24|8@1+ (1,0) [0|255] "" XXX
- SG_ DIST_0 : 39|16@0+ (0.005,0) [0|327.675] "m" XXX
- SG_ LAT_0 : 55|12@0- (0.04,0) [-81.92|81.88] "m" XXX
- SG_ DIST_1 : 95|16@0+ (0.005,0) [0|327.675] "m" XXX
- SG_ LAT_1 : 111|12@0- (0.04,0) [-81.92|81.88] "m" XXX
- SG_ DIST_2 : 151|16@0+ (0.005,0) [0|327.675] "m" XXX
- SG_ LAT_2 : 167|12@0- (0.04,0) [-81.92|81.88] "m" XXX
- SG_ DIST_3 : 207|16@0+ (0.005,0) [0|327.675] "m" XXX
- SG_ LAT_3 : 223|12@0- (0.04,0) [-81.92|81.88] "m" XXX
- SG_ DIST_4 : 263|16@0+ (0.005,0) [0|327.675] "m" XXX
- SG_ LAT_4 : 279|12@0- (0.04,0) [-81.92|81.88] "m" XXX
- SG_ DIST_5 : 319|16@0+ (0.005,0) [0|327.675] "m" XXX
- SG_ LAT_5 : 335|12@0- (0.04,0) [-81.92|81.88] "m" XXX
- SG_ DIST_6 : 375|16@0+ (0.005,0) [0|327.675] "m" XXX
- SG_ LAT_6 : 391|12@0- (0.04,0) [-81.92|81.88] "m" XXX
- SG_ DIST_7 : 431|16@0+ (0.005,0) [0|327.675] "m" XXX
- SG_ LAT_7 : 447|12@0- (0.04,0) [-81.92|81.88] "m" XXX
-
-BO_ 386 TSS3_OBJECT_GEOMETRY_2: 64 XXX
- SG_ CHECKSUM : 0|16@1+ (1,0) [0|65535] "" XXX
- SG_ COUNTER : 16|8@1+ (1,0) [0|255] "" XXX
- SG_ CYCLE_BYTE : 24|8@1+ (1,0) [0|255] "" XXX
- SG_ DIST_0 : 39|16@0+ (0.005,0) [0|327.675] "m" XXX
- SG_ LAT_0 : 55|12@0- (0.04,0) [-81.92|81.88] "m" XXX
- SG_ DIST_1 : 95|16@0+ (0.005,0) [0|327.675] "m" XXX
- SG_ LAT_1 : 111|12@0- (0.04,0) [-81.92|81.88] "m" XXX
- SG_ DIST_2 : 151|16@0+ (0.005,0) [0|327.675] "m" XXX
- SG_ LAT_2 : 167|12@0- (0.04,0) [-81.92|81.88] "m" XXX
- SG_ DIST_3 : 207|16@0+ (0.005,0) [0|327.675] "m" XXX
- SG_ LAT_3 : 223|12@0- (0.04,0) [-81.92|81.88] "m" XXX
- SG_ DIST_4 : 263|16@0+ (0.005,0) [0|327.675] "m" XXX
- SG_ LAT_4 : 279|12@0- (0.04,0) [-81.92|81.88] "m" XXX
- SG_ DIST_5 : 319|16@0+ (0.005,0) [0|327.675] "m" XXX
- SG_ LAT_5 : 335|12@0- (0.04,0) [-81.92|81.88] "m" XXX
- SG_ DIST_6 : 375|16@0+ (0.005,0) [0|327.675] "m" XXX
- SG_ LAT_6 : 391|12@0- (0.04,0) [-81.92|81.88] "m" XXX
- SG_ DIST_7 : 431|16@0+ (0.005,0) [0|327.675] "m" XXX
- SG_ LAT_7 : 447|12@0- (0.04,0) [-81.92|81.88] "m" XXX
-
-BO_ 387 TSS3_OBJECT_MOTION_0: 64 XXX
- SG_ CHECKSUM : 0|16@1+ (1,0) [0|65535] "" XXX
- SG_ COUNTER : 16|8@1+ (1,0) [0|255] "" XXX
- SG_ CYCLE_BYTE : 24|8@1+ (1,0) [0|255] "" XXX
- SG_ VREL_0 : 45|14@0- (0.025,0) [-204.8|204.775] "m/s" XXX
- SG_ VREL_1 : 101|14@0- (0.025,0) [-204.8|204.775] "m/s" XXX
- SG_ VREL_2 : 157|14@0- (0.025,0) [-204.8|204.775] "m/s" XXX
- SG_ VREL_3 : 213|14@0- (0.025,0) [-204.8|204.775] "m/s" XXX
- SG_ VREL_4 : 269|14@0- (0.025,0) [-204.8|204.775] "m/s" XXX
- SG_ VREL_5 : 325|14@0- (0.025,0) [-204.8|204.775] "m/s" XXX
- SG_ VREL_6 : 381|14@0- (0.025,0) [-204.8|204.775] "m/s" XXX
- SG_ VREL_7 : 437|14@0- (0.025,0) [-204.8|204.775] "m/s" XXX
- SG_ NEW_TRACK_0 : 71|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_ENDED_0 : 76|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_STATE_0 : 73|2@0+ (1,0) [0|3] "" XXX
- SG_ NEW_TRACK_1 : 127|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_ENDED_1 : 132|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_STATE_1 : 129|2@0+ (1,0) [0|3] "" XXX
- SG_ NEW_TRACK_2 : 183|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_ENDED_2 : 188|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_STATE_2 : 185|2@0+ (1,0) [0|3] "" XXX
- SG_ NEW_TRACK_3 : 239|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_ENDED_3 : 244|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_STATE_3 : 241|2@0+ (1,0) [0|3] "" XXX
- SG_ NEW_TRACK_4 : 295|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_ENDED_4 : 300|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_STATE_4 : 297|2@0+ (1,0) [0|3] "" XXX
- SG_ NEW_TRACK_5 : 351|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_ENDED_5 : 356|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_STATE_5 : 353|2@0+ (1,0) [0|3] "" XXX
- SG_ NEW_TRACK_6 : 407|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_ENDED_6 : 412|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_STATE_6 : 409|2@0+ (1,0) [0|3] "" XXX
- SG_ NEW_TRACK_7 : 463|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_ENDED_7 : 468|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_STATE_7 : 465|2@0+ (1,0) [0|3] "" XXX
-
-BO_ 388 TSS3_OBJECT_MOTION_1: 64 XXX
- SG_ CHECKSUM : 0|16@1+ (1,0) [0|65535] "" XXX
- SG_ COUNTER : 16|8@1+ (1,0) [0|255] "" XXX
- SG_ CYCLE_BYTE : 24|8@1+ (1,0) [0|255] "" XXX
- SG_ VREL_0 : 45|14@0- (0.025,0) [-204.8|204.775] "m/s" XXX
- SG_ VREL_1 : 101|14@0- (0.025,0) [-204.8|204.775] "m/s" XXX
- SG_ VREL_2 : 157|14@0- (0.025,0) [-204.8|204.775] "m/s" XXX
- SG_ VREL_3 : 213|14@0- (0.025,0) [-204.8|204.775] "m/s" XXX
- SG_ VREL_4 : 269|14@0- (0.025,0) [-204.8|204.775] "m/s" XXX
- SG_ VREL_5 : 325|14@0- (0.025,0) [-204.8|204.775] "m/s" XXX
- SG_ VREL_6 : 381|14@0- (0.025,0) [-204.8|204.775] "m/s" XXX
- SG_ VREL_7 : 437|14@0- (0.025,0) [-204.8|204.775] "m/s" XXX
- SG_ NEW_TRACK_0 : 71|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_ENDED_0 : 76|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_STATE_0 : 73|2@0+ (1,0) [0|3] "" XXX
- SG_ NEW_TRACK_1 : 127|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_ENDED_1 : 132|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_STATE_1 : 129|2@0+ (1,0) [0|3] "" XXX
- SG_ NEW_TRACK_2 : 183|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_ENDED_2 : 188|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_STATE_2 : 185|2@0+ (1,0) [0|3] "" XXX
- SG_ NEW_TRACK_3 : 239|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_ENDED_3 : 244|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_STATE_3 : 241|2@0+ (1,0) [0|3] "" XXX
- SG_ NEW_TRACK_4 : 295|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_ENDED_4 : 300|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_STATE_4 : 297|2@0+ (1,0) [0|3] "" XXX
- SG_ NEW_TRACK_5 : 351|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_ENDED_5 : 356|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_STATE_5 : 353|2@0+ (1,0) [0|3] "" XXX
- SG_ NEW_TRACK_6 : 407|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_ENDED_6 : 412|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_STATE_6 : 409|2@0+ (1,0) [0|3] "" XXX
- SG_ NEW_TRACK_7 : 463|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_ENDED_7 : 468|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_STATE_7 : 465|2@0+ (1,0) [0|3] "" XXX
-
-BO_ 389 TSS3_OBJECT_MOTION_2: 64 XXX
- SG_ CHECKSUM : 0|16@1+ (1,0) [0|65535] "" XXX
- SG_ COUNTER : 16|8@1+ (1,0) [0|255] "" XXX
- SG_ CYCLE_BYTE : 24|8@1+ (1,0) [0|255] "" XXX
- SG_ VREL_0 : 45|14@0- (0.025,0) [-204.8|204.775] "m/s" XXX
- SG_ VREL_1 : 101|14@0- (0.025,0) [-204.8|204.775] "m/s" XXX
- SG_ VREL_2 : 157|14@0- (0.025,0) [-204.8|204.775] "m/s" XXX
- SG_ VREL_3 : 213|14@0- (0.025,0) [-204.8|204.775] "m/s" XXX
- SG_ VREL_4 : 269|14@0- (0.025,0) [-204.8|204.775] "m/s" XXX
- SG_ VREL_5 : 325|14@0- (0.025,0) [-204.8|204.775] "m/s" XXX
- SG_ VREL_6 : 381|14@0- (0.025,0) [-204.8|204.775] "m/s" XXX
- SG_ VREL_7 : 437|14@0- (0.025,0) [-204.8|204.775] "m/s" XXX
- SG_ NEW_TRACK_0 : 71|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_ENDED_0 : 76|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_STATE_0 : 73|2@0+ (1,0) [0|3] "" XXX
- SG_ NEW_TRACK_1 : 127|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_ENDED_1 : 132|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_STATE_1 : 129|2@0+ (1,0) [0|3] "" XXX
- SG_ NEW_TRACK_2 : 183|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_ENDED_2 : 188|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_STATE_2 : 185|2@0+ (1,0) [0|3] "" XXX
- SG_ NEW_TRACK_3 : 239|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_ENDED_3 : 244|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_STATE_3 : 241|2@0+ (1,0) [0|3] "" XXX
- SG_ NEW_TRACK_4 : 295|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_ENDED_4 : 300|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_STATE_4 : 297|2@0+ (1,0) [0|3] "" XXX
- SG_ NEW_TRACK_5 : 351|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_ENDED_5 : 356|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_STATE_5 : 353|2@0+ (1,0) [0|3] "" XXX
- SG_ NEW_TRACK_6 : 407|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_ENDED_6 : 412|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_STATE_6 : 409|2@0+ (1,0) [0|3] "" XXX
- SG_ NEW_TRACK_7 : 463|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_ENDED_7 : 468|1@0+ (1,0) [0|1] "" XXX
- SG_ TRACK_STATE_7 : 465|2@0+ (1,0) [0|3] "" XXX
 
 BO_ 257 BRAKE_MODULE: 8 XXX
  SG_ SET_ME_1 : 7|1@0+ (1,0) [0|1] "" XXX
@@ -307,14 +83,6 @@ BO_ 278 GAS_PEDAL: 8 XXX
 
 BO_ 295 GEAR_PACKET_HYBRID: 8 XXX
  SG_ GEAR : 47|4@0+ (1,0) [0|15] "" XXX
- SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
-
-BO_ 959 TSS3_GEAR_PACKET: 8 XXX
- SG_ GEAR : 7|8@0+ (1,0) [0|255] "" XXX
-
-BO_ 374 PCM_CRUISE: 8 XXX
- SG_ CRUISE_ACTIVE : 5|1@0+ (1,0) [0|1] "" XXX
- SG_ CRUISE_STATE : 31|4@0+ (1,0) [0|15] "" XXX
  SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
 
 BO_ 593 TSS3_CRUISE_DISPLAY: 8 XXX
@@ -363,72 +131,13 @@ BO_ 1568 BODY_CONTROL_STATE: 8 XXX
 
 BO_ 1570 LIGHT_STALK: 8 SCM
  SG_ AUTO_HIGH_BEAM : 37|1@0+ (1,0) [0|1] "" XXX
-
 VAL_ 295 GEAR 0 "P" 1 "R" 2 "N" 3 "D" 4 "B" ;
-VAL_ 959 GEAR 16 "D" 32 "N" 64 "R" 128 "P" ;
 VAL_ 1556 TURN_SIGNALS 3 "hazard" 2 "right" 1 "left" 0 "none";
-
-CM_ BO_ 37 "TSS3 Corolla uses the legacy steering angle/fraction/rate bit positions inside a 32-byte CAN-FD PDU; exact H firmware and two driving captures support these fields.";
-CM_ BO_ 48 "Exact H/F EPS transmits this 32-byte PDU. Driver torque and B6 safety/status gates are target-native recovered fields; byte 7 equals sum(bytes 0..6)+0x38 modulo 256.";
-CM_ SG_ 48 STEERING_WHEEL_TORQUE_TRUNC "DID 0x1035 Steering Wheel Torque source, saturating truncation-toward-zero 0.1 Nm view. It can differ from COARSE by one count due to firmware rounding.";
-CM_ SG_ 48 STEERING_WHEEL_TORQUE_COARSE "Coarse component of exact physical Steering Wheel Torque reconstruction.";
-CM_ SG_ 48 STEERING_WHEEL_TORQUE_FINE "Signed hundredths remainder. Exact torque = COARSE + FINE.";
-CM_ SG_ 48 EPS_FAULT_INHIBIT "Selected live EPS fault/inhibit aggregate. Maps the recoverable current-unavailability projection to openpilot steerFaultTemporary; this is not an exhaustive fault list or a restart-required latch. H/F policy is separate.";
-CM_ SG_ 48 DRIVER_TORQUE_INVALID "Target-native driver-torque invalid/inhibit gate.";
-CM_ SG_ 48 EPS_STATUS_B6_BIT1 "Runtime status bit; exact OEM meaning unresolved.";
-CM_ SG_ 48 EPS_STATUS_B6_BIT3 "Runtime status bit; exact OEM meaning unresolved.";
-CM_ BO_ 129 "Brake-owned TSS3 selected/result/reference PDU. Longitudinal result fields are strong recorder-schema candidates; lateral result fields are independently recovered. B11[4] asserts on FRC request loss.";
-CM_ SG_ 129 LONGITUDINAL_RESULT_ID "Strong candidate for recorder 5284 Arbitration result_longitudinal ID; low six bits only. Exact synchronized diagnostic join remains open.";
-CM_ SG_ 129 REQUEST_LOSS_STATUS "Live FRC CommunicationControl suppression makes this bit assert while Brake continues 0x081. OEM name and relation to recorder 57D3 remain unresolved.";
-CM_ SG_ 129 LATERAL_RESULT_ID "Strong wire join to FFD 5285 Arbitration result_lateral ID; mirrors fresh 0x08A request identity across the retained road corpus.";
-CM_ SG_ 129 LATERAL_RESULT_PINION_ANGLE "Selected/result pinion reference. Raw count is approximately the recorder 57DE 0.001-rad unit.";
-CM_ SG_ 129 LONGITUDINAL_RESULT_ACCEL "Strong candidate for recorder 57DB Arbitration result Acceleration. Result ID63 nearly passes the 0x08A request through while ID11 diverges under arbitration.";
-CM_ BO_ 138 "Unified observed TSS3 request envelope. Carries Toyota recorder 5281 upper longitudinal request, 5280 lower longitudinal request, 5282 lateral request, request-state metadata, a modulo-64 application sequence, and a Toyota Profile-5-style FV4/MAC28 SecOC trailer. Exact placement before/after internal TSS application selection remains unresolved.";
-CM_ SG_ 138 REQUEST_STATUS_B4_BIT7 "Retained Camry request-status companion bit. It is set throughout the ordinary request corpus, including every ID11 frame; exact OEM semantic remains unresolved.";
-CM_ SG_ 138 DELAYED_HOLD_STATE "Structural Camry hold-state bit: asserted on 198/198 retained delayed-hold frames and clear in every other 3b/3c 0x08A frame. Exact OEM recorder name remains unknown.";
-CM_ SG_ 138 LONGITUDINAL_REQUEST_ID_UPPER "Toyota recorder 5281 upper longitudinal request ID in bits7:2. Ordinary Camry DRCC uses ID11 here; unequal-bound evidence resolves this slot as upper.";
-CM_ SG_ 138 LONGITUDINAL_ALLOCATION_METHOD_UPPER "Toyota 5281 upper force-allocation method in bits1:0: 0 Engine Only, 1 Engine and Brake 1, 2 Engine and Brake 2, 3 Brake Only.";
-CM_ SG_ 138 LONGITUDINAL_REQUEST_ID_LOWER "Toyota recorder 5280 lower longitudinal request ID in bits7:2. Ordinary Camry DRCC uses ID17 here; delayed hold uses ID25.";
-CM_ SG_ 138 LONGITUDINAL_ALLOCATION_METHOD_LOWER "Toyota 5280 lower force-allocation method in bits1:0: 0 Engine Only, 1 Engine and Brake 1, 2 Engine and Brake 2, 3 Brake Only.";
-CM_ SG_ 138 LONGITUDINAL_REQUEST_ACCEL_UPPER "Toyota recorder 5281 upper acceleration request, signed16 at 0.001 m/s^2/count. Unequal-bound evidence resolves B8:B9 as upper.";
-CM_ SG_ 138 LONGITUDINAL_REQUEST_ACCEL_LOWER "Toyota recorder 5280 lower acceleration request, signed16 at 0.001 m/s^2/count. Unequal-bound evidence resolves B11:B12 as lower.";
-CM_ SG_ 138 REQUEST_SENTINEL_B13_B14 "Constant 0x7FFF in every retained complete Camry 0x08A frame; surrounding OEM field semantic remains unresolved.";
-CM_ SG_ 138 REQUEST_SENTINEL_B16_B17 "Constant 0x7FFF in every retained complete Camry 0x08A frame; surrounding OEM field semantic remains unresolved.";
-CM_ SG_ 138 LATERAL_REQUEST_PINION_ANGLE "Recovered Toyota recorder 5282 request pinion reference; controller scale 1024/17870 deg/count is 0.00100012 rad/count.";
-CM_ SG_ 138 CRUISE_STATE_MIRROR "B20[7:6] companion state. Steady Camry cruise operation is value 3 and inactive state is 0; it mirrors CRUISE_OPERATING_LATCH apart from bounded transition frames. Individual OEM bit names remain unresolved.";
-CM_ SG_ 138 LATERAL_REQUEST_ID "TSS request-side lateral application ID; FFD 5282 calls this TSS request - lateral ID.";
-CM_ SG_ 138 CRUISE_REQUEST_ACTIVE "B22[4] request-active state. It mirrors Camry cruise operation apart from bounded transitions and independently separates retained Corolla ACC engaged/disengaged states.";
-CM_ SG_ 138 LATERAL_REQUEST_ATTRIBUTE_B23_BIT5 "Real lateral-request attribute: always set in retained ID18/SDG and variable in ID11/LTA-LCA. It correlates strongly with driver steering/torque, but an OEM driver-steering/override name is not yet recovered.";
-CM_ SG_ 138 LATERAL_ASSIST_GAIN "Strong structural join to recorder 5282 Steering assist gain at 0.01/count.";
-CM_ SG_ 138 LATERAL_DAMPING_GAIN "Bounded structural join to recorder 5282 Damping control gain; zero in both complete Camry drives.";
-CM_ SG_ 138 REQUEST_SEQUENCE "Observed modulo-64 application/request publication sequence. This is distinct from the SecOC freshness fragment in B28.";
-CM_ SG_ 138 MSG_CNT_LOWER "Low two bits of the SecOC message counter carried in FV4.";
-CM_ SG_ 138 RESET_FLAG "Low two bits of the SecOC reset counter carried in FV4.";
-CM_ SG_ 138 AUTHENTICATOR "28-bit truncated Toyota Profile-5-style SecOC authenticator occupying B28[3:0] through B31.";
-
-CM_ BO_ 182 "Exact H/F protected final steering-controller target/instruction PDU. Its Target Lateral ID and target steering angle are downstream of the TSS request/result layers; receiver-side fields are defined for analysis.";
-CM_ SG_ 182 TARGET_LATERAL_ID "Techstream Target Lateral ID; exact H accepts 1=PCS, 4=LDA, 10=Hands Off LTA, 11=LTA/LCA, 19=PDA. 0 means no request.";
-CM_ SG_ 182 TARGET_STEERING_ANGLE "Controller-equivalent scale is exactly 1024/17870 deg/count.";
-CM_ SG_ 182 SEQUENCE "Exact H receiver treats this as a modulo-64 sequence counter with effective gap cap 8.";
-CM_ BO_ 352 "FRC-origin TSS3 Profile-5 PDU retained as read-only state/evidence. Current evidence does not qualify 0x160 as openpilot longitudinal command ingress; the shared TSS3 control-request plane is 0x08A.";
-CM_ SG_ 352 CHECKSUM "Little-endian CRC-16/CCITT over bytes 2..31 followed by Data ID 0x0160 in low-byte/high-byte order, initial value 0xFFFF. The older init=0/Data-ID=0x444A expression is wire-equivalent at this fixed PDU length.";
-CM_ SG_ 352 BYTE_4 "Observed state byte. The previous B4:B5 acceleration-request interpretation is not an actuator contract and must not be used for TSS3 longitudinal output.";
-CM_ SG_ 352 BYTE_5 "Observed state byte paired with B4 in prior motion-correlation work; no writable longitudinal-command semantic is assigned.";
-CM_ SG_ 352 BYTE_12 "Observed state byte; the previous acceleration-command interpretation is withdrawn.";
-CM_ SG_ 295 GEAR "Span 2025 Corolla HV directly carries raw 3 while in D; P/R/N/B preserve Toyota hybrid ordinal semantics corroborated by GTS+ P5/P6 Shift Position ordering.";
-CM_ SG_ 959 GEAR "Albino 2023 Corolla public route directly observes P=0x80, R=0x40 and D=0x10; Span 2025 Corolla HV independently carries D=0x10. N=0x20 completes the one-hot domain and matches Toyota P5/P6 ordering.";
-CM_ SG_ 374 CRUISE_ACTIVE "Legacy field retained for decoding only. Both moving TSS3 Corolla captures keep the old CRUISE_ACTIVE/STATE values inactive; generation-native engagement is 0x08A B22 bit0x10 instead.";
-
-VAL_ 182 TARGET_LATERAL_ID 27 "Remote Parking" 25 "AP" 19 "PDA" 11 "LTA/LCA" 10 "Hands Off LTA" 4 "LDA" 1 "PCS" 0 "No Request";
 VAL_ 138 LATERAL_REQUEST_ID 27 "Remote Parking" 25 "AP" 19 "PDA" 18 "SDG" 11 "LTA/LCA" 10 "Hands Off LTA" 4 "LDA" 1 "PCS" 0 "No Request";
-VAL_ 129 LATERAL_RESULT_ID 27 "Remote Parking" 25 "AP" 19 "PDA" 18 "SDG" 11 "LTA/LCA" 10 "Hands Off LTA" 4 "LDA" 1 "PCS" 0 "No Request";
 VAL_ 138 LONGITUDINAL_ALLOCATION_METHOD_UPPER 3 "Brake Only" 2 "Engine and Brake 2" 1 "Engine and Brake 1" 0 "Engine Only";
 VAL_ 138 LONGITUDINAL_ALLOCATION_METHOD_LOWER 3 "Brake Only" 2 "Engine and Brake 2" 1 "Engine and Brake 1" 0 "Engine Only";
 
-CM_ SG_ 593 UI_SET_SPEED "Contributor live capture reports byte2 as the retained dash set speed in mph, factor 1.0; retained public/Span excerpts contain no set-speed adjustment and remain zero.";
-
-CM_ BO_ 387 "Camry retained August/September object lifecycle: each slot B4[7] starts a new track; B5[4] ends the old track and can coincide with a new one. B5[1:0] is a raw object state: zero includes empty and unqualified retained geometry. Individual nonzero state names remain unassigned.";
-
-CM_ BO_ 388 "Camry retained August/September object lifecycle: each slot B4[7] starts a new track; B5[4] ends the old track and can coincide with a new one. B5[1:0] is a raw object state: zero includes empty and unqualified retained geometry. Individual nonzero state names remain unassigned.";
-
-CM_ BO_ 389 "Camry retained August/September object lifecycle: each slot B4[7] starts a new track; B5[4] ends the old track and can coincide with a new one. B5[1:0] is a raw object state: zero includes empty and unqualified retained geometry. Individual nonzero state names remain unassigned.";
+CM_ SG_ 48 ADDITIVE_BYTE_7 "Toyota checksum over bytes 0-6 with length 8";
+CM_ SG_ 48 STEERING_WHEEL_TORQUE_FINE "Driver torque = STEERING_WHEEL_TORQUE_COARSE + STEERING_WHEEL_TORQUE_FINE";
+CM_ SG_ 138 LATERAL_REQUEST_PINION_ANGLE "1024/17870 deg per count";
+CM_ SG_ 138 AUTHENTICATOR "Truncated 28-bit SecOC MAC";

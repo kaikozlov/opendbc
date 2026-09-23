@@ -48,12 +48,12 @@ class CarControllerParams:
   def __init__(self, CP):
     if CP.flags & ToyotaFlags.TSS3:
       self.ANGLE_LIMITS = self.TSS3_ANGLE_LIMITS
-      # 0x08A is a direct desired-acceleration request
+
+    if CP.flags & ToyotaFlags.RAISED_ACCEL_LIMIT:
       self.ACCEL_MAX = 2.0
-      self.ACCEL_MIN = -3.5
     else:
-      self.ACCEL_MAX = 2.0 if CP.flags & ToyotaFlags.RAISED_ACCEL_LIMIT else 1.5
-      self.ACCEL_MIN = -3.5
+      self.ACCEL_MAX = 1.5  # m/s2, lower than allowed 2.0 m/s^2 for tuning reasons
+    self.ACCEL_MIN = -3.5  # m/s2
 
     if CP.lateralTuning.which() == 'torque':
       self.STEER_DELTA_UP = 15       # 1.0s time to peak torque
@@ -89,7 +89,6 @@ class ToyotaFlags(IntFlag):
   # these cars can utilize 2.0 m/s^2
   RAISED_ACCEL_LIMIT = 1024
   SECOC = 2048
-  # Network/state generation, independent of actuator authentication.
   TSS3 = 4096
 
   # deprecated flags
@@ -152,7 +151,7 @@ class ToyotaTSS3CarDocs(ToyotaCarDocs):
 
 @dataclass
 class ToyotaTSS3PlatformConfig(PlatformConfig):
-  dbc_dict: dict = field(default_factory=lambda: {Bus.pt: 'toyota_tss3_pt_generated'})
+  dbc_dict: dict = field(default_factory=lambda: dbc_dict('toyota_tss3_pt_generated', 'toyota_tss3_radar_generated'))
 
   def init(self):
     self.flags |= ToyotaFlags.TSS3
@@ -208,12 +207,11 @@ class CAR(Platforms):
     TOYOTA_CAMRY.specs,
   )
   TOYOTA_CAMRY_TSS3 = ToyotaTSS3PlatformConfig(
-    [ToyotaTSS3CarDocs("Toyota Camry Hybrid 2026", package="Repinned harness")],
+    [ToyotaTSS3CarDocs("Toyota Camry Hybrid 2026")],
     # XV80: lightest (LE FWD) curb weight and 2,825 mm wheelbase from Toyota's 2025 product information.
     # Steer ratio is learned from routes; the Toyota stiffness factor remains paramsd's baseline.
     CarSpecs(mass=3450. * CV.LB_TO_KG, wheelbase=2.825, steerRatio=15.3, tireStiffnessFactor=0.7933),
-    dbc_dict={Bus.pt: 'toyota_tss3_pt_generated', Bus.radar: 'toyota_tss3_pt_generated'},
-    flags=ToyotaFlags.HYBRID,
+    flags=ToyotaFlags.HYBRID | ToyotaFlags.RAISED_ACCEL_LIMIT,
   )
   TOYOTA_CHR = PlatformConfig(
     [
@@ -622,7 +620,7 @@ FW_QUERY_CONFIG = FwQueryConfig(
     # - Body Control Module ((0x750, 0x40))
     # - Telematics ((0x750, 0xc7))
 
-    # Hybrid control computer can be on 0x7e2 (KWP) or 0x7d2 (UDS) depending on platform.
+    # Hybrid control computer can be on 0x7e2 (KWP) or 0x7d2 (UDS) depending on platform
     (Ecu.hybrid, 0x7e2, None),  # Hybrid Control Assembly & Computer
     (Ecu.hybrid, 0x7d2, None),  # Hybrid Control Assembly & Computer
     (Ecu.srs, 0x780, None),     # SRS Airbag

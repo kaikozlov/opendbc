@@ -8,17 +8,10 @@ from opendbc.car.carlog import carlog
 
 TSS3_B6_TARGET_ANGLE_SCALE_DEG = 1024 / 17870
 
-# Canonical Toyota-B TSS3 wiring. The target vehicle network is physically
-# repinned onto Panda's CAN0/CAN2 relay pair; CAN1 stays the unsplit auxiliary
-# path. Historical stock-harness captures on logical bus 1 are evidence only,
-# not a runtime topology alternative.
+# The camera harness is repinned so the vehicle network is on bus 0 and the FRC on bus 2
 TSS3_CHASSIS_BUS = 0
 TSS3_AUX_BUS = 1
 TSS3_SOURCE_BUS = 2
-
-TSS3_SIGNER_CONTROL_ADDR = 0x777
-TSS3_SIGNER_CONTROL_MAGIC = b"\x07\xC7\xC7"
-TSS3_SIGNER_BUS = TSS3_AUX_BUS
 
 TSS3_NO_LATERAL_REQUEST_ID = 0
 TSS3_LTA_LCA_ID = 11

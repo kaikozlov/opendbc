@@ -51,9 +51,6 @@ class CarTestRoute(NamedTuple):
 routes = [
   CarTestRoute("efdf9af95e71cd84/2022-05-13--19-03-31", COMMA.COMMA_BODY),
 
-  # Repinned 2026 Camry. See Toyota fixture provenance for local cache availability.
-  CarTestRoute("5211e3c6c7b088d3/00000051--894db634a8", TOYOTA.TOYOTA_CAMRY_TSS3, segment=2),
-
   CarTestRoute("c5e3aa51055c8f47|2023-12-06--20-01-44", CHRYSLER.JEEP_CHEROKEE_5TH_GEN),
   CarTestRoute("0c94aa1e1296d7c6/2021-05-05--19-48-37", CHRYSLER.JEEP_GRAND_CHEROKEE),
   CarTestRoute("91dfedae61d7bd75/2021-05-22--20-07-52", CHRYSLER.JEEP_GRAND_CHEROKEE_2019),
@@ -240,6 +237,7 @@ routes = [
   CarTestRoute("54034823d30962f5/2021-05-24--06-37-34", TOYOTA.TOYOTA_CAMRY),  # hybrid
   CarTestRoute("3456ad0cd7281b24/2020-12-13--17-45-56", TOYOTA.TOYOTA_CAMRY_TSS2),
   CarTestRoute("ffccc77938ddbc44/2021-01-04--16-55-41", TOYOTA.TOYOTA_CAMRY_TSS2),  # hybrid
+  CarTestRoute("5211e3c6c7b088d3/00000051--894db634a8", TOYOTA.TOYOTA_CAMRY_TSS3, segment=2),
   # CarTestRoute("4e45c89c38e8ec4d/2021-05-02--02-49-28", TOYOTA.TOYOTA_COROLLA),
   CarTestRoute("5f5afb36036506e4/2019-05-14--02-09-54", TOYOTA.TOYOTA_COROLLA_TSS2),
   CarTestRoute("5ceff72287a5c86c/2019-10-19--10-59-02", TOYOTA.TOYOTA_COROLLA_TSS2),  # hybrid

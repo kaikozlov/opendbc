@@ -8,7 +8,7 @@ from opendbc.car.common.pid import PIDController
 from opendbc.car.secoc import add_mac, build_sync_mac
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.toyota import toyotacan
-from opendbc.car.toyota.tss3 import ToyotaTss3RequestTransport
+from opendbc.car.toyota.tss3 import TSS3_SOURCE_BUS, ToyotaTss3RequestTransport
 from opendbc.car.toyota.values import CAR, CarControllerParams, ToyotaFlags
 from opendbc.car.vehicle_model import VehicleModel
 from opendbc.can import CANPacker
@@ -96,10 +96,6 @@ class CarController(CarControllerBase):
 
   def update(self, CC, CS, now_nanos):
     if self.CP.flags & ToyotaFlags.TSS3:
-      if self.CP.dashcamOnly:
-        self.frame += 1
-        return CC.actuators.as_builder(), []
-
       output = CC.actuators.as_builder()
       can_sends = []
 
@@ -107,9 +103,7 @@ class CarController(CarControllerBase):
       longitudinal_command_active = self.CP.openpilotLongitudinalControl and CC.longActive
       hud_control = CC.hudControl
 
-      # Like every angle controller, advance the rate-limited target only when
-      # creating a steering application. The asynchronous signer is merely the
-      # transport for that application and owns no actuator state.
+      # only advance the rate-limited angle when a new application will be signed
       desired_angle = CC.actuators.steeringAngleDeg + CS.out.steeringAngleOffsetDeg
       measured_angle = CS.out.steeringAngleDeg + CS.out.steeringAngleOffsetDeg
       create_lateral_application = not lateral_command_active or \
@@ -126,13 +120,10 @@ class CarController(CarControllerBase):
         )
       output.steeringAngleDeg = self.last_angle
 
-      # Cancel remains the ordinary Brake Module command observed on each
-      # topology; it is independent of the protected 0x08A actuation plane.
       if CC.cruiseControl.cancel:
-        can_sends.append(toyotacan.create_tss3_brake_cancel_command(self.packer, CS.tss3_brake_module, 2))
+        can_sends.append(toyotacan.create_tss3_brake_cancel_command(self.packer, CS.tss3_brake_module, TSS3_SOURCE_BUS))
 
-      # Match Toyota's ordinary HUD ownership pattern: suppress the source
-      # frame in Panda and regenerate it at 5 Hz, with immediate alert edges.
+      # LKAS HUD at 5Hz, or immediately on alert change
       steer_alert = hud_control.visualAlert in (VisualAlert.steerRequired, VisualAlert.ldw)
       send_ui = steer_alert != self.alert_active
       self.alert_active = steer_alert
@@ -142,22 +133,18 @@ class CarController(CarControllerBase):
           CC.latActive, steer_alert,
         ))
 
-      # The signer transport creates one application per 100 Hz controller
-      # generation. Stock-long mode reuses the latest 40 Hz FRC application
-      # until a newer source frame arrives; native 0x08A is not the host clock.
       output.accel = float(np.clip(CC.actuators.accel, self.params.ACCEL_MIN, self.params.ACCEL_MAX)) \
         if longitudinal_command_active else 0.0
 
-      if self.tss3_request_transport is not None:
-        can_sends.extend(self.tss3_request_transport.update_control(
-          enabled=CC.enabled,
-          lat_active=CC.latActive,
-          target_angle_deg=output.steeringAngleDeg,
-          long_active=longitudinal_command_active,
-          accel=output.accel,
-          set_speed_kph=CS.out.vCruise,
-          now_nanos=now_nanos,
-        ))
+      can_sends.extend(self.tss3_request_transport.update_control(
+        enabled=CC.enabled,
+        lat_active=CC.latActive,
+        target_angle_deg=output.steeringAngleDeg,
+        long_active=longitudinal_command_active,
+        accel=output.accel,
+        set_speed_kph=CS.out.vCruise,
+        now_nanos=now_nanos,
+      ))
 
       self.frame += 1
       return output, can_sends

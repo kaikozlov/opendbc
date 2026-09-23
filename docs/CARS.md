@@ -328,7 +328,7 @@
 |Toyota|Camry 2025|All|[Not compatible](#can-bus-security)|
 |Toyota|Camry Hybrid 2018-20|All|[Upstream](#upstream)|
 |Toyota|Camry Hybrid 2021-24|All|[Upstream](#upstream)|
-|Toyota|Camry Hybrid 2026|Repinned harness|Custom|
+|Toyota|Camry Hybrid 2026|All|Custom|
 |Toyota|Corolla 2017-19|All|[Upstream](#upstream)|
 |Toyota|Corolla 2020-22|All|[Upstream](#upstream)|
 |Toyota|Corolla Cross 2022-25|All|[Not compatible](#can-bus-security)|

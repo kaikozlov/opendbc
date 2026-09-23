@@ -44,12 +44,12 @@ class TestToyotaInterfaces(unittest.TestCase):
         present_ecus = {ecu[0] for ecu in ecus}
         missing_ecus = common_ecus - present_ecus
         if car_model == CAR.TOYOTA_CAMRY_TSS3:
-          # EPS F181 is the exact discriminator; no radar identity was captured.
+          # TODO: capture fwdRadar FW
           missing_ecus -= {Ecu.fwdRadar}
         assert len(missing_ecus) == 0
 
         # Some exceptions for other common ECUs
-        if car_model not in (CAR.TOYOTA_ALPHARD_TSS2):
+        if car_model not in (CAR.TOYOTA_ALPHARD_TSS2,):
           assert Ecu.abs in present_ecus
 
         if car_model not in (CAR.TOYOTA_MIRAI, CAR.TOYOTA_CAMRY_TSS3):

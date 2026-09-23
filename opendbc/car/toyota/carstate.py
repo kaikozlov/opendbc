@@ -31,10 +31,7 @@ class CarState(CarStateBase):
     self.cluster_speed_hyst_gap = CV.KPH_TO_MS / 2.
     self.cluster_min_speed = CV.KPH_TO_MS / 2.
 
-    if CP.flags & ToyotaFlags.TSS3:
-      self.tss3_gear_packet = "GEAR_PACKET_HYBRID"
-      self.shifter_values = can_define.dv[self.tss3_gear_packet]["GEAR"]
-    elif CP.flags & ToyotaFlags.SECOC.value:
+    if CP.flags & (ToyotaFlags.SECOC | ToyotaFlags.TSS3):
       self.shifter_values = can_define.dv["GEAR_PACKET_HYBRID"]["GEAR"]
     else:
       self.shifter_values = can_define.dv["GEAR_PACKET"]["GEAR"]
@@ -59,8 +56,9 @@ class CarState(CarStateBase):
     self.tss3_brake_module = None
     self.tss3_lkas_hud = {}
 
-  def _update_tss3_common(self, ret: structs.CarState, cp: CANParser, source_cp: CANParser,
-                          cluster_speed_from_ui: bool) -> None:
+  def _update_tss3(self, cp: CANParser, cp_cam: CANParser) -> structs.CarState:
+    ret = structs.CarState()
+
     self.tss3_brake_module = copy.copy(cp.vl["BRAKE_MODULE"])
     ret.brakePressed = self.tss3_brake_module["BRAKE_PRESSED"] != 0
     ret.gasPressed = cp.vl["GAS_PEDAL"]["GAS_PEDAL_USER"] > 0
@@ -70,7 +68,7 @@ class CarState(CarStateBase):
       cp.vl["WHEEL_SPEEDS"]["WHEEL_SPEED_RL"],
       cp.vl["WHEEL_SPEEDS"]["WHEEL_SPEED_RR"],
     )
-    ret.vEgoCluster = cp.vl["BODY_CONTROL_STATE_2"]["UI_SPEED"] * CV.KPH_TO_MS if cluster_speed_from_ui else ret.vEgo
+    ret.vEgoCluster = cp.vl["BODY_CONTROL_STATE_2"]["UI_SPEED"] * CV.KPH_TO_MS
     ret.standstill = abs(ret.vEgoRaw) < 1e-3
     ret.vehicleSensorsInvalid = any(cp.vl["WHEEL_SPEEDS"][f"WHEEL_SPEED_{wheel}_FAULT"]
                                     for wheel in ("FL", "FR", "RL", "RR"))
@@ -78,7 +76,7 @@ class CarState(CarStateBase):
     ret.steeringAngleDeg = cp.vl["STEER_ANGLE_SENSOR"]["STEER_ANGLE"] + cp.vl["STEER_ANGLE_SENSOR"]["STEER_FRACTION"]
     ret.steeringRateDeg = cp.vl["STEER_ANGLE_SENSOR"]["STEER_RATE"]
     ret.carNotReady = cp.vl["TSS3_READY_STATUS"]["READY_STATUS"] == 0
-    ret.gearShifter = self.parse_gear_shifter(self.shifter_values.get(int(cp.vl[self.tss3_gear_packet]["GEAR"]), None))
+    ret.gearShifter = self.parse_gear_shifter(self.shifter_values.get(int(cp.vl["GEAR_PACKET_HYBRID"]["GEAR"]), None))
 
     ret.leftBlinker = cp.vl["BLINKERS_STATE"]["TURN_SIGNALS"] == 1
     ret.rightBlinker = cp.vl["BLINKERS_STATE"]["TURN_SIGNALS"] == 2
@@ -94,22 +92,15 @@ class CarState(CarStateBase):
     ret.vehicleSensorsInvalid = ret.vehicleSensorsInvalid or driver_torque_invalid
     ret.steeringTorque = (cp.vl["TSS3_EPS_TELEMETRY"]["STEERING_WHEEL_TORQUE_COARSE"] +
                           cp.vl["TSS3_EPS_TELEMETRY"]["STEERING_WHEEL_TORQUE_FINE"]) if not driver_torque_invalid else 0.0
-    ret.steeringTorqueEps = 0.0
     ret.steeringPressed = abs(ret.steeringTorque) >= TSS3_STEER_DRIVER_TORQUE_THRESHOLD
     ret.steerFaultTemporary = bool(cp.vl["TSS3_EPS_TELEMETRY"]["EPS_FAULT_INHIBIT"])
-    ret.steerFaultPermanent = False
 
     if self.CP.flags & ToyotaFlags.HAS_BSM:
-      ret.leftBlindspot = bool(source_cp.vl["BSM"]["L_ADJACENT"] or source_cp.vl["BSM"]["L_APPROACHING"])
-      ret.rightBlindspot = bool(source_cp.vl["BSM"]["R_ADJACENT"] or source_cp.vl["BSM"]["R_APPROACHING"])
+      ret.leftBlindspot = bool(cp_cam.vl["BSM"]["L_ADJACENT"] or cp_cam.vl["BSM"]["L_APPROACHING"])
+      ret.rightBlindspot = bool(cp_cam.vl["BSM"]["R_ADJACENT"] or cp_cam.vl["BSM"]["R_APPROACHING"])
 
-  def _update_tss3(self, cp: CANParser, cp_src: CANParser) -> structs.CarState:
-    source_cp = cp_src
-
-    ret = structs.CarState()
-    if source_cp.vl_all["TSS3_LKAS_HUD"]["BYTE_0"]:
-      self.tss3_lkas_hud = copy.copy(source_cp.vl["TSS3_LKAS_HUD"])
-    self._update_tss3_common(ret, cp, source_cp, cluster_speed_from_ui=True)
+    if cp_cam.vl_all["TSS3_LKAS_HUD"]["BYTE_0"]:
+      self.tss3_lkas_hud = copy.copy(cp_cam.vl["TSS3_LKAS_HUD"])
 
     switch = cp.vl["TSS3_CRUISE_SWITCH"]
     previous_button = self.tss3_cruise_button
@@ -130,9 +121,7 @@ class CarState(CarStateBase):
       4: ButtonType.mainCruise,
     })
 
-    # The canonical HUD carrier distinguishes LTA off (0x10) from enabled
-    # states (0x12 available, 0x14 active). Ignore active/available transitions;
-    # only the persistent feature toggle is a button event.
+    # LTA toggle: HUD mode 0x10 is off, 0x12/0x14 are available/active
     hud_mode = int(self.tss3_lkas_hud.get("BYTE_0", 0))
     lta_switch_state = hud_mode in (0x12, 0x14) if hud_mode in (0x10, 0x12, 0x14) else None
     if (self.tss3_lta_switch_state is not None and lta_switch_state is not None and
@@ -143,20 +132,12 @@ class CarState(CarStateBase):
       self.tss3_lta_switch_state = lta_switch_state
     ret.buttonEvents = button_events
 
-    request = source_cp.vl["TSS3_CONTROL_REQUEST"]
+    request = cp_cam.vl["TSS3_CONTROL_REQUEST"]
     ret.cruiseState.enabled = bool(request["CRUISE_OPERATING_LATCH"])
-    # Source-real B4[5] is an exact delayed-hold discriminator in retained Camry
-    # routes. The parallel request-B state is ID25/allocation2-or-3.
     ret.cruiseState.standstill = ret.cruiseState.enabled and bool(request["DELAYED_HOLD_STATE"])
-    ret.cruiseState.available = bool(source_cp.vl["TSS3_CRUISE_DISPLAY"]["CRUISE_MAIN_STATE"])
-    # Conventional cruise is not an incompatible control mode on this platform:
-    # lateral remains available. Leave nonAdaptive false so the generic event
-    # contract reflects control compatibility rather than raw cluster
-    # presentation. The native latch and set speed remain the pcmCruise source
-    # even when openpilot owns longitudinal actuation.
-    set_speed_kph = float(request["SET_SPEED"])
-    ret.cruiseState.speed = set_speed_kph * CV.KPH_TO_MS if set_speed_kph > 0 else 0.0
-    cluster_set_speed = float(source_cp.vl["TSS3_CRUISE_DISPLAY"]["UI_SET_SPEED"])
+    ret.cruiseState.available = bool(cp_cam.vl["TSS3_CRUISE_DISPLAY"]["CRUISE_MAIN_STATE"])
+    ret.cruiseState.speed = request["SET_SPEED"] * CV.KPH_TO_MS
+    cluster_set_speed = cp_cam.vl["TSS3_CRUISE_DISPLAY"]["UI_SET_SPEED"]
     if ret.cruiseState.speed != 0 and cluster_set_speed > 0:
       is_metric = cp.vl["BODY_CONTROL_STATE_2"]["UNITS"] in (1, 2)
       ret.cruiseState.speedCluster = cluster_set_speed * (CV.KPH_TO_MS if is_metric else CV.MPH_TO_MS)
@@ -331,7 +312,7 @@ class CarState(CarStateBase):
         ("BODY_CONTROL_STATE", 3),
         ("LIGHT_STALK", 1),
       ]
-      # Canonical TSS3 repin: chassis/state on bus0, source/FRC on bus2.
+
       pt_messages = common_messages + [
         ("TSS3_CRUISE_SWITCH", 30),
         ("BODY_CONTROL_STATE_2", 3),

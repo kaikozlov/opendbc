@@ -19,9 +19,6 @@ class CarInterface(CarInterfaceBase):
   DRIVABLE_GEARS = (structs.CarState.GearShifter.sport,)
 
   def update(self, can_packets):
-    # Match CANParser's single-publication and batch input forms.
-    if can_packets and not isinstance(can_packets[0], list | tuple):
-      can_packets = [can_packets]
     ret = super().update(can_packets)
     if self.CC.tss3_request_transport is not None:
       self.CC.observe_tss3_request_plane(can_packets, ret.canValid)
@@ -36,17 +33,10 @@ class CarInterface(CarInterfaceBase):
     ret.brand = "toyota"
 
     if ret.flags & ToyotaFlags.TSS3:
-      # TSS3 uses the canonical repinned Toyota-B topology.
       ret.steerControlType = SteerControlType.angle
-      ret.dashcamOnly = False
-      ret.radarUnavailable = False
       ret.alphaLongitudinalAvailable = True
       ret.openpilotLongitudinalControl = alpha_long
       ret.autoResumeSng = ret.openpilotLongitudinalControl
-      ret.pcmCruise = True
-      ret.secOcRequired = False  # no host key; external authentication is still required
-      ret.minEnableSpeed = -1.
-      ret.minSteerSpeed = 0.
       ret.steerAtStandstill = True
       ret.centerToFront = ret.wheelbase * 0.44
       ret.steerActuatorDelay = 0.18
