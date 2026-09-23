@@ -377,10 +377,15 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
                                        (accel_a == accel_b);
         application_shape &= !toyota_stock_longitudinal && host_longitudinal;
         if (host_longitudinal) {
-          // F33 0x08A is a direct desired-acceleration interface. Apply the
-          // same standard Toyota/openpilot envelope as other direct-accel
-          // ports instead of the superseded camera-0x160 experiment's limits.
-          actuation_valid &= !longitudinal_accel_checks(accel_a, TOYOTA_LONG_LIMITS);
+          // The VMC arbitration layer owns driver override and publishes the
+          // selected longitudinal result as ID 63. Retain the normal controls
+          // gate and absolute request envelope, but do not apply Panda's
+          // conventional gas-pedal veto to the pre-arbitration request.
+          const bool accel_valid = controls_allowed &&
+                                   !safety_max_limit_check(accel_a, TOYOTA_LONG_LIMITS.max_accel,
+                                                           TOYOTA_LONG_LIMITS.min_accel);
+          const bool accel_inactive = accel_a == TOYOTA_LONG_LIMITS.inactive_accel;
+          actuation_valid &= accel_valid || accel_inactive;
         }
       }
 

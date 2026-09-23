@@ -212,6 +212,17 @@ class TestToyotaTss3CamrySafety(common.CarSafetyTest, common.AngleSteeringSafety
     self.assertFalse(self._tx(classic))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
 
+  def test_vmc_owns_longitudinal_driver_override(self):
+    self.safety.set_controls_allowed(True)
+    self._rx(self._user_gas_msg(True))
+
+    # VMC result ID 63 arbitrates the driver pedal against this request. Panda
+    # retains the absolute acceleration envelope without vetoing on gas state.
+    self.assertTrue(self._tx(self._application_msg(accel=self.MAX_ACCEL)))
+    self.assertTrue(self._tx(self._application_msg(accel=self.MIN_ACCEL)))
+    self.assertFalse(self._tx(self._application_msg(accel=self.MAX_ACCEL + 0.001)))
+    self.assertFalse(self._tx(self._application_msg(accel=self.MIN_ACCEL - 0.001)))
+
   def test_request_plane_watchdog_and_release(self):
     self.assertTrue(self._tx(self._application_raw_msg()))
     self.safety.set_timer(90_000)
