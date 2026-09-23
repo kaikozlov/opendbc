@@ -33,6 +33,7 @@ class CarInterface(CarInterfaceBase):
     ret.brand = "toyota"
 
     if ret.flags & ToyotaFlags.TSS3:
+      ret.dashcamOnly = is_release  # panda only supports TSS3 in development builds
       ret.steerControlType = SteerControlType.angle
       ret.alphaLongitudinalAvailable = True
       ret.openpilotLongitudinalControl = alpha_long
