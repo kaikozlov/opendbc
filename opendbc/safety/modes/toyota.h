@@ -332,7 +332,11 @@ static bool toyota_tss3_tx_hook(const CANPacket_t *msg, const LongitudinalLimits
         int accel_upper = to_signed((msg->data[8] << 8U) | msg->data[9], 16);
         int accel_lower = to_signed((msg->data[11] << 8U) | msg->data[12], 16);
         valid = valid && (msg->data[6] == 0x2DU) && (msg->data[7] == 0x47U) && (accel_upper == accel_lower);
-        violation = violation || longitudinal_accel_checks(accel_upper, long_limits);
+
+        // No gas pressed check: blocking 0x08A faults the car, and the motion controller in the brake ECU
+        // already arbitrates driver gas against this request
+        bool accel_valid = controls_allowed && !safety_max_limit_check(accel_upper, long_limits.max_accel, long_limits.min_accel);
+        violation = violation || !(accel_valid || (accel_upper == long_limits.inactive_accel));
       }
     }
 

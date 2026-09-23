@@ -208,12 +208,14 @@ class TestToyotaTss3CamrySafety(common.CarSafetyTest, common.AngleSteeringSafety
     self.assertFalse(self._tx(classic))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
 
-  def test_gas_pressed_blocks_accel(self):
+  def test_gas_pressed_does_not_block_accel(self):
+    # 0x08A must never stop; the brake ECU arbitrates driver gas
     self.safety.set_controls_allowed(True)
     self.safety.set_gas_pressed_prev(True)
-    self.assertFalse(self._tx(self._application_msg(accel=self.MAX_ACCEL)))
-    self.assertFalse(self._tx(self._application_msg(accel=self.MIN_ACCEL)))
-    self.assertTrue(self._tx(self._application_msg(accel=self.INACTIVE_ACCEL)))
+    self.assertTrue(self._tx(self._application_msg(accel=self.MAX_ACCEL)))
+    self.assertTrue(self._tx(self._application_msg(accel=self.MIN_ACCEL)))
+    self.assertFalse(self._tx(self._application_msg(accel=self.MAX_ACCEL + 0.001)))
+    self.assertFalse(self._tx(self._application_msg(accel=self.MIN_ACCEL - 0.001)))
 
   def test_request_plane_watchdog_and_release(self):
     self.assertTrue(self._tx(self._application_raw_msg()))
