@@ -249,6 +249,16 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertFalse(state.steerFaultTemporary)
     self.assertFalse(state.steerFaultPermanent)
 
+  def test_request_transport_state_is_not_reported_as_a_vehicle_fault(self):
+    ci = CarInterface(self.CP)
+    ci.CC.tss3_request_transport.control_enabled = True
+    ci.CC.tss3_request_transport.authority_failed = True
+    state = update_state(ci)
+    self.assertTrue(ci.CC.tss3_request_transport.authority_unavailable())
+    self.assertFalse(state.accFaulted)
+    self.assertFalse(state.steerFaultTemporary)
+    self.assertFalse(state.steerFaultPermanent)
+
   def test_delayed_hold_uses_request_id_and_allocation_not_raw_acc_state(self):
     ci = CarInterface(self.CP)
     normal = bytearray(CAMRY_COMMON[0x08A])

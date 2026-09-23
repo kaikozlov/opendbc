@@ -229,23 +229,31 @@ class TestToyotaTss3RequestTransport(unittest.TestCase):
     self.assertEqual(host.dat[8:10], (-250).to_bytes(2, "big", signed=True))
     self.assertNotIn(seq0, self.transport.requests_by_sequence)
 
-  def test_control_edge_discards_stale_signer_response(self):
-    seq0 = self.start_request(1_000_000_000)
+  def test_axis_activity_edge_preserves_combined_request_pipeline(self):
+    sends = self.update_control(1_000_000_000, accel=-0.5)
+    seq0 = request_sequence_from_sends(sends)
 
-    # A pedal edge creates a new control epoch and immediately queues the new
-    # 100 Hz application; the old response can no longer publish.
+    # 0x08A carries both axes. A gas-override longActive edge must enqueue the
+    # new zero-accel state without invalidating lateral or interrupting the
+    # already ordered signing pipeline.
     sends = self.update_control(1_010_000_000, long_active=False)
     seq1 = request_sequence_from_sends(sends)
     self.assertNotEqual(seq0, seq1)
-    self.assertEqual(self.transport.pending_requests[0].application[8:10], bytes(2))
+    self.assertEqual(len(self.transport.pending_requests), 2)
+    self.assertEqual(self.transport.pending_requests[0].application[8:10], (-500).to_bytes(2, "big", signed=True))
+    self.assertEqual(self.transport.pending_requests[1].application[8:10], bytes(2))
 
     self.transport.observe(response(1_015_000_000, seq0), True)
-    self.assertNotIn(seq0, self.transport.requests_by_sequence)
-
     self.transport.observe(response(1_019_000_000, seq1), True)
     sends = self.update_control(1_020_000_000, long_active=False)
-    host = next(msg for msg in sends if msg.address == NATIVE_08A_ADDR)
-    self.assertEqual(host.dat[8:10], bytes(2))
+    host0 = next(msg for msg in sends if msg.address == NATIVE_08A_ADDR)
+    self.assertEqual(host0.dat[8:10], (-500).to_bytes(2, "big", signed=True))
+    self.transport.observe(packets(1_020_000_001, CanData(host0.address, host0.dat,
+                                                         DOWNSTREAM_BUS + PANDA_RETURNED_OFFSET)), True)
+
+    sends = self.update_control(1_030_000_000, long_active=False)
+    host1 = next(msg for msg in sends if msg.address == NATIVE_08A_ADDR)
+    self.assertEqual(host1.dat[8:10], bytes(2))
 
   def test_unmatched_signer_response_is_ignored(self):
     seq = self.start_request(1_000_000_000)

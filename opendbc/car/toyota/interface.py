@@ -25,9 +25,6 @@ class CarInterface(CarInterfaceBase):
     ret = super().update(can_packets)
     if self.CC.tss3_request_transport is not None:
       self.CC.observe_tss3_request_plane(can_packets, ret.canValid)
-      ret.steerFaultTemporary = ret.steerFaultTemporary or self.CC.tss3_request_transport.authority_unavailable()
-      if self.CP.openpilotLongitudinalControl:
-        ret.accFaulted = ret.accFaulted or self.CC.tss3_request_transport.authority_unavailable()
     return ret
 
   @staticmethod

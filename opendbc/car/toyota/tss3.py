@@ -353,9 +353,7 @@ class ToyotaTss3RequestTransport:
     enabled = bool(enabled)
     lat_active = enabled and bool(lat_active)
     long_active = enabled and bool(long_active)
-    control_state = (enabled, lat_active, long_active)
-    previous_state = (self.control_enabled, self.control_lat_active, self.control_long_active)
-    if control_state != previous_state:
+    if enabled != self.control_enabled:
       self.control_epoch += 1
       self._invalidate_actuation()
       if enabled and not self.control_enabled:
