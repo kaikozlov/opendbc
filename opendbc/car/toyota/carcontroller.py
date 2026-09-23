@@ -106,6 +106,7 @@ class CarController(CarControllerBase):
           enabled=CC.enabled,
           lat_active=CC.latActive,
           long_active=longitudinal_command_active,
+          now_nanos=now_nanos,
         )
       if create_lateral_application:
         self.last_angle = apply_steer_angle_limits_vm(

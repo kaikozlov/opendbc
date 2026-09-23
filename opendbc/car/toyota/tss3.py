@@ -268,13 +268,13 @@ class ToyotaTss3RequestTransport:
     if reference_ns and now_ns - reference_ns > ORACLE_PUBLICATION_DEADLINE_NS:
       self._restart_after_failure("oracle_dead")
 
-  def _take_ready_host_frame(self, now_ns: int) -> bytes | None:
+  def _head_ready_for_publication(self, now_ns: int) -> bool:
     self._prune_head()
     if not self.pending_requests:
-      return None
+      return False
     request = self.pending_requests[0]
     if request.trailer is None:
-      return None
+      return False
 
     request_sequence = request.application[26] & 0x3F
     if self.last_host_request_sequence is not None:
@@ -283,8 +283,15 @@ class ToyotaTss3RequestTransport:
       # the controller's 10 ms-per-generation timing instead of compressing a
       # multi-generation steering step into the next publication slot.
       if generation_delta > 1 and now_ns - self.last_host_send_ns < generation_delta * ORACLE_GENERATION_INTERVAL_NS:
-        return None
+        return False
+    return True
 
+  def _take_ready_host_frame(self, now_ns: int) -> bytes | None:
+    if not self._head_ready_for_publication(now_ns):
+      return None
+
+    request = self.pending_requests[0]
+    request_sequence = request.application[26] & 0x3F
     self.pending_requests.popleft()
     self._remove_request(request)
     if request.control_epoch != self.control_epoch:
@@ -327,19 +334,24 @@ class ToyotaTss3RequestTransport:
     self.requests_by_sequence[seq] = request
     self.pending_sends.extend(build_oracle_transport(seq, application))
 
-  def control_generation_due(self, *, enabled: bool, lat_active: bool, long_active: bool) -> bool:
+  def control_generation_due(self, *, enabled: bool, lat_active: bool, long_active: bool,
+                             now_nanos: int) -> bool:
     """Whether this 100 Hz controller tick can create a new application."""
     enabled = bool(enabled)
-    control_state = (enabled, bool(enabled and lat_active), bool(enabled and long_active))
-    previous_state = (self.control_enabled, self.control_lat_active, self.control_long_active)
     if not enabled or not self.can_valid:
       return False
-    if control_state != previous_state:
+    if not self.control_enabled:
+      # The enable edge invalidates any prior epoch before enqueueing.
       return True
 
-    active_pending = sum(not request.failed and not request.superseded for request in self.pending_requests)
-    front_ready = bool(self.pending_requests and self.pending_requests[0].trailer is not None)
-    return active_pending - int(front_ready) < ORACLE_MAX_PENDING_GENERATIONS
+    self._prune_head()
+    # CarController must advance its actuator limiter only when update_control
+    # can enqueue that exact generation. A ready trailer is not necessarily a
+    # free slot: skipped-generation timing may still hold it, and an unconfirmed
+    # handoff prevents publication entirely.
+    front_will_publish = not self.arm_pending and self._head_ready_for_publication(now_nanos)
+    pending_after_publication = len(self.pending_requests) - int(front_will_publish)
+    return pending_after_publication < ORACLE_MAX_PENDING_GENERATIONS
 
   def update_control(self, *, enabled: bool, lat_active: bool, target_angle_deg: float,
                      long_active: bool, accel: float, set_speed_kph: float,

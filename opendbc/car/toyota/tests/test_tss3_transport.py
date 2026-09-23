@@ -102,7 +102,9 @@ class TestToyotaTss3RequestTransport(unittest.TestCase):
     self.assertEqual(application.hex(), "0000000880002d47fe0c46fe0c7fff007fffff85c00b100064000c00")
 
   def test_controller_clock_generates_without_a_native_08a_tick(self):
-    self.assertTrue(self.transport.control_generation_due(enabled=True, lat_active=True, long_active=True))
+    self.assertTrue(self.transport.control_generation_due(
+      enabled=True, lat_active=True, long_active=True, now_nanos=1_000_000_000,
+    ))
     sends = self.update_control(1_000_000_000)
     self.assertEqual(len(oracle_request_frames(sends)), 4)
     first_sequence = request_sequence_from_sends(sends)
@@ -112,7 +114,9 @@ class TestToyotaTss3RequestTransport(unittest.TestCase):
     self.transport.observe(source_tick(1_005_000_000), True)
     self.assertEqual(len(self.transport.pending_requests), 1)
 
-    self.assertTrue(self.transport.control_generation_due(enabled=True, lat_active=True, long_active=True))
+    self.assertTrue(self.transport.control_generation_due(
+      enabled=True, lat_active=True, long_active=True, now_nanos=1_010_000_000,
+    ))
     sends = self.update_control(1_010_000_000, angle=1.0, accel=-0.25)
     self.assertEqual(len(oracle_request_frames(sends)), 4)
     self.assertNotEqual(request_sequence_from_sends(sends), first_sequence)
@@ -195,6 +199,45 @@ class TestToyotaTss3RequestTransport(unittest.TestCase):
     sends = self.update_control(first_host_send_ns + (2 * ORACLE_GENERATION_INTERVAL_NS), angle=2.0)
     host = next(msg for msg in sends if msg.address == NATIVE_08A_ADDR)
     self.assertEqual(host.dat[26], 2)
+
+  def test_generation_waits_for_real_pipeline_capacity(self):
+    # Fill the request pipeline, then make its head signed but not yet eligible
+    # for publication. A skipped request sequence needs 20 ms since the last
+    # host frame; merely having its trailer must not advance CarController's
+    # angle limiter when the request cannot be removed and replaced this tick.
+    for i in range(ORACLE_MAX_PENDING_GENERATIONS):
+      self.update_control(1_000_000_000 + i * ORACLE_GENERATION_INTERVAL_NS, angle=float(i))
+
+    # A state edge or an invalid request behind the head does not itself make
+    # room in the bounded deque. Both used to make the admission predicate say
+    # yes even though _queue_signing_latest would refuse the new generation.
+    self.transport.pending_requests[-1].failed = True
+    self.assertFalse(self.transport.control_generation_due(
+      enabled=True, lat_active=True, long_active=False, now_nanos=1_080_000_000,
+    ))
+    self.transport.pending_requests[-1].failed = False
+
+    head = self.transport.pending_requests[0]
+    head.trailer = KNOWN_TRAILER
+    self.transport.last_host_request_sequence = 62
+    self.transport.last_host_send_ns = 1_100_000_000
+
+    self.assertFalse(self.transport.control_generation_due(
+      enabled=True, lat_active=True, long_active=True,
+      now_nanos=1_100_000_000 + 2 * ORACLE_GENERATION_INTERVAL_NS - 1,
+    ))
+    self.assertTrue(self.transport.control_generation_due(
+      enabled=True, lat_active=True, long_active=True,
+      now_nanos=1_100_000_000 + 2 * ORACLE_GENERATION_INTERVAL_NS,
+    ))
+
+    # Even an otherwise publishable head cannot free capacity while the first
+    # handoff is waiting for Panda's transmit confirmation.
+    self.transport.arm_pending = True
+    self.assertFalse(self.transport.control_generation_due(
+      enabled=True, lat_active=True, long_active=True,
+      now_nanos=1_100_000_000 + 2 * ORACLE_GENERATION_INTERVAL_NS,
+    ))
 
   def test_ready_responses_are_preserved_in_order(self):
     seq0 = self.start_request(1_000_000_000)
@@ -293,7 +336,9 @@ class TestToyotaTss3RequestTransport(unittest.TestCase):
       self.assertEqual(len(oracle_request_frames(sends)), 4)
 
     self.assertEqual(len(self.transport.pending_requests), ORACLE_MAX_PENDING_GENERATIONS)
-    self.assertFalse(self.transport.control_generation_due(enabled=True, lat_active=True, long_active=True))
+    self.assertFalse(self.transport.control_generation_due(
+      enabled=True, lat_active=True, long_active=True, now_nanos=1_080_000_000,
+    ))
 
     sends = self.update_control(1_080_000_000, angle=20.0)
     self.assertFalse(oracle_request_frames(sends))
