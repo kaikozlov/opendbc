@@ -4,7 +4,7 @@ from opendbc.can import CANPacker
 from opendbc.car.can_definitions import CanData
 from opendbc.car.toyota.tss3 import (
   ADMIN_ADDR, ADMIN_BUS, DOWNSTREAM_BUS, NATIVE_08A_ADDR, ORACLE_BUS,
-  ORACLE_MAX_PENDING_GENERATIONS, ORACLE_REQUEST_ADDR, ORACLE_RESPONSE_ADDR,
+  ORACLE_MAX_PENDING_GENERATIONS, ORACLE_REQUEST_ADDR, ORACLE_RESPONSE_ADDR, ORACLE_SEQUENCE_MAX,
   PANDA_REJECTED_OFFSET, PANDA_RETURNED_OFFSET, SOURCE_BUS,
   ToyotaTss3RequestTransport, build_host_application, build_oracle_transport,
 )
@@ -27,10 +27,15 @@ def response(nanos: int, sequence: int, status: int = 0, trailer: bytes = KNOWN_
   return packets(nanos, CanData(ORACLE_RESPONSE_ADDR, data, ORACLE_BUS))
 
 
+def oracle_request_frames(sends: list[CanData]) -> list[CanData]:
+  return [msg for msg in sends if msg.address == ORACLE_REQUEST_ADDR and 8 <= (msg.dat[0] >> 4) <= 0xB]
+
+
 def request_sequence_from_sends(sends: list[CanData]) -> int:
-  first = next(msg for msg in sends
-               if msg.address == ORACLE_REQUEST_ADDR and msg.dat[0] == 0xC8 and (msg.dat[1] >> 5) == 0)
-  return first.dat[1] & 0x1F
+  frames = oracle_request_frames(sends)
+  low = next(msg.dat[0] & 0x0F for msg in frames if msg.dat[0] >> 4 == 8)
+  high = next(msg.dat[0] & 0x0F for msg in frames if msg.dat[0] >> 4 == 9)
+  return (high << 4) | low
 
 
 class TestToyotaTss3RequestTransport(unittest.TestCase):
@@ -54,7 +59,7 @@ class TestToyotaTss3RequestTransport(unittest.TestCase):
   def start_request(self, now_nanos: int = 1_000_000_000):
     sends = self.update_control(now_nanos)
     self.assertFalse(any(msg.address == ADMIN_ADDR and msg.dat[0] == 7 for msg in sends))
-    self.assertEqual(sum(msg.address == ORACLE_REQUEST_ADDR and msg.dat[0] == 0xC8 for msg in sends), 6)
+    self.assertEqual(len(oracle_request_frames(sends)), 4)
     self.assertEqual(len(self.transport.pending_requests), 1)
     return request_sequence_from_sends(sends)
 
@@ -69,13 +74,18 @@ class TestToyotaTss3RequestTransport(unittest.TestCase):
     self.assertTrue(self.transport.active)
     return host
 
-  def test_transport_is_six_application_only_fragments(self):
-    frames = build_oracle_transport(1, KNOWN_APPLICATION)
-    self.assertEqual(len(frames), 6)
+  def test_transport_is_four_application_only_fragments(self):
+    frames = build_oracle_transport(0xA7, KNOWN_APPLICATION)
+    self.assertEqual(len(frames), 4)
     self.assertTrue(all(msg.address == ORACLE_REQUEST_ADDR and msg.src == ORACLE_BUS and len(msg.dat) == 8
                         for msg in frames))
-    self.assertEqual([msg.dat[:2] for msg in frames], [bytes((0xC8, (i << 5) | 1)) for i in range(6)])
-    self.assertEqual(b"".join(msg.dat[2:7] for msg in frames), KNOWN_APPLICATION + b"\0\0")
+    self.assertEqual([msg.dat[0] for msg in frames], [0x87, 0x9A, 0xA7, 0xBA])
+    self.assertEqual(b"".join(msg.dat[1:] for msg in frames), KNOWN_APPLICATION)
+    self.assertEqual(ORACLE_SEQUENCE_MAX, 0xFF)
+    with self.assertRaisesRegex(ValueError, "1..255"):
+      build_oracle_transport(0, KNOWN_APPLICATION)
+    with self.assertRaisesRegex(ValueError, "1..255"):
+      build_oracle_transport(0x100, KNOWN_APPLICATION)
     with self.assertRaisesRegex(ValueError, "28 bytes"):
       build_oracle_transport(1, b"short")
 
@@ -94,7 +104,7 @@ class TestToyotaTss3RequestTransport(unittest.TestCase):
   def test_controller_clock_generates_without_a_native_08a_tick(self):
     self.assertTrue(self.transport.control_generation_due(enabled=True, lat_active=True, long_active=True))
     sends = self.update_control(1_000_000_000)
-    self.assertEqual(sum(msg.dat[0] == 0xC8 for msg in sends), 6)
+    self.assertEqual(len(oracle_request_frames(sends)), 4)
     first_sequence = request_sequence_from_sends(sends)
 
     # Native source traffic is still parser/liveness input, but it neither
@@ -104,7 +114,7 @@ class TestToyotaTss3RequestTransport(unittest.TestCase):
 
     self.assertTrue(self.transport.control_generation_due(enabled=True, lat_active=True, long_active=True))
     sends = self.update_control(1_010_000_000, angle=1.0, accel=-0.25)
-    self.assertEqual(sum(msg.dat[0] == 0xC8 for msg in sends), 6)
+    self.assertEqual(len(oracle_request_frames(sends)), 4)
     self.assertNotEqual(request_sequence_from_sends(sends), first_sequence)
     self.assertEqual(len(self.transport.pending_requests), 2)
 
@@ -113,7 +123,7 @@ class TestToyotaTss3RequestTransport(unittest.TestCase):
     for i in range(4):
       now = 1_000_000_000 + i * 10_000_000
       sends = self.update_control(now, angle=float(i), accel=-0.1 * i)
-      self.assertEqual(sum(msg.dat[0] == 0xC8 for msg in sends), 6)
+      self.assertEqual(len(oracle_request_frames(sends)), 4)
       sequences.append(request_sequence_from_sends(sends))
 
     self.assertEqual(len(self.transport.pending_requests), 4)
@@ -219,7 +229,7 @@ class TestToyotaTss3RequestTransport(unittest.TestCase):
 
   def test_unmatched_signer_response_is_ignored(self):
     seq = self.start_request(1_000_000_000)
-    other = (seq % 0x1F) + 1
+    other = (seq % ORACLE_SEQUENCE_MAX) + 1
     self.transport.observe(response(1_005_000_000, other), True)
     self.assertIn(seq, self.transport.requests_by_sequence)
     self.assertIsNone(self.transport.requests_by_sequence[seq].trailer)
@@ -235,26 +245,26 @@ class TestToyotaTss3RequestTransport(unittest.TestCase):
     # than inheriting a watchdog deadline from the earlier enable edge.
     self.transport.observe([], True)
     sends = self.update_control(2_000_000_000)
-    self.assertEqual(sum(msg.dat[0] == 0xC8 for msg in sends), 6)
+    self.assertEqual(len(oracle_request_frames(sends)), 4)
     self.assertEqual(self.transport.control_started_ns, 2_000_000_000)
     self.assertFalse(self.transport.authority_unavailable())
 
   def test_pipeline_is_bounded_when_signer_stops_responding(self):
     for i in range(ORACLE_MAX_PENDING_GENERATIONS):
       sends = self.update_control(1_000_000_000 + i * 10_000_000, angle=float(i))
-      self.assertEqual(sum(msg.dat[0] == 0xC8 for msg in sends), 6)
+      self.assertEqual(len(oracle_request_frames(sends)), 4)
 
     self.assertEqual(len(self.transport.pending_requests), ORACLE_MAX_PENDING_GENERATIONS)
     self.assertFalse(self.transport.control_generation_due(enabled=True, lat_active=True, long_active=True))
 
     sends = self.update_control(1_080_000_000, angle=20.0)
-    self.assertFalse(any(msg.dat[0] == 0xC8 for msg in sends))
+    self.assertFalse(oracle_request_frames(sends))
     self.assertFalse(self.transport.authority_unavailable())
 
     sends = self.update_control(1_100_000_000, angle=20.0)
     self.assertEqual(self.transport.last_failure_reason, "oracle_dead")
     self.assertTrue(self.transport.authority_unavailable())
-    self.assertFalse(any(msg.dat[0] == 0xC8 for msg in sends))
+    self.assertFalse(oracle_request_frames(sends))
 
   def test_disable_releases_request_plane(self):
     self.finish_handoff()
@@ -293,7 +303,7 @@ class TestToyotaTss3RequestTransport(unittest.TestCase):
     sends = self.update_control(1_030_000_000)
     self.assertFalse(self.transport.authority_unavailable())
     self.assertEqual(self.transport.last_failure_reason, "")
-    self.assertEqual(sum(msg.dat[0] == 0xC8 for msg in sends), 6)
+    self.assertEqual(len(oracle_request_frames(sends)), 4)
 
 
 if __name__ == "__main__":

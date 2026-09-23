@@ -37,7 +37,7 @@ ORACLE_REQUEST_ADDR = 0x777
 ORACLE_RESPONSE_ADDR = 0x7A9
 ORACLE_BUS = TSS3_CHASSIS_BUS
 ORACLE_PRIVATE_SID = 0xC9
-ORACLE_SEQUENCE_MAX = 0x1F
+ORACLE_SEQUENCE_MAX = 0xFF
 ORACLE_MAX_PENDING_GENERATIONS = 8
 ORACLE_PUBLICATION_DEADLINE_NS = 90_000_000
 
@@ -99,10 +99,11 @@ def build_oracle_transport(seq: int, application: bytes) -> list[CanData]:
   if len(application) != 28:
     raise ValueError("oracle application must be exactly 28 bytes")
 
-  stream = application + b"\0\0"
+  low, high = seq & 0x0F, seq >> 4
+  headers = (0x80 | low, 0x90 | high, 0xA0 | low, 0xB0 | high)
   return [CanData(ORACLE_REQUEST_ADDR,
-                  bytes((0xC8, (fragment << 5) | seq)) + stream[fragment * 5:(fragment + 1) * 5] + b"\0",
-                  ORACLE_BUS) for fragment in range(6)]
+                  bytes((headers[fragment],)) + application[fragment * 7:(fragment + 1) * 7],
+                  ORACLE_BUS) for fragment in range(4)]
 
 
 @dataclass

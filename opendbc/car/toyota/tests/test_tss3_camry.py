@@ -339,7 +339,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     # the next 10 ms CarController tick; native 0x08A is not the host clock.
     output, sends = ci.apply(control(5.0), 2_010_000_000)
     self.assertFalse(any(address == 0x777 and data[1] == 0xC7 for address, data, _ in sends))
-    self.assertEqual(sum(address == 0x777 and data[0] == 0xC8 for address, data, _ in sends), 6)
+    self.assertEqual(sum(address == 0x777 and 8 <= (data[0] >> 4) <= 0xB for address, data, _ in sends), 4)
     self.assertGreater(output.steeringAngleDeg, measured)
     self.assertLessEqual(output.steeringAngleDeg, measured + max_delta + 1e-6)
 
@@ -347,7 +347,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     # another Toyota source publication.
     previous_angle = output.steeringAngleDeg
     output, sends = ci.apply(control(20.0), 2_020_000_000)
-    self.assertEqual(sum(address == 0x777 and data[0] == 0xC8 for address, data, _ in sends), 6)
+    self.assertEqual(sum(address == 0x777 and 8 <= (data[0] >> 4) <= 0xB for address, data, _ in sends), 4)
     self.assertGreater(output.steeringAngleDeg, previous_angle)
     self.assertLessEqual(output.steeringAngleDeg, previous_angle + max_delta + 1e-6)
 
