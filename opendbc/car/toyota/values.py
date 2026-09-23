@@ -69,8 +69,7 @@ class ToyotaSafetyFlags(IntFlag):
   STOCK_LONGITUDINAL = (2 << 8)
   LTA = (4 << 8)
   SECOC = (8 << 8)
-  TSS3_SIGNER = (16 << 8)
-  TSS3_08A_HOST = (64 << 8)
+  TSS3 = (16 << 8)
 
 
 class ToyotaFlags(IntFlag):

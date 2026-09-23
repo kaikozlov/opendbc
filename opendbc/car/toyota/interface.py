@@ -44,7 +44,7 @@ class CarInterface(CarInterfaceBase):
       ret.longitudinalActuatorDelay = 0.2
       ret.safetyConfigs = [get_safety_config(
         structs.CarParams.SafetyModel.toyota,
-        EPS_SCALE[candidate] | ToyotaSafetyFlags.TSS3_SIGNER.value | ToyotaSafetyFlags.TSS3_08A_HOST.value,
+        EPS_SCALE[candidate] | ToyotaSafetyFlags.TSS3.value,
       )]
       if not ret.openpilotLongitudinalControl:
         ret.safetyConfigs[0].safetyParam |= ToyotaSafetyFlags.STOCK_LONGITUDINAL.value

@@ -42,8 +42,7 @@ class TestToyotaTss3CamrySafety(common.CarSafetyTest, common.AngleSteeringSafety
     self.packer = CANPackerSafety("toyota_tss3_pt_generated")
     self.application_packer = CANPacker("toyota_tss3_pt_generated")
     self.safety = libsafety_py.libsafety
-    param = (EPS_SCALE[CAR.TOYOTA_CAMRY_TSS3] |
-             ToyotaSafetyFlags.TSS3_SIGNER | ToyotaSafetyFlags.TSS3_08A_HOST)
+    param = EPS_SCALE[CAR.TOYOTA_CAMRY_TSS3] | ToyotaSafetyFlags.TSS3
     self.assertEqual(self.safety.set_safety_hooks(CarParams.SafetyModel.toyota, param), 0)
     self.safety.init_tests()
     self.safety.set_timer(0)
@@ -103,7 +102,7 @@ class TestToyotaTss3CamrySafety(common.CarSafetyTest, common.AngleSteeringSafety
     return min(get_max_angle_vm(max(speed - 1., 1.), self.VM, self.params), 32767 / self.DEG_TO_CAN)
 
   def test_angle_cmd_when_enabled(self):
-    # Vehicle-model angle limits are speed-dependent and are checked below.
+    # covered by test_lateral_accel_limit
     pass
 
   def test_lateral_accel_limit(self):
@@ -133,8 +132,7 @@ class TestToyotaTss3CamrySafety(common.CarSafetyTest, common.AngleSteeringSafety
         self.assertFalse(self._tx(self._angle_raw_cmd_msg(sign * (max_delta_raw + 1))))
 
   def test_angle_rate_budget_tracks_publication_interval(self):
-    # Route 55: -549 -> -520 is too large for one 10 ms generation, but is
-    # valid when one signer generation is absent and 20 ms actually elapsed.
+    # too large for one frame, allowed when a signer response was lost and 20ms elapsed
     self._reset_speed_measurement(9.95)
     self.safety.set_controls_allowed(True)
     self.safety.set_desired_angle_last(-549)
@@ -152,8 +150,7 @@ class TestToyotaTss3CamrySafety(common.CarSafetyTest, common.AngleSteeringSafety
     self.assertTrue(self._tx(self._application_raw_msg(angle_raw=-520, lat_active=True)))
 
   def test_angle_rate_budget_has_nominal_generation_floor(self):
-    # Route 5f published adjacent 100 Hz generations 6.9 ms apart after signer
-    # jitter. The controller already limited their delta for one 10 ms tick.
+    # signer jitter can send frames less than 10ms apart
     speed = 9.95
     self._reset_speed_measurement(speed + 1.)
     nominal_delta_raw = min(int(get_max_angle_delta_vm(speed, self.VM, self.params) * self.DEG_TO_CAN) + 1, 1745)
@@ -169,14 +166,12 @@ class TestToyotaTss3CamrySafety(common.CarSafetyTest, common.AngleSteeringSafety
                                   self.safety.get_vehicle_speed_min, self.safety.get_vehicle_speed_max)
 
   def test_private_transport_envelopes(self):
-    # Four classic-CAN fragments carry seven application bytes each. The high
-    # nibble identifies fragments 0..3; the low nibble carries alternating
-    # halves of the request sequence and is therefore intentionally unrestricted.
+    # the high nibble is the fragment index (8-B), the low nibble is part of the sequence
     for header in (0x80, 0x8F, 0x90, 0x9F, 0xA0, 0xAF, 0xB0, 0xBF):
       msg = libsafety_py.make_CANPacket(0x777, 0, bytes((header, 1, 2, 3, 4, 5, 6, 7)))
       self.assertTrue(self._tx(msg), hex(header))
 
-    invalid_oracle = (
+    invalid_requests = (
       bytes((0xC9, 1, 0, 0, 0, 0, 0, 0)),
       bytes((0xC8, 6 << 5 | 1, 0, 0, 0, 0, 0, 0)),
       bytes((0xC8, 0, 0, 0, 0, 0, 0, 0)),
@@ -184,7 +179,7 @@ class TestToyotaTss3CamrySafety(common.CarSafetyTest, common.AngleSteeringSafety
       bytes((0x7F, 1, 2, 3, 4, 5, 6, 7)),
       bytes((0xC0, 1, 2, 3, 4, 5, 6, 7)),
     )
-    for data in invalid_oracle:
+    for data in invalid_requests:
       self.assertFalse(self._tx(libsafety_py.make_CANPacket(0x777, 0, data)))
 
     for action in (False, True):
@@ -213,16 +208,12 @@ class TestToyotaTss3CamrySafety(common.CarSafetyTest, common.AngleSteeringSafety
     self.assertFalse(self._tx(classic))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
 
-  def test_vmc_owns_longitudinal_driver_override(self):
+  def test_gas_pressed_blocks_accel(self):
     self.safety.set_controls_allowed(True)
-    self._rx(self._user_gas_msg(True))
-
-    # VMC result ID 63 arbitrates the driver pedal against this request. Panda
-    # retains the absolute acceleration envelope without vetoing on gas state.
-    self.assertTrue(self._tx(self._application_msg(accel=self.MAX_ACCEL)))
-    self.assertTrue(self._tx(self._application_msg(accel=self.MIN_ACCEL)))
-    self.assertFalse(self._tx(self._application_msg(accel=self.MAX_ACCEL + 0.001)))
-    self.assertFalse(self._tx(self._application_msg(accel=self.MIN_ACCEL - 0.001)))
+    self.safety.set_gas_pressed_prev(True)
+    self.assertFalse(self._tx(self._application_msg(accel=self.MAX_ACCEL)))
+    self.assertFalse(self._tx(self._application_msg(accel=self.MIN_ACCEL)))
+    self.assertTrue(self._tx(self._application_msg(accel=self.INACTIVE_ACCEL)))
 
   def test_request_plane_watchdog_and_release(self):
     self.assertTrue(self._tx(self._application_raw_msg()))
@@ -274,8 +265,7 @@ class TestToyotaTss3CamryStockLongitudinalSafety(unittest.TestCase):
   def setUp(self):
     self.application_packer = CANPacker("toyota_tss3_pt_generated")
     self.safety = libsafety_py.libsafety
-    param = (EPS_SCALE[CAR.TOYOTA_CAMRY_TSS3] | ToyotaSafetyFlags.STOCK_LONGITUDINAL |
-             ToyotaSafetyFlags.TSS3_SIGNER | ToyotaSafetyFlags.TSS3_08A_HOST)
+    param = EPS_SCALE[CAR.TOYOTA_CAMRY_TSS3] | ToyotaSafetyFlags.TSS3 | ToyotaSafetyFlags.STOCK_LONGITUDINAL
     self.assertEqual(self.safety.set_safety_hooks(CarParams.SafetyModel.toyota, param), 0)
     self.safety.init_tests()
     self.safety.set_timer(0)
@@ -325,7 +315,6 @@ class TestToyotaTss3CamryStockLongitudinalSafety(unittest.TestCase):
         msg[0].data[index] ^= 1
         self.assertFalse(self.safety.safety_tx_hook(msg))
 
-    # Lateral fields and the host request sequence remain independently owned.
     self.assertTrue(self.safety.safety_tx_hook(self._host_msg()))
 
   def test_one_frc_application_allows_multiple_100hz_host_generations(self):
