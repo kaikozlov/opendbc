@@ -1,95 +1,69 @@
-"""TSS3 request construction and EPS signer transport helpers."""
+"""CONTROL_REQUEST (0x08A) construction and the EPS-resident SecOC signer transport."""
 from collections import deque
 from dataclasses import dataclass
-from math import isfinite
 
+from opendbc.car import DT_CTRL
 from opendbc.car.can_definitions import CanData
 from opendbc.car.carlog import carlog
-
-TSS3_B6_TARGET_ANGLE_SCALE_DEG = 1024 / 17870
+from opendbc.car.toyota.values import CarControllerParams
 
 # The camera harness is repinned so the vehicle network is on bus 0 and the FRC on bus 2
 TSS3_CHASSIS_BUS = 0
 TSS3_AUX_BUS = 1
 TSS3_SOURCE_BUS = 2
 
-TSS3_NO_LATERAL_REQUEST_ID = 0
-TSS3_LTA_LCA_ID = 11
-TSS3_LTA_ASSIST_GAIN_RAW = 100
-TSS3_INACTIVE_ASSIST_GAIN_RAW = 50
-TSS3_LONGITUDINAL_HOST_REQUEST_UPPER = 0x2D
-TSS3_LONGITUDINAL_HOST_REQUEST_LOWER = 0x47
-NATIVE_08A_ADDR = 0x08A
-ADMIN_ADDR = 0x777
-DOWNSTREAM_BUS = TSS3_CHASSIS_BUS
-ADMIN_BUS = TSS3_AUX_BUS
-SOURCE_BUS = TSS3_SOURCE_BUS
+CONTROL_REQUEST_ADDR = 0x08A
+SIGNER_ADDR = 0x777
+SIGNER_RESPONSE_ADDR = 0x7A9
+SIGNER_SID = 0xC9
+SIGNER_SEQUENCE_MAX = 0xFF
+SIGNER_MAX_PENDING = 8
+SIGNER_TIMEOUT_NS = 90_000_000
+GENERATION_INTERVAL_NS = int(DT_CTRL * 1e9)
+
 PANDA_RETURNED_OFFSET = 0x80
 PANDA_REJECTED_OFFSET = 0xC0
 
-ORACLE_REQUEST_ADDR = 0x777
-ORACLE_RESPONSE_ADDR = 0x7A9
-ORACLE_BUS = TSS3_CHASSIS_BUS
-ORACLE_PRIVATE_SID = 0xC9
-ORACLE_SEQUENCE_MAX = 0xFF
-ORACLE_MAX_PENDING_GENERATIONS = 8
-ORACLE_PUBLICATION_DEADLINE_NS = 90_000_000
-ORACLE_GENERATION_INTERVAL_NS = 10_000_000
+LTA_LCA_REQUEST_ID = 11
 
 
 def target_angle_deg_to_raw(angle_deg: float) -> int:
-  return int(round(angle_deg / TSS3_B6_TARGET_ANGLE_SCALE_DEG))
+  return round(angle_deg / CarControllerParams.TSS3_TARGET_ANGLE_SCALE_DEG)
 
 
 def build_host_application(packer, *, lat_active: bool, target_angle_raw: int,
                            long_active: bool, accel: float,
                            set_speed_kph: float, request_sequence: int,
                            stock_application: bytes | None = None) -> bytes:
-  """Build the TSS3 0x08A application with independently selected axis owners.
+  """Build the 28-byte CONTROL_REQUEST payload that the EPS signs.
 
-  With stock longitudinal, preserve the FRC application and replace only the
-  recovered lateral tuple and host-owned request sequence. With openpilot
-  longitudinal, construct the complete known Camry application envelope.
+  With stock longitudinal, only the lateral fields and sequence of the FRC's request are replaced.
   """
-  if not -(1 << 15) <= target_angle_raw < (1 << 15):
-    raise ValueError("target angle must fit signed16")
-  if not 0 <= request_sequence <= 0x3F:
-    raise ValueError("request sequence must fit u6")
-
-  if stock_application is not None and len(stock_application) != 28:
-    raise ValueError("stock 0x08A application must be exactly 28 bytes")
-
-  accel_request = float(accel) if long_active else 0.0
-  if not -32.768 <= accel_request <= 32.767:
-    raise ValueError("acceleration must fit signed16 at 0.001 m/s^2")
-  set_speed = max(0, min(255, int(round(set_speed_kph)))) if isfinite(set_speed_kph) else 0
-
+  accel = accel if long_active else 0.0
   values = {
     "CRUISE_OPERATING_LATCH": 1,
-    "REQUEST_STATUS_B4_BIT7": 1,
-    "LONGITUDINAL_REQUEST_ID_UPPER": TSS3_LONGITUDINAL_HOST_REQUEST_UPPER >> 2,
-    "LONGITUDINAL_ALLOCATION_METHOD_UPPER": TSS3_LONGITUDINAL_HOST_REQUEST_UPPER & 0x3,
-    "LONGITUDINAL_REQUEST_ID_LOWER": TSS3_LONGITUDINAL_HOST_REQUEST_LOWER >> 2,
-    "LONGITUDINAL_ALLOCATION_METHOD_LOWER": TSS3_LONGITUDINAL_HOST_REQUEST_LOWER & 0x3,
-    "LONGITUDINAL_REQUEST_ACCEL_UPPER": accel_request,
-    "SET_SPEED": set_speed,
-    "LONGITUDINAL_REQUEST_ACCEL_LOWER": accel_request,
-    "REQUEST_SENTINEL_B13_B14": 0x7FFF,
-    "REQUEST_SENTINEL_B16_B17": 0x7FFF,
+    "SET_ME_1": 1,
+    "LONGITUDINAL_REQUEST_ID_UPPER": 11,
+    "LONGITUDINAL_ALLOCATION_METHOD_UPPER": 1,  # engine and brake
+    "LONGITUDINAL_REQUEST_ID_LOWER": 17,
+    "LONGITUDINAL_ALLOCATION_METHOD_LOWER": 3,  # brake only
+    "LONGITUDINAL_REQUEST_ACCEL_UPPER": accel,
+    "LONGITUDINAL_REQUEST_ACCEL_LOWER": accel,
+    "SET_SPEED": min(max(round(set_speed_kph), 0), 255),
+    "SET_ME_X7FFF": 0x7FFF,
+    "SET_ME_X7FFF_2": 0x7FFF,
     "LATERAL_REQUEST_PINION_ANGLE": target_angle_raw * 0.001000121519,
     "CRUISE_STATE_MIRROR": 3,
-    "LATERAL_REQUEST_ID": TSS3_LTA_LCA_ID if lat_active else TSS3_NO_LATERAL_REQUEST_ID,
+    "LATERAL_REQUEST_ID": LTA_LCA_REQUEST_ID if lat_active else 0,
     "CRUISE_REQUEST_ACTIVE": 1,
-    "LATERAL_ASSIST_GAIN": (TSS3_LTA_ASSIST_GAIN_RAW if lat_active else TSS3_INACTIVE_ASSIST_GAIN_RAW) * 0.01,
+    "LATERAL_ASSIST_GAIN": 1.0 if lat_active else 0.5,
     "REQUEST_SEQUENCE": request_sequence,
   }
-  _, data, _ = packer.make_can_msg("TSS3_CONTROL_REQUEST", DOWNSTREAM_BUS, values)
+  _, data, _ = packer.make_can_msg("CONTROL_REQUEST", TSS3_CHASSIS_BUS, values)
   application = bytearray(stock_application if stock_application is not None else data[:28])
 
   if stock_application is not None:
-    # These are the complete recovered lateral application fields. Preserve all
-    # other FRC bytes, including longitudinal request IDs, unequal upper/lower
-    # bounds, set speed, hold state, and still-unmapped arbitration metadata.
+    # lateral pinion angle, lateral request ID, assist gain, and sequence
     application[18:20] = data[18:20]
     application[21] = (application[21] & 0xC0) | (data[21] & 0x3F)
     application[24:26] = data[24:26]
@@ -98,22 +72,17 @@ def build_host_application(packer, *, lat_active: bool, target_angle_raw: int,
   return bytes(application)
 
 
-def make_request_plane_admin(arm: bool) -> CanData:
-  return CanData(ADMIN_ADDR, bytes((7, 0xC9, 0xA8, int(arm), 0, 0, 0, 0)), ADMIN_BUS)
+def make_admin_msg(arm: bool) -> CanData:
+  return CanData(SIGNER_ADDR, bytes((7, 0xC9, 0xA8, int(arm), 0, 0, 0, 0)), TSS3_AUX_BUS)
 
 
-def build_oracle_transport(seq: int, application: bytes) -> list[CanData]:
-  """Carry one 28-byte application through the EPS raw diagnostic ring."""
-  if not 1 <= seq <= ORACLE_SEQUENCE_MAX:
-    raise ValueError(f"oracle sequence must be 1..{ORACLE_SEQUENCE_MAX}")
-  if len(application) != 28:
-    raise ValueError("oracle application must be exactly 28 bytes")
-
+def build_signer_requests(seq: int, application: bytes) -> list[CanData]:
+  # four 7-byte fragments, each header carries the fragment index and a nibble of the sequence
   low, high = seq & 0x0F, seq >> 4
   headers = (0x80 | low, 0x90 | high, 0xA0 | low, 0xB0 | high)
-  return [CanData(ORACLE_REQUEST_ADDR,
+  return [CanData(SIGNER_ADDR,
                   bytes((headers[fragment],)) + application[fragment * 7:(fragment + 1) * 7],
-                  ORACLE_BUS) for fragment in range(4)]
+                  TSS3_CHASSIS_BUS) for fragment in range(4)]
 
 
 @dataclass
@@ -128,15 +97,9 @@ class SignRequest:
 
 
 class ToyotaTss3RequestTransport:
-  """Bounded 100 Hz transport for normal CarController output.
+  """Signs one CONTROL_REQUEST per controller frame through the EPS and publishes the signed result.
 
-  CarController owns application cadence and actuator state. Every 10 ms control
-  tick can enqueue one fresh application for the EPS signer; the EPS owns all
-  SecOC freshness and returns only FV4||MAC28. A small pipeline hides signer
-  round-trip latency without replaying historical control after a missing
-  private response. Native 0x08A remains a liveness input, not the host
-  publication clock. In stock-longitudinal mode its latest application is a
-  data template that can be reused across multiple 100 Hz host generations.
+  The EPS returns the SecOC freshness value and MAC. A few requests are kept in flight to hide the signer latency.
   """
 
   def __init__(self, packer, *, stock_longitudinal: bool = False):
@@ -153,7 +116,7 @@ class ToyotaTss3RequestTransport:
     self.control_epoch = 0
     self.control_started_ns = 0
 
-    self.next_oracle_sequence = 1
+    self.next_signer_sequence = 1
     self.next_request_sequence = 0
     self.pending_requests: deque[SignRequest] = deque()
     self.requests_by_sequence: dict[int, SignRequest] = {}
@@ -189,7 +152,7 @@ class ToyotaTss3RequestTransport:
 
   def _release(self) -> None:
     if self.active or self.arm_pending:
-      self.pending_sends.append(make_request_plane_admin(False))
+      self.pending_sends.append(make_admin_msg(False))
     self.active = False
     self.arm_pending = False
     self.arm_host_frame = None
@@ -204,14 +167,14 @@ class ToyotaTss3RequestTransport:
     self._release()
 
   def _observe_tx_echo(self, address: int, data: bytes, src: int, now_ns: int) -> None:
-    if address == ADMIN_ADDR and self.arm_pending and data == make_request_plane_admin(True).dat:
-      if src == ADMIN_BUS + PANDA_REJECTED_OFFSET:
+    if address == SIGNER_ADDR and self.arm_pending and data == make_admin_msg(True).dat:
+      if src == TSS3_AUX_BUS + PANDA_REJECTED_OFFSET:
         self._restart_after_failure("arm_admin_rejected")
       return
-    if address != NATIVE_08A_ADDR:
+    if address != CONTROL_REQUEST_ADDR:
       return
 
-    if src == DOWNSTREAM_BUS + PANDA_RETURNED_OFFSET:
+    if src == TSS3_CHASSIS_BUS + PANDA_RETURNED_OFFSET:
       if self.arm_pending and data == self.arm_host_frame:
         self.active = True
         self.arm_pending = False
@@ -220,30 +183,27 @@ class ToyotaTss3RequestTransport:
         self.last_failure_reason = ""
       elif self.active:
         self.last_publication_ns = now_ns
-    elif src == DOWNSTREAM_BUS + PANDA_REJECTED_OFFSET:
+    elif src == TSS3_CHASSIS_BUS + PANDA_REJECTED_OFFSET:
       if self.arm_pending and data == self.arm_host_frame:
         self._restart_after_failure("handoff_host_frame_rejected")
       elif self.active:
         carlog.warning("Toyota TSS3 request plane TX rejected")
 
-  def _observe_oracle_response(self, data: bytes, now_ns: int) -> None:
-    if len(data) != 8 or data[0] != ORACLE_PRIVATE_SID:
+  def _observe_signer_response(self, data: bytes, now_ns: int) -> None:
+    if len(data) != 8 or data[0] != SIGNER_SID:
       return
     seq, status = data[1], data[2]
-    if not 1 <= seq <= ORACLE_SEQUENCE_MAX or data[3] != (seq ^ 0xFF):
+    if not 1 <= seq <= SIGNER_SEQUENCE_MAX or data[3] != (seq ^ 0xFF):
       return
 
     request = self.requests_by_sequence.get(seq)
     if request is None or request.control_epoch != self.control_epoch:
       return
-    if now_ns - request.generation_started_ns > ORACLE_PUBLICATION_DEADLINE_NS:
+    if now_ns - request.generation_started_ns > SIGNER_TIMEOUT_NS:
       request.superseded = True
       return
 
-    # The resident drains requests serially. Seeing a later response proves it
-    # has already moved past every earlier request. Preserve earlier responses
-    # already ready for publication, but never stall on an earlier response
-    # that was lost between EPS and card.
+    # the signer answers in order, so earlier unanswered requests were lost
     for older in self.pending_requests:
       if older is request:
         break
@@ -270,9 +230,9 @@ class ToyotaTss3RequestTransport:
         address_i, src_i, payload = int(address), int(src), bytes(data)
         if src_i >= PANDA_RETURNED_OFFSET:
           self._observe_tx_echo(address_i, payload, src_i, now_ns)
-        elif src_i == ORACLE_BUS and address_i == ORACLE_RESPONSE_ADDR:
-          self._observe_oracle_response(payload, now_ns)
-        elif src_i == SOURCE_BUS and address_i == NATIVE_08A_ADDR and len(payload) == 32:
+        elif src_i == TSS3_CHASSIS_BUS and address_i == SIGNER_RESPONSE_ADDR:
+          self._observe_signer_response(payload, now_ns)
+        elif src_i == TSS3_SOURCE_BUS and address_i == CONTROL_REQUEST_ADDR and len(payload) == 32:
           self.stock_application = payload[:28]
 
   def _expire(self, now_ns: int) -> None:
@@ -281,8 +241,8 @@ class ToyotaTss3RequestTransport:
       return
 
     reference_ns = self.last_publication_ns if self.active else self.control_started_ns
-    if reference_ns and now_ns - reference_ns > ORACLE_PUBLICATION_DEADLINE_NS:
-      self._restart_after_failure("oracle_dead")
+    if reference_ns and now_ns - reference_ns > SIGNER_TIMEOUT_NS:
+      self._restart_after_failure("signer_timeout")
 
   def _head_ready_for_publication(self, now_ns: int) -> bool:
     self._prune_head()
@@ -295,10 +255,8 @@ class ToyotaTss3RequestTransport:
     request_sequence = request.application[26] & 0x3F
     if self.last_host_request_sequence is not None:
       generation_delta = (request_sequence - self.last_host_request_sequence) & 0x3F
-      # A lost signer response can skip an application generation. Preserve
-      # the controller's 10 ms-per-generation timing instead of compressing a
-      # multi-generation steering step into the next publication slot.
-      if generation_delta > 1 and now_ns - self.last_host_send_ns < generation_delta * ORACLE_GENERATION_INTERVAL_NS:
+      # keep 10ms per generation after a lost response, don't compress steps
+      if generation_delta > 1 and now_ns - self.last_host_send_ns < generation_delta * GENERATION_INTERVAL_NS:
         return False
     return True
 
@@ -316,10 +274,10 @@ class ToyotaTss3RequestTransport:
     self.last_host_request_sequence = request_sequence
     return request.application + request.trailer
 
-  def _allocate_oracle_sequence(self) -> int | None:
-    for _ in range(ORACLE_SEQUENCE_MAX):
-      seq = self.next_oracle_sequence
-      self.next_oracle_sequence = (seq % ORACLE_SEQUENCE_MAX) + 1
+  def _allocate_signer_sequence(self) -> int | None:
+    for _ in range(SIGNER_SEQUENCE_MAX):
+      seq = self.next_signer_sequence
+      self.next_signer_sequence = (seq % SIGNER_SEQUENCE_MAX) + 1
       if seq not in self.requests_by_sequence:
         return seq
     return None
@@ -327,11 +285,11 @@ class ToyotaTss3RequestTransport:
   def _queue_signing_latest(self, now_ns: int) -> None:
     self._prune_head()
     if (not self.control_enabled or not self.can_valid or
-        len(self.pending_requests) >= ORACLE_MAX_PENDING_GENERATIONS or
+        len(self.pending_requests) >= SIGNER_MAX_PENDING or
         (self.stock_longitudinal and self.stock_application is None)):
       return
 
-    seq = self._allocate_oracle_sequence()
+    seq = self._allocate_signer_sequence()
     if seq is None:
       return
     if self.control_started_ns == 0:
@@ -350,28 +308,24 @@ class ToyotaTss3RequestTransport:
     request = SignRequest(seq, application, self.control_epoch, now_ns)
     self.pending_requests.append(request)
     self.requests_by_sequence[seq] = request
-    self.pending_sends.extend(build_oracle_transport(seq, application))
+    self.pending_sends.extend(build_signer_requests(seq, application))
 
   def control_generation_due(self, *, enabled: bool, lat_active: bool, long_active: bool,
                              now_nanos: int) -> bool:
-    """Whether this 100 Hz controller tick can create a new application."""
+
     enabled = bool(enabled)
     if not enabled or not self.can_valid:
       return False
     if self.stock_longitudinal and self.stock_application is None:
       return False
     if not self.control_enabled:
-      # The enable edge invalidates any prior epoch before enqueueing.
       return True
 
     self._prune_head()
-    # CarController must advance its actuator limiter only when update_control
-    # can enqueue that exact generation. A ready trailer is not necessarily a
-    # free slot: skipped-generation timing may still hold it, and an unconfirmed
-    # handoff prevents publication entirely.
+
     front_will_publish = not self.arm_pending and self._head_ready_for_publication(now_nanos)
     pending_after_publication = len(self.pending_requests) - int(front_will_publish)
-    return pending_after_publication < ORACLE_MAX_PENDING_GENERATIONS
+    return pending_after_publication < SIGNER_MAX_PENDING
 
   def update_control(self, *, enabled: bool, lat_active: bool, target_angle_deg: float,
                      long_active: bool, accel: float, set_speed_kph: float,
@@ -399,20 +353,16 @@ class ToyotaTss3RequestTransport:
       self._release()
     else:
       self._expire(now_nanos)
-      # Do not send a second host frame before Panda confirms the arm frame.
-      # Once active, publish at most one signed application per 10 ms control
-      # tick even if multiple EPS responses arrived in the same CAN batch.
+      # wait for panda to accept the first frame, then publish at most one frame per tick
       if not self.arm_pending:
         frame = self._take_ready_host_frame(now_nanos)
         if frame is not None:
           if not self.active:
-            self.pending_sends.append(make_request_plane_admin(True))
+            self.pending_sends.append(make_admin_msg(True))
             self.arm_pending = True
             self.arm_host_frame = frame
-          self.pending_sends.append(CanData(NATIVE_08A_ADDR, frame, DOWNSTREAM_BUS))
+          self.pending_sends.append(CanData(CONTROL_REQUEST_ADDR, frame, TSS3_CHASSIS_BUS))
 
-      # Normal CarController cadence is the only publication scheduler. Keep
-      # enough requests in flight to hide the EPS signer round-trip latency.
       self._queue_signing_latest(now_nanos)
 
     sends, self.pending_sends = self.pending_sends, []

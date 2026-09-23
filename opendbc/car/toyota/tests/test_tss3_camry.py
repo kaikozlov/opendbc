@@ -159,7 +159,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
         self.assertFalse(state.vehicleSensorsInvalid)
 
   def test_driver_override_with_cooperative_inhibit_uses_steering_pressed(self):
-    # Measured override telemetry with COOPERATIVE_COMMAND_INHIBIT set.
+    # driver override with COOPERATIVE_COMMAND_INHIBIT set
     override = bytes.fromhex("12000003330930b9130330053c800e99030b0000053c07b50000000042c3b381")
     state = update_state(CarInterface(self.CP), moving=True, eps_telemetry=override, hud=CAMRY_HUD)
     self.assertTrue(state.canValid)
@@ -168,8 +168,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertFalse(state.steerFaultPermanent)
 
   def test_reference_initializing_source_does_not_report_a_steering_fault(self):
-    # The reference-inhibit signal at B19[0] is stock cooperative state, not
-    # an openpilot steering fault or a reason to surrender lateral ownership.
+    # COOPERATIVE_ANGLE_INHIBIT is set while initializing
     initializing = bytes.fromhex("00000000170000500000100026820000000000010000ffff00000000b280595f")
     state = update_state(CarInterface(self.CP), eps_telemetry=initializing, hud=CAMRY_HUD)
     self.assertTrue(state.canValid)
@@ -198,16 +197,12 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     output, sends = ci.apply(control(0.0, active=False, enabled=False), 2_000_000_000)
     self.assertAlmostEqual(output.steeringAngleDeg, measured, delta=0.01)
 
-    # Engagement immediately creates one normally rate-limited application on
-    # the next 10 ms CarController tick; native 0x08A is not the host clock.
     output, sends = ci.apply(control(5.0), 2_010_000_000)
     self.assertFalse(any(address == 0x777 and data[1] == 0xC7 for address, data, _ in sends))
     self.assertEqual(sum(address == 0x777 and 8 <= (data[0] >> 4) <= 0xB for address, data, _ in sends), 4)
     self.assertGreater(output.steeringAngleDeg, measured)
     self.assertLessEqual(output.steeringAngleDeg, measured + max_delta + 1e-6)
 
-    # The next controller tick creates the next application without waiting for
-    # another Toyota source publication.
     previous_angle = output.steeringAngleDeg
     output, sends = ci.apply(control(20.0), 2_020_000_000)
     self.assertEqual(sum(address == 0x777 and 8 <= (data[0] >> 4) <= 0xB for address, data, _ in sends), 4)
@@ -232,11 +227,9 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     state = update_state(ci, speed_ms=25.0, hud=CAMRY_HUD)
     self.assertAlmostEqual(state.vEgoRaw, 25.0, delta=0.05)
 
-    # Test controller limiting independently of authentication availability.
     with patch.object(ci.CC.tss3_request_transport, "control_generation_due", return_value=True):
       output, _ = ci.apply(control(20.0), 2_000_000_000)
-    # The repinned controller now creates one application per 10 ms tick. Its
-    # vehicle-model jerk envelope remains distinct from the TSS2 rate curve.
+
     self.assertGreater(output.steeringAngleDeg, 0.20)
     self.assertLess(output.steeringAngleDeg, 0.22)
 

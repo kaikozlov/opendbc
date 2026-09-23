@@ -1,3 +1,5 @@
+import copy
+
 from opendbc.car.crc import CRC16_XMODEM
 from opendbc.car.structs import CarParams
 
@@ -75,41 +77,28 @@ def create_tss3_brake_cancel_command(packer, stock_brake, bus):
   return packer.make_can_msg("BRAKE_MODULE", bus, values)
 
 
-def create_tss3_hud_command(stock_hud, left_line: bool, right_line: bool, lat_active: bool, steer_alert: bool):
-  """Clone the live FRC HUD frame and render only the recovered openpilot HUD subset."""
-  data = bytearray(int(stock_hud[f"BYTE_{i}"]) for i in range(8))
+def create_tss3_lkas_hud(packer, bus, stock_hud, left_line: bool, right_line: bool, lat_active: bool, steer_alert: bool):
+  values = copy.copy(stock_hud)
 
-  # The ordinary road-state 0x412 alphabet is recovered on the maintainer
-  # Camry: B0/B4 are 0x10/0 when LTA is off, 0x12/2 when available, and
-  # 0x14/1 while active. Inactive recognized/missing lanes are nibble 1/2 and
-  # active recognized lanes are nibble 4. Preserve startup/noncanonical frames
-  # rather than assigning unknown states.
-  if data[0] not in (0x10, 0x12, 0x14) or data[4] not in (0, 1, 2):
-    return 0x412, bytes(data), 0
+  # forward startup and unknown states untouched
+  if values["LTA_MODE"] in (0x10, 0x12, 0x14) and values["LTA_INDICATOR"] in (0, 1, 2):
+    line = 4 if lat_active else 1
+    if left_line == right_line:
+      values["LANE_LINE_1"] = values["LANE_LINE_2"] = line if left_line else 2
+    else:
+      # which line is left is unknown, so only update the stock visible lines
+      for sig in ("LANE_LINE_1", "LANE_LINE_2"):
+        if values[sig] in (1, 4):
+          values[sig] = line
 
-  visible_line = 4 if lat_active else 1
-  if left_line == right_line:
-    # Symmetric visibility is orientation-free.
-    high_state = low_state = visible_line if left_line else 2
-  else:
-    # Existing road data does not yet prove which B3 nibble is left versus
-    # right. Preserve the stock per-side orientation for asymmetric requests.
-    def normalize_stock_lane(state: int) -> int:
-      return visible_line if state in (1, 4) else state
+    values.update({
+      "LTA_MODE": 0x14 if lat_active else 0x12,
+      "LTA_INDICATOR": 1 if lat_active else 2,
+      "HANDS_ON_WARNING": 3 if steer_alert else 0,
+      "HANDS_ON_WARNING_2": 0,
+    })
 
-    high_state = normalize_stock_lane(data[3] >> 4)
-    low_state = normalize_stock_lane(data[3] & 0x0F)
-
-  data[0] = (data[0] & ~0x06) | (0x04 if lat_active else 0x02)
-  data[3] = (high_state << 4) | low_state
-  data[4] = 1 if lat_active else 2
-
-  # B1[3:2] is the source-real hands-off visual warning. Replace it with
-  # openpilot DM's steer-required visual. B2[6] is a later Toyota escalation
-  # stage; no TSS3 audible/chime contract is recovered, so keep it suppressed.
-  data[1] = (data[1] & ~0x0C) | (0x0C if steer_alert else 0)
-  data[2] &= ~0x40
-  return 0x412, bytes(data), 0
+  return packer.make_can_msg("LKAS_HUD", bus, values)
 
 
 def create_pcs_commands(packer, accel, active, mass):
@@ -215,14 +204,9 @@ def toyota_checksum(address: int, sig, d: bytearray) -> int:
   return s & 0xFF
 
 
-def toyota_e2e_p05_checksum(address: int, data: bytes | bytearray) -> int:
-  """Toyota's native E2E P05: init FFFF, CRC LE, implicit DataID=CAN ID."""
+def toyota_e2e_checksum(address: int, sig, d: bytearray) -> int:
+  # AUTOSAR E2E profile 5: CRC-16/CCITT over the payload after the checksum, then the address as the data ID
   crc = 0xFFFF
-  for byte in (*data[2:], address & 0xFF, (address >> 8) & 0xFF):
+  for byte in (*d[2:], address & 0xFF, (address >> 8) & 0xFF):
     crc = ((crc << 8) ^ CRC16_XMODEM[((crc >> 8) ^ byte) & 0xFF]) & 0xFFFF
   return crc
-
-
-def toyota_tss3_checksum(address: int, sig, data: bytearray) -> int:
-  # The TSS3 DBC contains both 16-bit E2E and inherited 8-bit additive fields.
-  return toyota_e2e_p05_checksum(address, data) if sig.size == 16 else toyota_checksum(address, sig, data)

@@ -265,7 +265,7 @@ class TestToyotaTss3CamrySafety(common.CarSafetyTest, common.AngleSteeringSafety
     return self.packer.make_can_msg_safety("GAS_PEDAL", 0, {"GAS_PEDAL_USER": gas})
 
   def _pcm_status_msg(self, enable):
-    return self.packer.make_can_msg_safety("TSS3_CONTROL_REQUEST", 2, {"CRUISE_OPERATING_LATCH": enable})
+    return self.packer.make_can_msg_safety("CONTROL_REQUEST", 2, {"CRUISE_OPERATING_LATCH": enable})
 
 
 class TestToyotaTss3CamryStockLongitudinalSafety(unittest.TestCase):

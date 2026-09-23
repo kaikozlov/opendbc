@@ -8,7 +8,7 @@ from opendbc.car.common.pid import PIDController
 from opendbc.car.secoc import add_mac, build_sync_mac
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.toyota import toyotacan
-from opendbc.car.toyota.tss3 import TSS3_SOURCE_BUS, ToyotaTss3RequestTransport
+from opendbc.car.toyota.tss3 import TSS3_CHASSIS_BUS, TSS3_SOURCE_BUS, ToyotaTss3RequestTransport
 from opendbc.car.toyota.values import CAR, CarControllerParams, ToyotaFlags
 from opendbc.car.vehicle_model import VehicleModel
 from opendbc.can import CANPacker
@@ -128,10 +128,8 @@ class CarController(CarControllerBase):
       send_ui = steer_alert != self.alert_active
       self.alert_active = steer_alert
       if CS.tss3_lkas_hud and (self.frame % 20 == 0 or send_ui):
-        can_sends.append(toyotacan.create_tss3_hud_command(
-          CS.tss3_lkas_hud, hud_control.leftLaneVisible, hud_control.rightLaneVisible,
-          CC.latActive, steer_alert,
-        ))
+        can_sends.append(toyotacan.create_tss3_lkas_hud(self.packer, TSS3_CHASSIS_BUS, CS.tss3_lkas_hud, hud_control.leftLaneVisible,
+                                                        hud_control.rightLaneVisible, CC.latActive, steer_alert))
 
       output.accel = float(np.clip(CC.actuators.accel, self.params.ACCEL_MIN, self.params.ACCEL_MAX)) \
         if longitudinal_command_active else 0.0
