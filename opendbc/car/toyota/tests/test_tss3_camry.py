@@ -193,7 +193,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertEqual(match_fw_to_car_exact(live_fw, match_brand="toyota", log=False),
                      {str(CAR.TOYOTA_CAMRY_TSS3)})
 
-    # NRTD startup can transiently miss EPS F181. The exact F33 ABS identity is
+    # NRTD startup can transiently miss EPS F181. The exact ABS identity is
     # enough to retain the platform instead of falling through to MOCK/dashcam mode.
     self.assertEqual(match_fw_to_car_exact({(0x7B0, None): {abs_version}}, match_brand="toyota", log=False),
                      {str(CAR.TOYOTA_CAMRY_TSS3)})
@@ -326,7 +326,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
         self.assertFalse(state.vehicleSensorsInvalid)
 
   def test_driver_override_with_cooperative_inhibit_uses_steering_pressed(self):
-    # Measured override telemetry with F33_COOPERATIVE_COMMAND_INHIBIT set.
+    # Measured override telemetry with COOPERATIVE_COMMAND_INHIBIT set.
     override = bytes.fromhex("12000003330930b9130330053c800e99030b0000053c07b50000000042c3b381")
     state = update_state(CarInterface(self.CP), moving=True, eps_telemetry=override, hud=CAMRY_HUD)
     self.assertTrue(state.canValid)
@@ -335,7 +335,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertFalse(state.steerFaultPermanent)
 
   def test_reference_initializing_source_does_not_report_a_steering_fault(self):
-    # F33's reference-inhibit signal at B19[0] is stock cooperative state, not
+    # The reference-inhibit signal at B19[0] is stock cooperative state, not
     # an openpilot steering fault or a reason to surrender lateral ownership.
     initializing = bytes.fromhex("00000000170000500000100026820000000000010000ffff00000000b280595f")
     state = update_state(CarInterface(self.CP), eps_telemetry=initializing, hud=CAMRY_HUD)
@@ -361,7 +361,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertTrue(state.canValid)
 
     measured = state.steeringAngleDeg + state.steeringAngleOffsetDeg
-    max_delta = CarControllerParams.F33_ANGLE_LIMITS.MAX_ANGLE_RATE * ci.CC.params.STEER_STEP
+    max_delta = CarControllerParams.TSS3_ANGLE_LIMITS.MAX_ANGLE_RATE * ci.CC.params.STEER_STEP
     output, sends = ci.apply(control(0.0, active=False, enabled=False), 2_000_000_000)
     self.assertAlmostEqual(output.steeringAngleDeg, measured, delta=0.01)
 
@@ -394,7 +394,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     output, _ = ci.apply(control(0.0, active=False, accel=1.0, long_active=False), 2_010_000_000)
     self.assertEqual(output.accel, 0.0)
 
-  def test_f33_uses_vehicle_model_limits_instead_of_tss2_rate_curve(self):
+  def test_uses_vehicle_model_limits_instead_of_tss2_rate_curve(self):
     ci = CarInterface(self.CP)
     state = update_state(ci, speed_ms=25.0, hud=CAMRY_HUD)
     self.assertAlmostEqual(state.vEgoRaw, 25.0, delta=0.05)

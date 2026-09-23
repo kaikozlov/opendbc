@@ -176,7 +176,7 @@ class ToyotaTss3RequestTransport:
 
   def _record_failure(self, reason: str) -> None:
     self.last_failure_reason = reason
-    carlog.error(f"Toyota F33 request plane failure: {reason}")
+    carlog.error(f"Toyota TSS3 request plane failure: {reason}")
 
   def _remove_request(self, request: SignRequest) -> None:
     if self.requests_by_sequence.get(request.sequence) is request:
@@ -231,7 +231,7 @@ class ToyotaTss3RequestTransport:
       if self.arm_pending and data == self.arm_host_frame:
         self._restart_after_failure("handoff_host_frame_rejected")
       elif self.active:
-        carlog.warning("Toyota F33 request plane TX rejected")
+        carlog.warning("Toyota TSS3 request plane TX rejected")
 
   def _observe_oracle_response(self, data: bytes, now_ns: int) -> None:
     if len(data) != 8 or data[0] != ORACLE_PRIVATE_SID:
@@ -259,7 +259,7 @@ class ToyotaTss3RequestTransport:
 
     if status != 0:
       request.failed = True
-      carlog.warning(f"Toyota F33 request plane signer status {status}")
+      carlog.warning(f"Toyota TSS3 request plane signer status {status}")
     else:
       request.trailer = data[4:8]
     self._prune_head()

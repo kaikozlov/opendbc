@@ -35,13 +35,10 @@ class CarControllerParams:
     ([5, 25], [0.36, 0.26]),
   )
 
-  # Exact F33 mode-2 (LTA/LCA) firmware clamps the B6 target to +/-1745 raw
-  # and permits 78 raw counts per effective sequence step. At the normal 100 Hz
-  # CarController cadence, 39 raw per host frame retains a 2x margin to that
-  # recovered per-step receiver bound; the vehicle-model jerk limit is usually tighter.
-  # Vehicle-model limiting supplies the speed-dependent lateral accel/jerk
-  # envelope using this platform's geometry instead of inherited TSS2 curves.
-  F33_ANGLE_LIMITS: AngleSteeringLimitsVM = AngleSteeringLimitsVM(
+  # TSS3 EPS clamps the LTA target to +/-1745 raw and permits 78 raw counts per
+  # sequence step. At 100 Hz, 39 raw per frame keeps a 2x margin to that bound;
+  # the vehicle-model jerk limit is usually tighter.
+  TSS3_ANGLE_LIMITS: AngleSteeringLimitsVM = AngleSteeringLimitsVM(
     1745 * TSS3_TARGET_ANGLE_SCALE_DEG,
     MAX_ANGLE_RATE=39 * TSS3_TARGET_ANGLE_SCALE_DEG,
   )
@@ -49,13 +46,9 @@ class CarControllerParams:
   MAX_LTA_DRIVER_TORQUE_ALLOWANCE = 150  # slightly above steering pressed allows some resistance when changing lanes
 
   def __init__(self, CP):
-    if CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:
-      self.ANGLE_LIMITS = self.F33_ANGLE_LIMITS
-
-    if CP.carFingerprint == CAR.TOYOTA_CAMRY_TSS3:
-      # Exact F33 host ownership controls the chassis-facing 0x08A desired-
-      # acceleration request directly. Use openpilot's standard direct-accel
-      # envelope; the narrower values belonged to the superseded 0x160 path.
+    if CP.flags & ToyotaFlags.TSS3:
+      self.ANGLE_LIMITS = self.TSS3_ANGLE_LIMITS
+      # 0x08A is a direct desired-acceleration request
       self.ACCEL_MAX = 2.0
       self.ACCEL_MIN = -3.5
     else:
@@ -216,7 +209,9 @@ class CAR(Platforms):
   )
   TOYOTA_CAMRY_TSS3 = ToyotaTSS3PlatformConfig(
     [ToyotaTSS3CarDocs("Toyota Camry Hybrid 2026", package="Repinned harness")],
-    TOYOTA_CAMRY.specs.override(steerRatio=15.3),
+    # XV80: lightest (LE FWD) curb weight and 2,825 mm wheelbase from Toyota's 2025 product information.
+    # Steer ratio is learned from routes; the Toyota stiffness factor remains paramsd's baseline.
+    CarSpecs(mass=3450. * CV.LB_TO_KG, wheelbase=2.825, steerRatio=15.3, tireStiffnessFactor=0.7933),
     dbc_dict={Bus.pt: 'toyota_tss3_pt_generated', Bus.radar: 'toyota_tss3_pt_generated'},
     flags=ToyotaFlags.HYBRID,
   )
@@ -601,9 +596,7 @@ FW_QUERY_CONFIG = FwQueryConfig(
   non_essential_ecus={
     # FIXME: On some models, abs can sometimes be missing
     Ecu.abs: [CAR.TOYOTA_RAV4, CAR.TOYOTA_COROLLA, CAR.TOYOTA_HIGHLANDER, CAR.TOYOTA_SIENNA, CAR.LEXUS_IS, CAR.TOYOTA_ALPHARD_TSS2],
-    # F33 can transiently miss EPS F181 during NRTD startup. Its exact ABS
-    # identity remains sufficient to identify the Camry; if EPS does respond,
-    # the generic exact matcher still requires that response to match.
+    # EPS can miss the FW query during startup on TSS3 Camry
     Ecu.eps: [CAR.TOYOTA_CAMRY_TSS3],
     Ecu.fwdCamera: [CAR.TOYOTA_CAMRY_TSS3],
     # On some models, the engine can show on two different addresses
@@ -644,7 +637,7 @@ FW_QUERY_CONFIG = FwQueryConfig(
 
 STEER_THRESHOLD = 100
 
-# Physical steering-wheel torque threshold for exact F33 driver intervention.
+# Nm, physical steering wheel torque
 TSS3_STEER_DRIVER_TORQUE_THRESHOLD = 0.6
 
 # These cars have non-standard EPS torque scale factors. All others are 73

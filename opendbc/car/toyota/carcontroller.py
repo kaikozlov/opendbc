@@ -25,6 +25,7 @@ ACCEL_WINDDOWN_LIMIT = -4.0 * DT_CTRL * 3  # m/s^2 / frame
 ACCEL_PID_UNWIND = 0.03 * DT_CTRL * 3  # m/s^2 / frame
 
 MAX_PITCH_COMPENSATION = 1.5  # m/s^2
+
 # LKA limits
 # EPS faults if you apply torque while the steering rate is above 100 deg/s for too long
 MAX_STEER_RATE = 100  # deg/s
@@ -32,6 +33,12 @@ MAX_STEER_RATE_FRAMES = 17  # tx control frames needed before torque can be cut
 
 # EPS allows user torque above threshold for 50 frames before permanently faulting
 MAX_USER_TORQUE = 500
+
+
+def get_safety_CP():
+  # We use the TOYOTA_CAMRY_TSS3 platform for lateral limiting to match safety
+  from opendbc.car.toyota.interface import CarInterface
+  return CarInterface.get_non_essential_params(CAR.TOYOTA_CAMRY_TSS3)
 
 
 def get_long_tune(CP, params):
@@ -51,7 +58,6 @@ class CarController(CarControllerBase):
   def __init__(self, dbc_names, CP):
     super().__init__(dbc_names, CP)
     self.params = CarControllerParams(self.CP)
-    self.VM = VehicleModel(self.CP)
     self.last_torque = 0
     self.last_angle = 0
     self.alert_active = False
@@ -80,6 +86,9 @@ class CarController(CarControllerBase):
     self.tss3_request_transport = ToyotaTss3RequestTransport(
       self.packer, stock_longitudinal=not self.CP.openpilotLongitudinalControl,
     ) if self.CP.flags & ToyotaFlags.TSS3 else None
+
+    # Vehicle model used for lateral limiting
+    self.VM = VehicleModel(get_safety_CP()) if self.CP.flags & ToyotaFlags.TSS3 else None
 
   def observe_tss3_request_plane(self, can_packets, can_valid: bool) -> None:
     if self.tss3_request_transport is not None:

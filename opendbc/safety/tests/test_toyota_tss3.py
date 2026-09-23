@@ -4,6 +4,7 @@ import unittest
 from opendbc.can import CANPacker
 from opendbc.car.lateral import get_max_angle_delta_vm, get_max_angle_vm
 from opendbc.car.structs import CarParams
+from opendbc.car.toyota.carcontroller import get_safety_CP
 from opendbc.car.toyota.interface import CarInterface
 from opendbc.car.toyota.tss3 import build_host_application
 from opendbc.car.toyota.values import CAR, EPS_SCALE, CarControllerParams, ToyotaSafetyFlags
@@ -51,7 +52,7 @@ class TestToyotaTss3CamrySafety(common.CarSafetyTest, common.AngleSteeringSafety
 
     fingerprint = {bus: {} for bus in range(8)}
     self.CP = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint, [], True, False, False)
-    self.VM = VehicleModel(self.CP)
+    self.VM = VehicleModel(get_safety_CP())
     self.params = CarControllerParams(self.CP)
     self.params.STEER_STEP = 1 / (0.01 * self.LATERAL_FREQUENCY)
 

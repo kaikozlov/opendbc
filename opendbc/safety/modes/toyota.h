@@ -273,17 +273,16 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
   bool tx = true;
 
   if (toyota_tss3_signer) {
-    static const AngleSteeringLimits TOYOTA_F33_08A_ANGLE_STEERING_LIMITS = {
+    static const AngleSteeringLimits TOYOTA_TSS3_ANGLE_STEERING_LIMITS = {
       .max_angle = 1745,
       .angle_deg_to_can = 17.451171875F,
       .frequency = 100U,
     };
 
-    // Exact 2026 Camry parameters used by CarController's VehicleModel.
-    static const AngleSteeringParams TOYOTA_F33_ANGLE_STEERING_PARAMS = {
-      .slip_factor = -0.0007485661713436738F,
+    static const AngleSteeringParams TOYOTA_TSS3_STEERING_PARAMS = {
+      .slip_factor = -0.0007484283457339188F,  // calc_slip_factor(VM)
       .steer_ratio = 15.3F,
-      .wheelbase = 2.8244800567626953F,
+      .wheelbase = 2.825F,
     };
 
     const bool signer_control = (msg->bus == 1U) && (msg->addr == 0x777U);
@@ -324,8 +323,8 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
             // Give that first frame one nominal 100 Hz interval of rate budget.
             toyota_tss3_08a_last_angle_check_ts = microsecond_timer_get() - 10000U;
             desired_angle_last = SAFETY_CLAMP(angle_meas.values[0],
-                                              -TOYOTA_F33_08A_ANGLE_STEERING_LIMITS.max_angle,
-                                               TOYOTA_F33_08A_ANGLE_STEERING_LIMITS.max_angle);
+                                              -TOYOTA_TSS3_ANGLE_STEERING_LIMITS.max_angle,
+                                               TOYOTA_TSS3_ANGLE_STEERING_LIMITS.max_angle);
           }
         }
       } else {
@@ -385,28 +384,28 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
         // completed generations less than 10 ms apart, but that must not shrink
         // the budget already applied when the command was generated. Longer
         // publication gaps still receive their actual elapsed-time budget.
-        const uint32_t nominal_generation_interval_us = 1000000U / TOYOTA_F33_08A_ANGLE_STEERING_LIMITS.frequency;
+        const uint32_t nominal_generation_interval_us = 1000000U / TOYOTA_TSS3_ANGLE_STEERING_LIMITS.frequency;
         const uint32_t angle_rate_interval_us = SAFETY_MAX(
           safety_get_ts_elapsed(now, toyota_tss3_08a_last_angle_check_ts), nominal_generation_interval_us
         );
         if (host_lateral_active) {
-          angle_violation = steer_angle_cmd_checks_vm_timed(target_angle, true, TOYOTA_F33_08A_ANGLE_STEERING_LIMITS,
-                                                             TOYOTA_F33_ANGLE_STEERING_PARAMS, angle_rate_interval_us);
+          angle_violation = steer_angle_cmd_checks_vm_timed(target_angle, true, TOYOTA_TSS3_ANGLE_STEERING_LIMITS,
+                                                             TOYOTA_TSS3_STEERING_PARAMS, angle_rate_interval_us);
         } else if (host_lateral_inactive) {
-          angle_violation = steer_angle_cmd_checks_vm_timed(target_angle, false, TOYOTA_F33_08A_ANGLE_STEERING_LIMITS,
-                                                             TOYOTA_F33_ANGLE_STEERING_PARAMS, angle_rate_interval_us);
+          angle_violation = steer_angle_cmd_checks_vm_timed(target_angle, false, TOYOTA_TSS3_ANGLE_STEERING_LIMITS,
+                                                             TOYOTA_TSS3_STEERING_PARAMS, angle_rate_interval_us);
         } else {
           // The application-shape check above rejects every other lateral ID.
         }
         if (host_lateral_active || host_lateral_inactive) {
           toyota_tss3_08a_last_angle_check_ts = now;
         }
-        const bool max_angle_violation = safety_max_limit_check(target_angle, TOYOTA_F33_08A_ANGLE_STEERING_LIMITS.max_angle,
-                                                                -TOYOTA_F33_08A_ANGLE_STEERING_LIMITS.max_angle);
+        const bool max_angle_violation = safety_max_limit_check(target_angle, TOYOTA_TSS3_ANGLE_STEERING_LIMITS.max_angle,
+                                                                -TOYOTA_TSS3_ANGLE_STEERING_LIMITS.max_angle);
         angle_violation |= max_angle_violation;
         if (max_angle_violation) {
-          desired_angle_last = SAFETY_CLAMP(angle_meas.values[0], -TOYOTA_F33_08A_ANGLE_STEERING_LIMITS.max_angle,
-                                            TOYOTA_F33_08A_ANGLE_STEERING_LIMITS.max_angle);
+          desired_angle_last = SAFETY_CLAMP(angle_meas.values[0], -TOYOTA_TSS3_ANGLE_STEERING_LIMITS.max_angle,
+                                            TOYOTA_TSS3_ANGLE_STEERING_LIMITS.max_angle);
         }
         actuation_valid &= !angle_violation;
 
@@ -652,17 +651,17 @@ static safety_config toyota_init(uint16_t param) {
 
   safety_config ret;
   if (toyota_tss3_signer) {
-    static const CanMsg toyota_f33_tss3_tx_msgs[] = {
+    static const CanMsg toyota_tss3_tx_msgs[] = {
       {0x777, 1, 8, .check_relay = false},
       {0x777, 0, 8, .check_relay = false},
       {0x08A, 0, 32, .check_relay = true, .disable_static_blocking = true},
       {0x101, 2, 8, .check_relay = false},
-      // Only relay-correct F33 replaces 0x412. Keep relay collision checking,
+      // Only the relay topology replaces 0x412. Keep relay collision checking,
       // while the dynamic forwarding hook selects that physical topology.
       {0x412, 0, 8, .check_relay = true, .disable_static_blocking = true},
     };
-    SET_TX_MSGS(toyota_f33_tss3_tx_msgs, ret);
-    static RxCheck toyota_f33_08a_host_rx_checks[] = {
+    SET_TX_MSGS(toyota_tss3_tx_msgs, ret);
+    static RxCheck toyota_tss3_rx_checks[] = {
       {.msg = {{0x025, 0, 32, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
       {.msg = {{0x0AA, 0, 8, 100U, .ignore_checksum = true, .ignore_counter = true}, {0}, {0}}},
       {.msg = {{0x116, 0, 8, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
@@ -670,7 +669,7 @@ static safety_config toyota_init(uint16_t param) {
       // Native 0x08A remains an FRC-presence and engagement-state input only.
       {.msg = {{0x08A, 2, 32, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, {0}, {0}}},
     };
-    SET_RX_CHECKS(toyota_f33_08a_host_rx_checks, ret);
+    SET_RX_CHECKS(toyota_tss3_rx_checks, ret);
   } else if (toyota_secoc) {
     if (toyota_stock_longitudinal) {
       SET_TX_MSGS(TOYOTA_SECOC_TX_MSGS, ret);

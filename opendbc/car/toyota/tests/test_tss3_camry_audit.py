@@ -26,7 +26,7 @@ class TestCamryEvidenceAudit(unittest.TestCase):
     self.assertAlmostEqual(self.cp.tireStiffnessFactor, 0.7933, places=4)
     vm = VehicleModel(self.cp)
     vm.update_params(1.0, 15.3)
-    self.assertAlmostEqual(vm.cF, 163310.546875, delta=0.05)
+    self.assertAlmostEqual(vm.cF, 165517.5625, delta=0.05)
 
   def test_radar_uses_canonical_aux_bus(self):
     self.cp.radarUnavailable = False

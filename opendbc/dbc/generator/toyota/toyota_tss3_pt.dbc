@@ -29,8 +29,8 @@ BO_ 48 TSS3_EPS_TELEMETRY: 32 EPS
  SG_ ADDITIVE_BYTE_7 : 63|8@0+ (1,0) [0|255] "" XXX
  SG_ STEERING_WHEEL_TORQUE_COARSE : 71|8@0- (0.1,0) [-12.8|12.7] "Nm" XXX
  SG_ STEERING_WHEEL_TORQUE_FINE : 139|4@0- (0.01,0) [-0.08|0.07] "Nm" XXX
- SG_ F33_COOPERATIVE_COMMAND_INHIBIT : 128|1@0+ (1,0) [0|1] "" XXX
- SG_ F33_COOPERATIVE_ANGLE_INHIBIT : 152|1@0+ (1,0) [0|1] "" XXX
+ SG_ COOPERATIVE_COMMAND_INHIBIT : 128|1@0+ (1,0) [0|1] "" XXX
+ SG_ COOPERATIVE_ANGLE_INHIBIT : 152|1@0+ (1,0) [0|1] "" XXX
 
 BO_ 254 TSS3_CRUISE_SWITCH: 32 XXX
  SG_ MAIN_BUTTON : 58|1@0+ (1,0) [0|1] "" XXX
@@ -373,7 +373,7 @@ CM_ BO_ 48 "Exact H/F EPS transmits this 32-byte PDU. Driver torque and B6 safet
 CM_ SG_ 48 STEERING_WHEEL_TORQUE_TRUNC "DID 0x1035 Steering Wheel Torque source, saturating truncation-toward-zero 0.1 Nm view. It can differ from COARSE by one count due to firmware rounding.";
 CM_ SG_ 48 STEERING_WHEEL_TORQUE_COARSE "Coarse component of exact physical Steering Wheel Torque reconstruction.";
 CM_ SG_ 48 STEERING_WHEEL_TORQUE_FINE "Signed hundredths remainder. Exact torque = COARSE + FINE.";
-CM_ SG_ 48 EPS_FAULT_INHIBIT "Selected live EPS fault/inhibit aggregate. Exact F33 maps its recoverable current-unavailability projection to openpilot steerFaultTemporary; this is not an exhaustive fault list or a restart-required latch. H/F policy is separate.";
+CM_ SG_ 48 EPS_FAULT_INHIBIT "Selected live EPS fault/inhibit aggregate. Maps the recoverable current-unavailability projection to openpilot steerFaultTemporary; this is not an exhaustive fault list or a restart-required latch. H/F policy is separate.";
 CM_ SG_ 48 DRIVER_TORQUE_INVALID "Target-native driver-torque invalid/inhibit gate.";
 CM_ SG_ 48 EPS_STATUS_B6_BIT1 "Runtime status bit; exact OEM meaning unresolved.";
 CM_ SG_ 48 EPS_STATUS_B6_BIT3 "Runtime status bit; exact OEM meaning unresolved.";
