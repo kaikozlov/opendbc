@@ -145,6 +145,10 @@ class RadarInterface(RadarInterfaceBase):
     return result
 
   def _update(self, updated_messages):
+    # TSS3 has no STATUS_MSG
+    if self.CP.flags & ToyotaFlags.TSS3:
+      return self._update_tss3_points()
+
     ret = RadarData()
     if not self.rcp.can_valid:
       ret.errors.canError = True
