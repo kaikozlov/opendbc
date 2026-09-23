@@ -249,12 +249,10 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertFalse(state.steerFaultTemporary)
     self.assertFalse(state.steerFaultPermanent)
 
-  def test_request_transport_state_is_not_reported_as_a_vehicle_fault(self):
+  def test_request_transport_diagnostic_is_not_reported_as_a_vehicle_fault(self):
     ci = CarInterface(self.CP)
-    ci.CC.tss3_request_transport.control_enabled = True
-    ci.CC.tss3_request_transport.authority_failed = True
+    ci.CC.tss3_request_transport.last_failure_reason = "oracle_dead"
     state = update_state(ci)
-    self.assertTrue(ci.CC.tss3_request_transport.authority_unavailable())
     self.assertFalse(state.accFaulted)
     self.assertFalse(state.steerFaultTemporary)
     self.assertFalse(state.steerFaultPermanent)

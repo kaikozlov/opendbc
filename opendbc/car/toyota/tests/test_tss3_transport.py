@@ -6,7 +6,7 @@ from opendbc.car.toyota.tss3 import (
   ADMIN_ADDR, ADMIN_BUS, DOWNSTREAM_BUS, NATIVE_08A_ADDR, ORACLE_BUS,
   ORACLE_MAX_PENDING_GENERATIONS, ORACLE_REQUEST_ADDR, ORACLE_RESPONSE_ADDR, ORACLE_SEQUENCE_MAX,
   ORACLE_GENERATION_INTERVAL_NS, PANDA_REJECTED_OFFSET, PANDA_RETURNED_OFFSET, SOURCE_BUS,
-  ToyotaTss3RequestTransport, build_host_application, build_oracle_transport,
+  ToyotaTss3RequestTransport, build_host_application, build_oracle_transport, make_request_plane_admin,
 )
 
 
@@ -255,6 +255,18 @@ class TestToyotaTss3RequestTransport(unittest.TestCase):
     host1 = next(msg for msg in sends if msg.address == NATIVE_08A_ADDR)
     self.assertEqual(host1.dat[8:10], bytes(2))
 
+  def test_all_axis_activity_edges_keep_the_same_control_epoch(self):
+    self.update_control(1_000_000_000, lat_active=True, long_active=True)
+    epoch = self.transport.control_epoch
+    first_request = self.transport.pending_requests[0]
+
+    for i, (lat_active, long_active) in enumerate(((False, True), (False, False), (True, False), (True, True)), start=1):
+      sends = self.update_control(1_000_000_000 + i * 10_000_000,
+                                  lat_active=lat_active, long_active=long_active)
+      self.assertEqual(self.transport.control_epoch, epoch)
+      self.assertIs(self.transport.pending_requests[0], first_request)
+      self.assertNotIn(make_request_plane_admin(False), sends)
+
   def test_unmatched_signer_response_is_ignored(self):
     seq = self.start_request(1_000_000_000)
     other = (seq % ORACLE_SEQUENCE_MAX) + 1
@@ -267,7 +279,6 @@ class TestToyotaTss3RequestTransport(unittest.TestCase):
     sends = self.update_control(1_000_000_000)
     self.assertEqual(sends, [])
     self.assertEqual(self.transport.control_started_ns, 0)
-    self.assertFalse(self.transport.authority_unavailable())
 
     # Recovering CAN well after 90 ms must start acquisition normally rather
     # than inheriting a watchdog deadline from the earlier enable edge.
@@ -275,7 +286,6 @@ class TestToyotaTss3RequestTransport(unittest.TestCase):
     sends = self.update_control(2_000_000_000)
     self.assertEqual(len(oracle_request_frames(sends)), 4)
     self.assertEqual(self.transport.control_started_ns, 2_000_000_000)
-    self.assertFalse(self.transport.authority_unavailable())
 
   def test_pipeline_is_bounded_when_signer_stops_responding(self):
     for i in range(ORACLE_MAX_PENDING_GENERATIONS):
@@ -287,12 +297,11 @@ class TestToyotaTss3RequestTransport(unittest.TestCase):
 
     sends = self.update_control(1_080_000_000, angle=20.0)
     self.assertFalse(oracle_request_frames(sends))
-    self.assertFalse(self.transport.authority_unavailable())
 
     sends = self.update_control(1_100_000_000, angle=20.0)
     self.assertEqual(self.transport.last_failure_reason, "oracle_dead")
-    self.assertTrue(self.transport.authority_unavailable())
-    self.assertFalse(oracle_request_frames(sends))
+    self.assertEqual(len(oracle_request_frames(sends)), 4)
+    self.assertEqual(self.transport.control_started_ns, 1_100_000_000)
 
   def test_disable_releases_request_plane(self):
     self.finish_handoff()
@@ -308,7 +317,7 @@ class TestToyotaTss3RequestTransport(unittest.TestCase):
     self.assertEqual(self.transport.last_failure_reason, "can_invalid")
     self.assertFalse(self.transport.active)
 
-  def test_handoff_reject_reports_unavailable_authority(self):
+  def test_handoff_reject_restarts_acquisition(self):
     sequence = self.start_request()
     self.transport.observe(response(1_015_000_000, sequence), True)
     sends = self.update_control(1_020_000_000)
@@ -316,22 +325,26 @@ class TestToyotaTss3RequestTransport(unittest.TestCase):
     self.transport.observe(packets(1_021_000_000, CanData(host.address, host.dat,
                                                          DOWNSTREAM_BUS + PANDA_REJECTED_OFFSET)), True)
     self.assertEqual(self.transport.last_failure_reason, "handoff_host_frame_rejected")
-    self.assertTrue(self.transport.authority_unavailable())
+    sends = self.update_control(1_022_000_000)
+    self.assertIn(CanData(ADMIN_ADDR, bytes.fromhex("07c9a80000000000"), ADMIN_BUS), sends)
+    self.assertEqual(len(oracle_request_frames(sends)), 4)
 
-  def test_new_engagement_clears_a_previous_authority_failure(self):
+  def test_handoff_reject_recovers_without_new_engagement(self):
     sequence = self.start_request()
     self.transport.observe(response(1_015_000_000, sequence), True)
     sends = self.update_control(1_020_000_000)
     host = next(msg for msg in sends if msg.address == NATIVE_08A_ADDR)
     self.transport.observe(packets(1_021_000_000, CanData(host.address, host.dat,
                                                          DOWNSTREAM_BUS + PANDA_REJECTED_OFFSET)), True)
-    self.assertTrue(self.transport.authority_unavailable())
-
-    self.update_control(1_022_000_000, enabled=False, lat_active=False, long_active=False)
-    sends = self.update_control(1_030_000_000)
-    self.assertFalse(self.transport.authority_unavailable())
+    sends = self.update_control(1_022_000_000)
+    retry_sequence = request_sequence_from_sends(sends)
+    self.transport.observe(response(1_037_000_000, retry_sequence), True)
+    sends = self.update_control(1_042_000_000)
+    retry_host = next(msg for msg in sends if msg.address == NATIVE_08A_ADDR)
+    self.transport.observe(packets(1_042_000_001, CanData(retry_host.address, retry_host.dat,
+                                                         DOWNSTREAM_BUS + PANDA_RETURNED_OFFSET)), True)
+    self.assertTrue(self.transport.active)
     self.assertEqual(self.transport.last_failure_reason, "")
-    self.assertEqual(len(oracle_request_frames(sends)), 4)
 
 
 if __name__ == "__main__":

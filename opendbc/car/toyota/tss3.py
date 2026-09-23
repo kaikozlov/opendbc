@@ -153,11 +153,7 @@ class ToyotaTss3RequestTransport:
     self.last_publication_ns = 0
     self.last_host_send_ns = 0
     self.last_host_request_sequence: int | None = None
-    self.authority_failed = False
     self.last_failure_reason = ""
-
-  def authority_unavailable(self) -> bool:
-    return self.control_enabled and self.authority_failed
 
   def _record_failure(self, reason: str) -> None:
     self.last_failure_reason = reason
@@ -191,17 +187,14 @@ class ToyotaTss3RequestTransport:
     self.control_started_ns = 0
     self._invalidate_actuation()
 
-  def _authority_failure(self, reason: str) -> None:
-    if self.authority_failed:
-      return
-    self.authority_failed = True
+  def _restart_after_failure(self, reason: str) -> None:
     self._record_failure(reason)
     self._release()
 
   def _observe_tx_echo(self, address: int, data: bytes, src: int, now_ns: int) -> None:
     if address == ADMIN_ADDR and self.arm_pending and data == make_request_plane_admin(True).dat:
       if src == ADMIN_BUS + PANDA_REJECTED_OFFSET:
-        self._authority_failure("arm_admin_rejected")
+        self._restart_after_failure("arm_admin_rejected")
       return
     if address != NATIVE_08A_ADDR:
       return
@@ -212,11 +205,12 @@ class ToyotaTss3RequestTransport:
         self.arm_pending = False
         self.arm_host_frame = None
         self.last_publication_ns = now_ns
+        self.last_failure_reason = ""
       elif self.active:
         self.last_publication_ns = now_ns
     elif src == DOWNSTREAM_BUS + PANDA_REJECTED_OFFSET:
       if self.arm_pending and data == self.arm_host_frame:
-        self._authority_failure("handoff_host_frame_rejected")
+        self._restart_after_failure("handoff_host_frame_rejected")
       elif self.active:
         carlog.warning("Toyota F33 request plane TX rejected")
 
@@ -254,7 +248,7 @@ class ToyotaTss3RequestTransport:
   def observe(self, can_packets: list[tuple[int, list[CanData]]], can_valid: bool) -> None:
     self.can_valid = bool(can_valid)
     if not self.can_valid and (self.active or self.arm_pending):
-      self._authority_failure("can_invalid")
+      self._restart_after_failure("can_invalid")
 
     for nanos, packets in can_packets:
       now_ns = int(nanos)
@@ -267,12 +261,12 @@ class ToyotaTss3RequestTransport:
 
   def _expire(self, now_ns: int) -> None:
     self._prune_head()
-    if not self.control_enabled or not self.can_valid or self.authority_failed:
+    if not self.control_enabled or not self.can_valid:
       return
 
     reference_ns = self.last_publication_ns if self.active else self.control_started_ns
     if reference_ns and now_ns - reference_ns > ORACLE_PUBLICATION_DEADLINE_NS:
-      self._authority_failure("oracle_dead")
+      self._restart_after_failure("oracle_dead")
 
   def _take_ready_host_frame(self, now_ns: int) -> bytes | None:
     self._prune_head()
@@ -309,7 +303,7 @@ class ToyotaTss3RequestTransport:
 
   def _queue_signing_latest(self, now_ns: int) -> None:
     self._prune_head()
-    if (not self.control_enabled or not self.can_valid or self.authority_failed or
+    if (not self.control_enabled or not self.can_valid or
         len(self.pending_requests) >= ORACLE_MAX_PENDING_GENERATIONS):
       return
 
@@ -338,7 +332,7 @@ class ToyotaTss3RequestTransport:
     enabled = bool(enabled)
     control_state = (enabled, bool(enabled and lat_active), bool(enabled and long_active))
     previous_state = (self.control_enabled, self.control_lat_active, self.control_long_active)
-    if not enabled or not self.can_valid or self.authority_failed:
+    if not enabled or not self.can_valid:
       return False
     if control_state != previous_state:
       return True
@@ -357,7 +351,6 @@ class ToyotaTss3RequestTransport:
       self.control_epoch += 1
       self._invalidate_actuation()
       if enabled and not self.control_enabled:
-        self.authority_failed = False
         self.last_failure_reason = ""
         self.next_request_sequence = 0
         self.control_started_ns = 0
@@ -374,22 +367,21 @@ class ToyotaTss3RequestTransport:
       self._release()
     else:
       self._expire(now_nanos)
-      if not self.authority_failed:
-        # Do not send a second host frame before Panda confirms the arm frame.
-        # Once active, publish at most one signed application per 10 ms control
-        # tick even if multiple EPS responses arrived in the same CAN batch.
-        if not self.arm_pending:
-          frame = self._take_ready_host_frame(now_nanos)
-          if frame is not None:
-            if not self.active:
-              self.pending_sends.append(make_request_plane_admin(True))
-              self.arm_pending = True
-              self.arm_host_frame = frame
-            self.pending_sends.append(CanData(NATIVE_08A_ADDR, frame, DOWNSTREAM_BUS))
+      # Do not send a second host frame before Panda confirms the arm frame.
+      # Once active, publish at most one signed application per 10 ms control
+      # tick even if multiple EPS responses arrived in the same CAN batch.
+      if not self.arm_pending:
+        frame = self._take_ready_host_frame(now_nanos)
+        if frame is not None:
+          if not self.active:
+            self.pending_sends.append(make_request_plane_admin(True))
+            self.arm_pending = True
+            self.arm_host_frame = frame
+          self.pending_sends.append(CanData(NATIVE_08A_ADDR, frame, DOWNSTREAM_BUS))
 
-        # Normal CarController cadence is the only publication scheduler. Keep
-        # enough requests in flight to hide the EPS signer round-trip latency.
-        self._queue_signing_latest(now_nanos)
+      # Normal CarController cadence is the only publication scheduler. Keep
+      # enough requests in flight to hide the EPS signer round-trip latency.
+      self._queue_signing_latest(now_nanos)
 
     sends, self.pending_sends = self.pending_sends, []
     return sends
