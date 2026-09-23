@@ -65,6 +65,14 @@ static bool toyota_tss3_08a_host = false;
 static bool toyota_tss3_08a_replacement_active = false;
 static uint32_t toyota_tss3_08a_last_publication_ts = 0U;
 static uint32_t toyota_tss3_08a_last_angle_check_ts = 0U;
+#define TOYOTA_TSS3_08A_STOCK_HISTORY_LEN 16U
+#define TOYOTA_TSS3_08A_APPLICATION_LEN 28U
+#define TOYOTA_TSS3_08A_REPLACEMENT_TIMEOUT_US 100000U
+static uint8_t toyota_tss3_08a_stock_applications[TOYOTA_TSS3_08A_STOCK_HISTORY_LEN][TOYOTA_TSS3_08A_APPLICATION_LEN] = {{0}};
+static uint32_t toyota_tss3_08a_stock_timestamps[TOYOTA_TSS3_08A_STOCK_HISTORY_LEN] = {0};
+static uint8_t toyota_tss3_08a_stock_history_next = 0U;
+static uint8_t toyota_tss3_08a_stock_history_count = 0U;
+static uint32_t toyota_tss3_08a_native_last_rx_ts = 0U;
 static int toyota_dbc_eps_torque_factor = 100;   // conversion factor for STEER_TORQUE_EPS in %: see dbc file
 
 static uint32_t toyota_compute_checksum(const CANPacket_t *msg) {
@@ -102,8 +110,19 @@ static bool toyota_get_quality_flag_valid(const CANPacket_t *msg) {
 static void toyota_rx_hook(const CANPacket_t *msg) {
   if (toyota_tss3_08a_host) {
     if ((msg->bus == 2U) && (msg->addr == 0x8AU) && (GET_LEN(msg) == 32U)) {
-      // The FRC operating latch remains the ordinary engagement input. Native
-      // application, sequence, and freshness fields are not consumed.
+      for (uint8_t i = 0U; i < TOYOTA_TSS3_08A_APPLICATION_LEN; i++) {
+        toyota_tss3_08a_stock_applications[toyota_tss3_08a_stock_history_next][i] = msg->data[i];
+      }
+      toyota_tss3_08a_stock_timestamps[toyota_tss3_08a_stock_history_next] = microsecond_timer_get();
+      toyota_tss3_08a_stock_history_next = (toyota_tss3_08a_stock_history_next + 1U) % TOYOTA_TSS3_08A_STOCK_HISTORY_LEN;
+      if (toyota_tss3_08a_stock_history_count < TOYOTA_TSS3_08A_STOCK_HISTORY_LEN) {
+        toyota_tss3_08a_stock_history_count++;
+      }
+      toyota_tss3_08a_native_last_rx_ts = microsecond_timer_get();
+
+      // The FRC operating latch remains the ordinary engagement input. The
+      // recent application history also bounds stock-longitudinal replacement
+      // to values received from the FRC while allowing signer pipeline delay.
       pcm_cruise_check(GET_BIT(msg, 27U));
     }
   }
@@ -295,7 +314,9 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
         } else {
           // Arm switches 0x08A publication ownership. The EPS resident supplies
           // an independently fresh security trailer for every host frame.
-          tx = !toyota_stock_longitudinal;
+          const uint32_t native_age = safety_get_ts_elapsed(microsecond_timer_get(), toyota_tss3_08a_native_last_rx_ts);
+          tx = !toyota_stock_longitudinal || ((toyota_tss3_08a_stock_history_count > 0U) &&
+                                               (native_age <= TOYOTA_TSS3_08A_REPLACEMENT_TIMEOUT_US));
           if (tx) {
             toyota_tss3_08a_replacement_active = true;
             toyota_tss3_08a_last_publication_ts = microsecond_timer_get();
@@ -319,8 +340,25 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
                                msg->fd && (GET_LEN(msg) == 32U);
       bool actuation_valid = true;
 
-      if (application_shape) {
-        // Complete comma-owned active envelope. Only set speed, commanded
+      if (application_shape && toyota_stock_longitudinal) {
+        bool stock_application_match = false;
+        for (uint8_t history_index = 0U; history_index < toyota_tss3_08a_stock_history_count; history_index++) {
+          bool candidate_match = safety_get_ts_elapsed(now, toyota_tss3_08a_stock_timestamps[history_index]) <=
+                                 TOYOTA_TSS3_08A_REPLACEMENT_TIMEOUT_US;
+          for (uint8_t i = 0U; i < TOYOTA_TSS3_08A_APPLICATION_LEN; i++) {
+            uint8_t compare_mask = 0xFFU;
+            if ((i == 18U) || (i == 19U) || (i == 24U) || (i == 25U)) {
+              compare_mask = 0U;
+            } else if ((i == 21U) || (i == 26U)) {
+              compare_mask = 0xC0U;
+            }
+            candidate_match &= ((msg->data[i] ^ toyota_tss3_08a_stock_applications[history_index][i]) & compare_mask) == 0U;
+          }
+          stock_application_match |= candidate_match;
+        }
+        application_shape &= stock_application_match;
+      } else if (application_shape) {
+        // Complete comma-owned application envelope. Only set speed, commanded
         // angle/acceleration, request sequence, and MAC are variable.
         application_shape &= (msg->data[0] == 0U) && (msg->data[1] == 0U) &&
                              (msg->data[2] == 0U) && (msg->data[3] == 0x08U) &&
@@ -328,13 +366,16 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
                              (msg->data[13] == 0x7FU) && (msg->data[14] == 0xFFU) &&
                              (msg->data[15] == 0U) && (msg->data[16] == 0x7FU) &&
                              (msg->data[17] == 0xFFU) && (msg->data[20] == 0xC0U) &&
+                             ((msg->data[21] & 0xC0U) == 0U) &&
                              (msg->data[22] == 0x10U) && (msg->data[23] == 0U) &&
                              (msg->data[25] == 0U) && (msg->data[27] == 0U);
+      }
 
-        const uint8_t host_id = msg->data[21];
+      if (application_shape) {
+        const uint8_t host_id = msg->data[21] & 0x3FU;
         const bool host_lateral_active = (host_id == 11U) && (msg->data[24] == 100U);
         const bool host_lateral_inactive = (host_id == 0U) && (msg->data[24] == 50U);
-        application_shape &= host_lateral_active || host_lateral_inactive;
+        application_shape &= (host_lateral_active || host_lateral_inactive) && (msg->data[25] == 0U);
 
         int target_angle = (msg->data[18] << 8U) | msg->data[19];
         target_angle = to_signed(target_angle, 16);
@@ -369,14 +410,14 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
         }
         actuation_valid &= !angle_violation;
 
-        int accel_a = (msg->data[8] << 8U) | msg->data[9];
-        int accel_b = (msg->data[11] << 8U) | msg->data[12];
-        accel_a = to_signed(accel_a, 16);
-        accel_b = to_signed(accel_b, 16);
-        const bool host_longitudinal = (msg->data[6] == 0x2DU) && (msg->data[7] == 0x47U) &&
-                                       (accel_a == accel_b);
-        application_shape &= !toyota_stock_longitudinal && host_longitudinal;
-        if (host_longitudinal) {
+        if (!toyota_stock_longitudinal) {
+          int accel_a = (msg->data[8] << 8U) | msg->data[9];
+          int accel_b = (msg->data[11] << 8U) | msg->data[12];
+          accel_a = to_signed(accel_a, 16);
+          accel_b = to_signed(accel_b, 16);
+          const bool host_longitudinal = (msg->data[6] == 0x2DU) && (msg->data[7] == 0x47U) &&
+                                         (accel_a == accel_b);
+          application_shape &= host_longitudinal;
           // The VMC arbitration layer owns driver override and publishes the
           // selected longitudinal result as ID 63. Retain the normal controls
           // gate and absolute request envelope, but do not apply Panda's
@@ -385,7 +426,7 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
                                    !safety_max_limit_check(accel_a, TOYOTA_LONG_LIMITS.max_accel,
                                                            TOYOTA_LONG_LIMITS.min_accel);
           const bool accel_inactive = accel_a == TOYOTA_LONG_LIMITS.inactive_accel;
-          actuation_valid &= accel_valid || accel_inactive;
+          actuation_valid &= (accel_valid || accel_inactive) && host_longitudinal;
         }
       }
 
@@ -550,7 +591,6 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
 
 static bool toyota_fwd_hook(int bus_num, int addr) {
   // Fail open if authenticated host replacement traffic disappears for 100 ms.
-  const uint32_t TOYOTA_TSS3_08A_REPLACEMENT_TIMEOUT_US = 100000U;
   bool block = toyota_tss3_08a_host &&
                (bus_num == 2) && (addr == 0x412);
   if (toyota_tss3_08a_host && toyota_tss3_08a_replacement_active &&
@@ -605,6 +645,9 @@ static safety_config toyota_init(uint16_t param) {
   toyota_tss3_08a_replacement_active = false;
   toyota_tss3_08a_last_publication_ts = 0U;
   toyota_tss3_08a_last_angle_check_ts = 0U;
+  toyota_tss3_08a_stock_history_next = 0U;
+  toyota_tss3_08a_stock_history_count = 0U;
+  toyota_tss3_08a_native_last_rx_ts = 0U;
   toyota_dbc_eps_torque_factor = param & TOYOTA_EPS_FACTOR;
 
   safety_config ret;

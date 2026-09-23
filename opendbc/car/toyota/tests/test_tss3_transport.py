@@ -101,6 +101,86 @@ class TestToyotaTss3RequestTransport(unittest.TestCase):
     )
     self.assertEqual(application.hex(), "0000000880002d47fe0c46fe0c7fff007fffff85c00b100064000c00")
 
+  def test_stock_longitudinal_application_only_replaces_lateral_fields(self):
+    stock = bytes.fromhex("00000008a0043543ff380cff067ffe007ffdff0123d255342132a57e")
+    application = build_host_application(
+      self.packer,
+      lat_active=True,
+      target_angle_raw=-123,
+      long_active=False,
+      accel=2.0,
+      set_speed_kph=70.0,
+      request_sequence=12,
+      stock_application=stock,
+    )
+
+    for index in (*range(18), 20, 22, 23, 27):
+      self.assertEqual(application[index], stock[index], index)
+    self.assertEqual(application[18:20], (-123).to_bytes(2, "big", signed=True))
+    self.assertEqual(application[21] & 0x3F, 11)
+    self.assertEqual(application[21] & 0xC0, stock[21] & 0xC0)
+    self.assertEqual(application[24:26], bytes((100, 0)))
+    self.assertEqual(application[26] & 0x3F, 12)
+    self.assertEqual(application[26] & 0xC0, stock[26] & 0xC0)
+
+  def test_stock_longitudinal_transport_waits_for_frc_application(self):
+    transport = ToyotaTss3RequestTransport(self.packer, stock_longitudinal=True)
+    transport.observe([], True)
+    self.assertFalse(transport.control_generation_due(
+      enabled=True, lat_active=True, long_active=False, now_nanos=1_000_000_000,
+    ))
+    self.assertEqual(transport.update_control(
+      enabled=True, lat_active=True, target_angle_deg=0.0, long_active=False,
+      accel=0.0, set_speed_kph=70.0, now_nanos=1_000_000_000,
+    ), [])
+
+    stock = bytes.fromhex("00000008a0043543ff380cff067ffe007ffdff0123d255342132a57e")
+    transport.observe(packets(1_005_000_000, CanData(NATIVE_08A_ADDR, stock + bytes(4), SOURCE_BUS)), True)
+    self.assertTrue(transport.control_generation_due(
+      enabled=True, lat_active=True, long_active=False, now_nanos=1_010_000_000,
+    ))
+    sends = transport.update_control(
+      enabled=True, lat_active=True, target_angle_deg=0.0, long_active=False,
+      accel=0.0, set_speed_kph=70.0, now_nanos=1_010_000_000,
+    )
+    self.assertEqual(len(oracle_request_frames(sends)), 4)
+    self.assertEqual(transport.pending_requests[0].application[6:18], stock[6:18])
+
+  def test_stock_longitudinal_40hz_source_does_not_gate_100hz_host_publication(self):
+    transport = ToyotaTss3RequestTransport(self.packer, stock_longitudinal=True)
+    stock = bytes.fromhex("00000008a0043543ff380cff067ffe007ffdff0123d255342132a57e")
+    start_ns = 1_000_000_000
+    transport.observe(packets(start_ns, CanData(NATIVE_08A_ADDR, stock + bytes(4), SOURCE_BUS)), True)
+
+    sends = transport.update_control(
+      enabled=True, lat_active=True, target_angle_deg=0.0, long_active=False,
+      accel=0.0, set_speed_kph=70.0, now_nanos=start_ns,
+    )
+    seq0 = request_sequence_from_sends(sends)
+    transport.observe(response(start_ns + 5_000_000, seq0), True)
+
+    sends = transport.update_control(
+      enabled=True, lat_active=True, target_angle_deg=0.1, long_active=False,
+      accel=0.0, set_speed_kph=70.0, now_nanos=start_ns + 10_000_000,
+    )
+    host0 = next(msg for msg in sends if msg.address == NATIVE_08A_ADDR)
+    seq1 = request_sequence_from_sends(sends)
+    transport.observe(packets(start_ns + 10_000_001, CanData(
+      host0.address, host0.dat, DOWNSTREAM_BUS + PANDA_RETURNED_OFFSET,
+    )), True)
+    transport.observe(response(start_ns + 15_000_000, seq1), True)
+
+    # No second FRC frame has arrived, but the next signed host generation is
+    # still published 10 ms later with a fresh application sequence.
+    sends = transport.update_control(
+      enabled=True, lat_active=True, target_angle_deg=0.2, long_active=False,
+      accel=0.0, set_speed_kph=70.0, now_nanos=start_ns + 20_000_000,
+    )
+    host1 = next(msg for msg in sends if msg.address == NATIVE_08A_ADDR)
+    self.assertEqual((host0.dat[26] & 0x3F, host1.dat[26] & 0x3F), (0, 1))
+    self.assertEqual(host0.dat[6:18], stock[6:18])
+    self.assertEqual(host1.dat[6:18], stock[6:18])
+
   def test_controller_clock_generates_without_a_native_08a_tick(self):
     self.assertTrue(self.transport.control_generation_due(
       enabled=True, lat_active=True, long_active=True, now_nanos=1_000_000_000,

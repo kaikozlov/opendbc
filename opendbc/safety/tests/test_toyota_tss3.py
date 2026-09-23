@@ -267,5 +267,73 @@ class TestToyotaTss3CamrySafety(common.CarSafetyTest, common.AngleSteeringSafety
     return self.packer.make_can_msg_safety("TSS3_CONTROL_REQUEST", 2, {"CRUISE_OPERATING_LATCH": enable})
 
 
+class TestToyotaTss3CamryStockLongitudinalSafety(unittest.TestCase):
+  STOCK_08A = bytes.fromhex("0000000880002d47fe462afe467fff007fffff35c000100064003c005db7797f")
+
+  def setUp(self):
+    self.application_packer = CANPacker("toyota_tss3_pt_generated")
+    self.safety = libsafety_py.libsafety
+    param = (EPS_SCALE[CAR.TOYOTA_CAMRY_TSS3] | ToyotaSafetyFlags.STOCK_LONGITUDINAL |
+             ToyotaSafetyFlags.TSS3_SIGNER | ToyotaSafetyFlags.TSS3_08A_HOST)
+    self.assertEqual(self.safety.set_safety_hooks(CarParams.SafetyModel.toyota, param), 0)
+    self.safety.init_tests()
+    self.safety.set_timer(0)
+
+  @staticmethod
+  def _admin_msg(arm: bool):
+    return libsafety_py.make_CANPacket(0x777, 1, bytes((7, 0xC9, 0xA8, int(arm), 0, 0, 0, 0)))
+
+  @staticmethod
+  def _fd_msg(data: bytes, bus: int):
+    msg = libsafety_py.make_CANPacket(0x08A, bus, data)
+    msg[0].fd = 1
+    return msg
+
+  def _host_msg(self, stock: bytes | None = None, request_sequence: int = 12):
+    stock = self.STOCK_08A if stock is None else stock
+    application = build_host_application(
+      self.application_packer,
+      lat_active=False,
+      target_angle_raw=0,
+      long_active=False,
+      accel=0.0,
+      set_speed_kph=0.0,
+      request_sequence=request_sequence,
+      stock_application=stock[:28],
+    )
+    return self._fd_msg(application + bytes(4), 0)
+
+  def test_stock_longitudinal_requires_recent_frc_application(self):
+    self.assertFalse(self.safety.safety_tx_hook(self._admin_msg(True)))
+    self.assertTrue(self.safety.safety_rx_hook(self._fd_msg(self.STOCK_08A, 2)))
+    self.assertTrue(self.safety.safety_tx_hook(self._admin_msg(True)))
+    self.assertTrue(self.safety.safety_tx_hook(self._host_msg()))
+
+    self.safety.set_timer(100_001)
+    self.assertFalse(self.safety.safety_tx_hook(self._host_msg()))
+    self.assertTrue(self.safety.safety_tx_hook(self._admin_msg(False)))
+    self.assertFalse(self.safety.safety_tx_hook(self._admin_msg(True)))
+
+  def test_stock_longitudinal_fields_must_match_frc(self):
+    self.assertTrue(self.safety.safety_rx_hook(self._fd_msg(self.STOCK_08A, 2)))
+    self.assertTrue(self.safety.safety_tx_hook(self._admin_msg(True)))
+
+    for index in (3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 17, 20, 22, 23, 27):
+      with self.subTest(index=index):
+        msg = self._host_msg()
+        msg[0].data[index] ^= 1
+        self.assertFalse(self.safety.safety_tx_hook(msg))
+
+    # Lateral fields and the host request sequence remain independently owned.
+    self.assertTrue(self.safety.safety_tx_hook(self._host_msg()))
+
+  def test_one_frc_application_allows_multiple_100hz_host_generations(self):
+    self.assertTrue(self.safety.safety_rx_hook(self._fd_msg(self.STOCK_08A, 2)))
+    self.assertTrue(self.safety.safety_tx_hook(self._admin_msg(True)))
+    for request_sequence in range(3):
+      self.safety.set_timer(request_sequence * 10_000)
+      self.assertTrue(self.safety.safety_tx_hook(self._host_msg(request_sequence=request_sequence)))
+
+
 if __name__ == "__main__":
   unittest.main()

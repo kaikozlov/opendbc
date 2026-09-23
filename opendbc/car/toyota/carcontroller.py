@@ -77,7 +77,9 @@ class CarController(CarControllerBase):
     self.secoc_acc_message_counter = 0
     self.secoc_prev_reset_counter = 0
 
-    self.tss3_request_transport = ToyotaTss3RequestTransport(self.packer) if self.CP.flags & ToyotaFlags.TSS3 else None
+    self.tss3_request_transport = ToyotaTss3RequestTransport(
+      self.packer, stock_longitudinal=not self.CP.openpilotLongitudinalControl,
+    ) if self.CP.flags & ToyotaFlags.TSS3 else None
 
   def observe_tss3_request_plane(self, can_packets, can_valid: bool) -> None:
     if self.tss3_request_transport is not None:
@@ -131,8 +133,9 @@ class CarController(CarControllerBase):
           CC.latActive, steer_alert,
         ))
 
-      # The signer transport samples this bounded command onto native freshness
-      # ticks. Relay-host mode owns both axes.
+      # The signer transport creates one application per 100 Hz controller
+      # generation. Stock-long mode reuses the latest 40 Hz FRC application
+      # until a newer source frame arrives; native 0x08A is not the host clock.
       output.accel = float(np.clip(CC.actuators.accel, self.params.ACCEL_MIN, self.params.ACCEL_MAX)) \
         if longitudinal_command_active else 0.0
 

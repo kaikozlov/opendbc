@@ -40,8 +40,9 @@ class CarInterface(CarInterfaceBase):
       ret.steerControlType = SteerControlType.angle
       ret.dashcamOnly = False
       ret.radarUnavailable = False
-      ret.openpilotLongitudinalControl = True
-      ret.autoResumeSng = True
+      ret.alphaLongitudinalAvailable = True
+      ret.openpilotLongitudinalControl = alpha_long
+      ret.autoResumeSng = ret.openpilotLongitudinalControl
       ret.pcmCruise = True
       ret.secOcRequired = False  # no host key; external authentication is still required
       ret.minEnableSpeed = -1.
@@ -55,6 +56,8 @@ class CarInterface(CarInterfaceBase):
         structs.CarParams.SafetyModel.toyota,
         EPS_SCALE[candidate] | ToyotaSafetyFlags.TSS3_SIGNER.value | ToyotaSafetyFlags.TSS3_08A_HOST.value,
       )]
+      if not ret.openpilotLongitudinalControl:
+        ret.safetyConfigs[0].safetyParam |= ToyotaSafetyFlags.STOCK_LONGITUDINAL.value
       if 0x3F6 in fingerprint.get(TSS3_SOURCE_BUS, {}):
         ret.flags |= ToyotaFlags.HAS_BSM.value
       return ret

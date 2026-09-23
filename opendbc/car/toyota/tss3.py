@@ -49,17 +49,21 @@ def target_angle_deg_to_raw(angle_deg: float) -> int:
 
 def build_host_application(packer, *, lat_active: bool, target_angle_raw: int,
                            long_active: bool, accel: float,
-                           set_speed_kph: float, request_sequence: int) -> bytes:
-  """Build the complete comma-owned TSS3 0x08A application.
+                           set_speed_kph: float, request_sequence: int,
+                           stock_application: bytes | None = None) -> bytes:
+  """Build the TSS3 0x08A application with independently selected axis owners.
 
-  The FRC frame is never an application template or freshness source. The
-  constants below are the dominant complete Camry active and inactive
-  envelopes measured across 44,613 native publications.
+  With stock longitudinal, preserve the FRC application and replace only the
+  recovered lateral tuple and host-owned request sequence. With openpilot
+  longitudinal, construct the complete known Camry application envelope.
   """
   if not -(1 << 15) <= target_angle_raw < (1 << 15):
     raise ValueError("target angle must fit signed16")
   if not 0 <= request_sequence <= 0x3F:
     raise ValueError("request sequence must fit u6")
+
+  if stock_application is not None and len(stock_application) != 28:
+    raise ValueError("stock 0x08A application must be exactly 28 bytes")
 
   accel_request = float(accel) if long_active else 0.0
   if not -32.768 <= accel_request <= 32.767:
@@ -86,7 +90,18 @@ def build_host_application(packer, *, lat_active: bool, target_angle_raw: int,
     "REQUEST_SEQUENCE": request_sequence,
   }
   _, data, _ = packer.make_can_msg("TSS3_CONTROL_REQUEST", DOWNSTREAM_BUS, values)
-  return data[:28]
+  application = bytearray(stock_application if stock_application is not None else data[:28])
+
+  if stock_application is not None:
+    # These are the complete recovered lateral application fields. Preserve all
+    # other FRC bytes, including longitudinal request IDs, unequal upper/lower
+    # bounds, set speed, hold state, and still-unmapped arbitration metadata.
+    application[18:20] = data[18:20]
+    application[21] = (application[21] & 0xC0) | (data[21] & 0x3F)
+    application[24:26] = data[24:26]
+    application[26] = (application[26] & 0xC0) | (request_sequence & 0x3F)
+
+  return bytes(application)
 
 
 def make_request_plane_admin(arm: bool) -> CanData:
@@ -125,12 +140,15 @@ class ToyotaTss3RequestTransport:
   tick can enqueue one fresh application for the EPS signer; the EPS owns all
   SecOC freshness and returns only FV4||MAC28. A small pipeline hides signer
   round-trip latency without replaying historical control after a missing
-  private response. Native 0x08A remains a liveness input to CANParser, not the
-  host publication clock.
+  private response. Native 0x08A remains a liveness input, not the host
+  publication clock. In stock-longitudinal mode its latest application is a
+  data template that can be reused across multiple 100 Hz host generations.
   """
 
-  def __init__(self, packer):
+  def __init__(self, packer, *, stock_longitudinal: bool = False):
     self.packer = packer
+    self.stock_longitudinal = stock_longitudinal
+    self.stock_application: bytes | None = None
     self.can_valid = False
     self.control_enabled = False
     self.control_lat_active = False
@@ -247,6 +265,8 @@ class ToyotaTss3RequestTransport:
 
   def observe(self, can_packets: list[tuple[int, list[CanData]]], can_valid: bool) -> None:
     self.can_valid = bool(can_valid)
+    if not self.can_valid:
+      self.stock_application = None
     if not self.can_valid and (self.active or self.arm_pending):
       self._restart_after_failure("can_invalid")
 
@@ -258,6 +278,8 @@ class ToyotaTss3RequestTransport:
           self._observe_tx_echo(address_i, payload, src_i, now_ns)
         elif src_i == ORACLE_BUS and address_i == ORACLE_RESPONSE_ADDR:
           self._observe_oracle_response(payload, now_ns)
+        elif src_i == SOURCE_BUS and address_i == NATIVE_08A_ADDR and len(payload) == 32:
+          self.stock_application = payload[:28]
 
   def _expire(self, now_ns: int) -> None:
     self._prune_head()
@@ -311,7 +333,8 @@ class ToyotaTss3RequestTransport:
   def _queue_signing_latest(self, now_ns: int) -> None:
     self._prune_head()
     if (not self.control_enabled or not self.can_valid or
-        len(self.pending_requests) >= ORACLE_MAX_PENDING_GENERATIONS):
+        len(self.pending_requests) >= ORACLE_MAX_PENDING_GENERATIONS or
+        (self.stock_longitudinal and self.stock_application is None)):
       return
 
     seq = self._allocate_oracle_sequence()
@@ -327,6 +350,7 @@ class ToyotaTss3RequestTransport:
       accel=self.control_accel,
       set_speed_kph=self.control_set_speed_kph,
       request_sequence=self.next_request_sequence,
+      stock_application=self.stock_application if self.stock_longitudinal else None,
     )
     self.next_request_sequence = (self.next_request_sequence + 1) & 0x3F
     request = SignRequest(seq, application, self.control_epoch, now_ns)
@@ -339,6 +363,8 @@ class ToyotaTss3RequestTransport:
     """Whether this 100 Hz controller tick can create a new application."""
     enabled = bool(enabled)
     if not enabled or not self.can_valid:
+      return False
+    if self.stock_longitudinal and self.stock_application is None:
       return False
     if not self.control_enabled:
       # The enable edge invalidates any prior epoch before enqueueing.

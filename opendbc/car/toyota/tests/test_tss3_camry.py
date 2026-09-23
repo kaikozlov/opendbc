@@ -115,7 +115,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertFalse(self.CP.dashcamOnly)
     self.assertFalse(self.CP.secOcRequired)
     self.assertTrue(self.CP.openpilotLongitudinalControl)
-    self.assertFalse(self.CP.alphaLongitudinalAvailable)
+    self.assertTrue(self.CP.alphaLongitudinalAvailable)
     self.assertTrue(self.CP.autoResumeSng)
     self.assertFalse(self.CP.radarUnavailable)
     self.assertEqual(DBC[CAR.TOYOTA_CAMRY_TSS3][Bus.radar], "toyota_tss3_pt_generated")
@@ -130,6 +130,19 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     self.assertFalse(self.CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.STOCK_LONGITUDINAL)
     self.assertEqual(DBC[CAR.TOYOTA_CAMRY_TSS3][Bus.pt], "toyota_tss3_pt_generated")
     self.assertTrue(self.CP.flags & ToyotaFlags.HAS_BSM)
+
+  def test_alpha_long_gates_longitudinal_ownership(self):
+    cp = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, relay_fingerprint(), [], False, False, False)
+    self.assertTrue(cp.alphaLongitudinalAvailable)
+    self.assertFalse(cp.openpilotLongitudinalControl)
+    self.assertFalse(cp.autoResumeSng)
+    self.assertTrue(cp.pcmCruise)
+    self.assertTrue(cp.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.STOCK_LONGITUDINAL)
+
+    ci = CarInterface(cp)
+    update_state(ci, moving=True, bus=0, source_bus=2, hud=CAMRY_HUD)
+    output, _ = ci.apply(control(0.0, active=False, accel=1.0, long_active=True), 2_000_000_000)
+    self.assertEqual(output.accel, 0.0)
 
   def test_exact_identity(self):
     fw = FW_VERSIONS[CAR.TOYOTA_CAMRY_TSS3]
