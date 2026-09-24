@@ -1,9 +1,10 @@
 import unittest
+import numpy as np
 from unittest.mock import patch
 
 from opendbc.car import Bus, CanData, structs
 from opendbc.car.toyota.interface import CarInterface
-from opendbc.car.toyota.tss3 import TSS3_CHASSIS_BUS, TSS3_SOURCE_BUS
+from opendbc.car.toyota.tss3 import LTA_LCA_REQUEST_ID, TSS3_CHASSIS_BUS, TSS3_SOURCE_BUS, target_angle_deg_to_raw
 from opendbc.car.toyota.values import CAR, CarControllerParams, ToyotaSafetyFlags
 
 CAMRY_COMMON = {
@@ -250,6 +251,44 @@ class TestToyotaCamryTSS3(unittest.TestCase):
       transport.request_rejected = True
       output, _ = ci.apply(control(20.0), 2_100_000_000)
     self.assertLess(output.steeringAngleDeg - measured, 0.22)
+
+  def test_driver_nudge_inside_command_range_keeps_lateral(self):
+    ci = CarInterface(self.CP)
+    update_state(ci, speed_ms=20.0, hud=CAMRY_HUD)
+    transport = ci.CC.tss3_request_transport
+    with patch.object(transport, "control_generation_due", return_value=True):
+      ci.CS.out.steeringTorque = 2.5
+      ci.apply(control(0.0), 2_000_000_000)
+    self.assertEqual(transport.pending_requests[-1].application[21] & 0x3F, LTA_LCA_REQUEST_ID)
+
+  def test_driver_turn_past_command_range_stops_lateral(self):
+    angle_max = CarControllerParams.TSS3_ANGLE_LIMITS.STEER_ANGLE_MAX
+    for torque, angle, expected_angle in ((-2.0, -370.0, -angle_max), (1.8, 288.0, angle_max)):
+      with self.subTest(angle=angle):
+        ci = CarInterface(self.CP)
+        update_state(ci, speed_ms=2.0, hud=CAMRY_HUD)
+        transport = ci.CC.tss3_request_transport
+
+        with patch.object(transport, "control_generation_due", return_value=True):
+          ci.apply(control(0.0), 2_000_000_000)
+          self.assertEqual(transport.pending_requests[-1].application[21] & 0x3F, LTA_LCA_REQUEST_ID)
+
+          ci.CS.out.steeringTorque = torque
+          ci.CS.out.steeringAngleDeg = angle - ci.CS.out.steeringAngleOffsetDeg
+          output, _ = ci.apply(control(0.0), 2_010_000_000)
+          application = transport.pending_requests[-1].application
+          self.assertEqual(application[21] & 0x3F, 0)
+          self.assertAlmostEqual(output.steeringAngleDeg, expected_angle, delta=1e-3)
+          raw_angle = int.from_bytes(application[18:20], "big", signed=True)
+          self.assertEqual(raw_angle, target_angle_deg_to_raw(expected_angle))
+
+          # lateral resumes, rate limited from the last request, once the driver lets go inside the command range
+          previous = output.steeringAngleDeg
+          ci.CS.out.steeringTorque = 0.0
+          ci.CS.out.steeringAngleDeg = float(np.clip(angle, -angle_max + 1, angle_max - 1)) - ci.CS.out.steeringAngleOffsetDeg
+          output, _ = ci.apply(control(0.0), 2_020_000_000)
+          self.assertEqual(transport.pending_requests[-1].application[21] & 0x3F, LTA_LCA_REQUEST_ID)
+          self.assertLessEqual(abs(output.steeringAngleDeg - previous), CarControllerParams.TSS3_ANGLE_LIMITS.MAX_ANGLE_RATE + 1e-3)
 
   def test_host_request_plane_cancel_clones_native_brake_status_to_source_side(self):
     cp = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, relay_fingerprint(), [], True, False, False)

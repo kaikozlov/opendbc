@@ -99,17 +99,18 @@ class CarController(CarControllerBase):
       output = CC.actuators.as_builder()
       can_sends = []
 
-      lateral_command_active = CC.latActive
+      measured_angle = CS.out.steeringAngleDeg + CS.out.steeringAngleOffsetDeg
+      # the FRC cancels cruise if lateral stays active while the driver turns the wheel past what we can command
+      lateral_command_active = CC.latActive and abs(measured_angle) < self.params.ANGLE_LIMITS.STEER_ANGLE_MAX
       longitudinal_command_active = self.CP.openpilotLongitudinalControl and CC.longActive
       hud_control = CC.hudControl
 
       # only advance the rate-limited angle when a new application will be signed
       desired_angle = CC.actuators.steeringAngleDeg + CS.out.steeringAngleOffsetDeg
-      measured_angle = CS.out.steeringAngleDeg + CS.out.steeringAngleOffsetDeg
       create_lateral_application = not lateral_command_active or \
         self.tss3_request_transport.control_generation_due(
           enabled=CC.enabled,
-          lat_active=CC.latActive,
+          lat_active=lateral_command_active,
           long_active=longitudinal_command_active,
           now_nanos=now_nanos,
         )
@@ -138,7 +139,7 @@ class CarController(CarControllerBase):
 
       can_sends.extend(self.tss3_request_transport.update_control(
         enabled=CC.enabled,
-        lat_active=CC.latActive,
+        lat_active=lateral_command_active,
         target_angle_deg=output.steeringAngleDeg,
         long_active=longitudinal_command_active,
         accel=output.accel,
