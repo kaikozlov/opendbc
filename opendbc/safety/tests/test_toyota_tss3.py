@@ -6,12 +6,14 @@ from opendbc.car.lateral import get_max_angle_delta_vm, get_max_angle_vm
 from opendbc.car.structs import CarParams
 from opendbc.car.toyota.carcontroller import get_safety_CP
 from opendbc.car.toyota.interface import CarInterface
-from opendbc.car.toyota.tss3 import build_host_application
+from opendbc.car.toyota.tss3 import build_host_application, build_signer_requests
 from opendbc.car.toyota.values import CAR, EPS_SCALE, CarControllerParams, ToyotaSafetyFlags
 from opendbc.car.vehicle_model import VehicleModel
 from opendbc.safety.tests.libsafety import libsafety_py
 import opendbc.safety.tests.common as common
 from opendbc.safety.tests.common import CANPackerSafety
+
+TRAILER = bytes(4)
 
 
 def fix_toyota_checksum(msg):
@@ -21,7 +23,32 @@ def fix_toyota_checksum(msg):
   return address, bytes(payload), bus
 
 
-class TestToyotaTss3CamrySafety(common.CarSafetyTest, common.AngleSteeringSafetyTest,
+class Tss3SafetyHelpers:
+  signer_seq = 0
+
+  @staticmethod
+  def _admin_msg(arm: bool):
+    return libsafety_py.make_CANPacket(0x777, 1, bytes((7, 0xC9, 0xA8, int(arm), 0, 0, 0, 0)))
+
+  @staticmethod
+  def _control_request_msg(request: bytes, fd: bool = True):
+    msg = libsafety_py.make_CANPacket(0x08A, 0, request + TRAILER)
+    msg[0].fd = fd
+    return msg
+
+  def _request(self, request: bytes) -> bool:
+    """Send the unsigned request to the signer, returns whether the final fragment was allowed."""
+    self.signer_seq = self.signer_seq % 0xFF + 1
+    ok = False
+    for frame in build_signer_requests(self.signer_seq, request):
+      ok = self.safety.safety_tx_hook(libsafety_py.make_CANPacket(frame.address, frame.src, frame.dat))
+    return ok
+
+  def _publish(self, request: bytes) -> bool:
+    return self.safety.safety_tx_hook(self._control_request_msg(request))
+
+
+class TestToyotaTss3CamrySafety(Tss3SafetyHelpers, common.CarSafetyTest, common.AngleSteeringSafetyTest,
                                 common.LongitudinalAccelSafetyTest):
   TX_MSGS = [[0x777, 1], [0x777, 0], [0x08A, 0], [0x101, 2], [0x412, 0]]
   RELAY_MALFUNCTION_ADDRS = {0: (0x08A, 0x412)}
@@ -55,35 +82,24 @@ class TestToyotaTss3CamrySafety(common.CarSafetyTest, common.AngleSteeringSafety
     self.params = CarControllerParams(self.CP)
     self.params.STEER_STEP = 1 / (0.01 * self.LATERAL_FREQUENCY)
 
-  @staticmethod
-  def _admin_msg(arm: bool):
-    data = bytes((7, 0xC9, 0xA8, int(arm), 0, 0, 0, 0))
-    return libsafety_py.make_CANPacket(0x777, 1, data)
-
   def _tx(self, msg):
-    # a rejected CONTROL_REQUEST hands 0x08A back to the FRC, openpilot re-arms like the transport does
-    ret = super()._tx(msg)
-    if not ret and msg[0].addr == 0x08A:
+    # like the transport: a CONTROL_REQUEST is first approved by sending it to the signer, then published
+    if msg[0].addr != 0x08A:
+      return super()._tx(msg)
+
+    request = bytes(msg[0].data)[:28]
+    ok = self._request(request) and super()._tx(msg)
+    if not ok:
+      # re-arm after a rejected frame hands 0x08A back to the FRC
       super()._tx(self._admin_msg(True))
-    return ret
+    return ok
+
+  def _application(self, *, angle_raw: int = 0, lat_active: bool = False, accel: float = 0.0) -> bytes:
+    return build_host_application(self.application_packer, lat_active=lat_active, target_angle_raw=angle_raw,
+                                  long_active=True, accel=accel, set_speed_kph=0.0, request_sequence=0)
 
   def _application_msg(self, *, angle: float = 0.0, lat_active: bool = False, accel: float = 0.0):
-    angle_raw = round(angle * 17870 / 1024)
-    return self._application_raw_msg(angle_raw=angle_raw, lat_active=lat_active, accel=accel)
-
-  def _application_raw_msg(self, *, angle_raw: int = 0, lat_active: bool = False, accel: float = 0.0):
-    data = build_host_application(
-      self.application_packer,
-      lat_active=lat_active,
-      target_angle_raw=angle_raw,
-      long_active=True,
-      accel=accel,
-      set_speed_kph=0.0,
-      request_sequence=0,
-    ) + bytes(4)
-    msg = libsafety_py.make_CANPacket(0x08A, 0, data)
-    msg[0].fd = 1
-    return msg
+    return self._control_request_msg(self._application(angle_raw=round(angle * self.DEG_TO_CAN), lat_active=lat_active, accel=accel))
 
   def _accel_msg(self, accel: float):
     return self._application_msg(accel=accel)
@@ -97,7 +113,7 @@ class TestToyotaTss3CamrySafety(common.CarSafetyTest, common.AngleSteeringSafety
   def _angle_raw_cmd_msg(self, angle_raw: int):
     self.safety.set_timer(self.angle_cmd_count * int(1e6 / self.LATERAL_FREQUENCY))
     self.angle_cmd_count += 1
-    return self._application_raw_msg(angle_raw=angle_raw, lat_active=True)
+    return self._control_request_msg(self._application(angle_raw=angle_raw, lat_active=True))
 
   def _angle_meas_msg(self, angle: float):
     coarse = round(angle / 1.5)
@@ -107,6 +123,9 @@ class TestToyotaTss3CamrySafety(common.CarSafetyTest, common.AngleSteeringSafety
 
   def _get_steer_cmd_angle_max(self, speed):
     return min(get_max_angle_vm(max(speed - 1., 1.), self.VM, self.params), 32767 / self.DEG_TO_CAN)
+
+  def _max_delta_raw(self, speed):
+    return min(int(get_max_angle_delta_vm(speed, self.VM, self.params) * self.DEG_TO_CAN) + 1, 1745)
 
   def test_angle_cmd_when_enabled(self):
     # covered by test_lateral_accel_limit
@@ -128,7 +147,7 @@ class TestToyotaTss3CamrySafety(common.CarSafetyTest, common.AngleSteeringSafety
   def test_lateral_jerk_limit(self):
     for speed in (1., 5., 10., 15., 25., 40.):
       self._reset_speed_measurement(speed + 1.)
-      max_delta_raw = min(int(get_max_angle_delta_vm(speed, self.VM, self.params) * self.DEG_TO_CAN) + 1, 1745)
+      max_delta_raw = self._max_delta_raw(speed)
       for sign in (-1, 1):
         self.safety.set_controls_allowed(True)
         self.safety.set_desired_angle_last(0)
@@ -138,100 +157,105 @@ class TestToyotaTss3CamrySafety(common.CarSafetyTest, common.AngleSteeringSafety
         self.safety.set_desired_angle_last(0)
         self.assertFalse(self._tx(self._angle_raw_cmd_msg(sign * (max_delta_raw + 1))))
 
-  def test_angle_rate_budget_tracks_publication_interval(self):
-    # too large for one frame, allowed when a signer response was lost and 20ms elapsed
-    self._reset_speed_measurement(9.95)
-    self.safety.set_controls_allowed(True)
-    self.safety.set_desired_angle_last(-549)
-    self.safety.set_timer(10_000)
-    self.assertTrue(self._tx(self._application_raw_msg(angle_raw=-549, lat_active=True)))
-    self.safety.set_timer(20_000)
-    self.assertFalse(self._tx(self._application_raw_msg(angle_raw=-520, lat_active=True)))
-
-    self.safety.set_timer(30_000)
-    self.assertTrue(self._tx(self._admin_msg(True)))
-    self.safety.set_desired_angle_last(-549)
-    self.safety.set_timer(40_000)
-    self.assertTrue(self._tx(self._application_raw_msg(angle_raw=-549, lat_active=True)))
-    self.safety.set_timer(60_000)
-    self.assertTrue(self._tx(self._application_raw_msg(angle_raw=-520, lat_active=True)))
-
-  def test_angle_rate_budget_has_nominal_generation_floor(self):
-    # signer jitter can send frames less than 10ms apart
-    speed = 9.95
-    self._reset_speed_measurement(speed + 1.)
-    nominal_delta_raw = min(int(get_max_angle_delta_vm(speed, self.VM, self.params) * self.DEG_TO_CAN) + 1, 1745)
-    self.safety.set_controls_allowed(True)
-    self.safety.set_desired_angle_last(0)
-    self.safety.set_timer(100_000)
-    self.assertTrue(self._tx(self._application_raw_msg(angle_raw=0, lat_active=True)))
-    self.safety.set_timer(107_000)
-    self.assertTrue(self._tx(self._application_raw_msg(angle_raw=nominal_delta_raw, lat_active=True)))
-
   def test_vehicle_speed_measurements(self):
     self._common_measurement_test(self._speed_msg, 0, 71.6, 1,
                                   self.safety.get_vehicle_speed_min, self.safety.get_vehicle_speed_max)
 
-  def test_private_transport_envelopes(self):
-    # the high nibble is the fragment index (8-B), the low nibble is part of the sequence
-    for header in (0x80, 0x8F, 0x90, 0x9F, 0xA0, 0xAF, 0xB0, 0xBF):
-      msg = libsafety_py.make_CANPacket(0x777, 0, bytes((header, 1, 2, 3, 4, 5, 6, 7)))
-      self.assertTrue(self._tx(msg), hex(header))
+  def test_requests_are_checked_not_publications(self):
+    # a lost signer response skips a generation, the published frames are still approved requests
+    self._reset_speed_measurement(10.)
+    self.safety.set_controls_allowed(True)
+    self.safety.set_desired_angle_last(0)
+    delta = self._max_delta_raw(9.)
+    generations = [self._application(angle_raw=i * delta, lat_active=True) for i in range(3)]
+    for i, request in enumerate(generations):
+      self.safety.set_timer(i * 10_000)
+      self.assertTrue(self._request(request))
 
-    invalid_requests = (
-      bytes((0xC9, 1, 0, 0, 0, 0, 0, 0)),
-      bytes((0xC8, 6 << 5 | 1, 0, 0, 0, 0, 0, 0)),
-      bytes((0xC8, 0, 0, 0, 0, 0, 0, 0)),
-      bytes((0xC8, 1, 0, 0, 0, 0, 0, 1)),
-      bytes((0x7F, 1, 2, 3, 4, 5, 6, 7)),
-      bytes((0xC0, 1, 2, 3, 4, 5, 6, 7)),
-    )
-    for data in invalid_requests:
-      self.assertFalse(self._tx(libsafety_py.make_CANPacket(0x777, 0, data)))
+    self.assertTrue(self._publish(generations[0]))
+    self.assertTrue(self._publish(generations[2]))
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
 
+  def test_approved_requests_publish_after_controls_revoked(self):
+    self.safety.set_controls_allowed(True)
+    request = self._application(angle_raw=10, lat_active=True, accel=1.0)
+    self.assertTrue(self._request(request))
+
+    # frames already with the signer are still published, new requests need controls
+    self.safety.set_controls_allowed(False)
+    self.assertTrue(self._publish(request))
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
+    self.assertFalse(self._request(self._application(angle_raw=10, lat_active=True)))
+    self.assertFalse(self._request(self._application(accel=1.0)))
+    self.assertTrue(self._request(self._application()))
+
+  def test_each_approval_publishes_once(self):
+    request = self._application()
+    self.assertTrue(self._request(request))
+    self.assertTrue(self._publish(request))
+    self.assertFalse(self._publish(request))
+
+  def test_approval_expires(self):
+    request = self._application()
+    self.assertTrue(self._request(request))
+    self.safety.set_timer(100_001)
+    self.assertFalse(self._publish(request))
+
+  def test_unapproved_publication_yields_to_frc(self):
+    request = self._application()
+    self.assertTrue(self._request(request))
+
+    for index in range(28):
+      data = bytearray(request)
+      data[index] ^= 1
+      self.assertFalse(self._publish(bytes(data)), index)
+      self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
+      self.assertTrue(self._tx(self._admin_msg(True)))
+
+    self.assertFalse(self.safety.safety_tx_hook(self._control_request_msg(request, fd=False)))
+    self.assertTrue(self._tx(self._admin_msg(True)))
+    self.assertTrue(self._publish(request))
+
+  def test_request_schema(self):
+    request = self._application()
+    for index in (0, 1, 2, 3, 4, 5, 6, 7, 13, 14, 15, 16, 17, 20, 22, 23, 25, 27):
+      data = bytearray(request)
+      data[index] ^= 1
+      self.assertFalse(self._request(bytes(data)), index)
+    self.assertTrue(self._request(request))
+
+  def test_request_fragments(self):
+    request = self._application()
+    frames = [libsafety_py.make_CANPacket(f.address, f.src, f.dat) for f in build_signer_requests(0x5A, request)]
+
+    # out of order or repeated fragments are blocked
+    for order in ((1, 2, 3), (0, 2, 3), (0, 1, 3), (0, 1, 2, 2), (0, 1, 1)):
+      results = [self.safety.safety_tx_hook(frames[i]) for i in order]
+      self.assertFalse(results[-1], order)
+
+    # fragments 2 and 3 must repeat the sequence nibbles of fragments 0 and 1
+    for index in (2, 3):
+      bad = [bytearray(bytes(f[0].data)[:8]) for f in frames]
+      bad[index][0] ^= 1
+      results = [self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x777, 0, bytes(d))) for d in bad]
+      self.assertFalse(results[index])
+
+    for data in (bytes((0x7F, 1, 2, 3, 4, 5, 6, 7)), bytes((0xC0, 1, 2, 3, 4, 5, 6, 7))):
+      self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x777, 0, data)))
+
+    self.assertTrue(all(self.safety.safety_tx_hook(f) for f in frames))
+
+  def test_admin_msgs(self):
     for action in (False, True):
       self.assertTrue(self._tx(self._admin_msg(action)))
     for index in (0, 1, 2, 4, 5, 6, 7):
-      data = bytearray(self._admin_msg(True)[0].data)
+      data = bytearray(bytes(self._admin_msg(True)[0].data)[:8])
       data[index] ^= 1
       self.assertFalse(self._tx(libsafety_py.make_CANPacket(0x777, 1, bytes(data))))
     self.assertFalse(self._tx(libsafety_py.make_CANPacket(0x777, 1, bytes((7, 0xC9, 0xA8, 2, 0, 0, 0, 0)))))
 
-  def test_host_application_schema_and_ownership(self):
-    canonical = self._application_raw_msg()
-    self.assertTrue(self._tx(canonical))
-    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
-
-    fixed_bytes = (0, 1, 2, 3, 4, 5, 6, 7, 13, 14, 15, 16, 17, 20, 22, 23, 25, 27)
-    for index in fixed_bytes:
-      data = bytearray(canonical[0].data)[:32]
-      data[index] ^= 1
-      msg = libsafety_py.make_CANPacket(0x08A, 0, bytes(data))
-      msg[0].fd = 1
-      self.assertFalse(self.safety.safety_tx_hook(msg), index)
-      self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
-      self.assertTrue(self._tx(self._admin_msg(True)))
-
-    classic = libsafety_py.make_CANPacket(0x08A, 0, bytes(canonical[0].data)[:32])
-    self.assertFalse(self.safety.safety_tx_hook(classic))
-    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
-
-  def test_rejected_request_yields_to_frc(self):
-    self.assertTrue(self._tx(self._application_raw_msg()))
-    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
-
-    # a rejected frame forwards the FRC's request immediately, and openpilot's stay blocked until re-armed
-    self.safety.set_controls_allowed(False)
-    self.assertFalse(self.safety.safety_tx_hook(self._application_raw_msg(angle_raw=100, lat_active=True)))
-    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
-    self.assertFalse(self.safety.safety_tx_hook(self._application_raw_msg()))
-
-    self.assertTrue(self._tx(self._admin_msg(True)))
-    self.assertTrue(self._tx(self._application_raw_msg()))
-    self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
-
   def test_gas_pressed_does_not_block_accel(self):
-    # 0x08A must never stop; the brake ECU arbitrates driver gas
+    # 0x08A must never stop, the brake ECU arbitrates driver gas
     self.safety.set_controls_allowed(True)
     self.safety.set_gas_pressed_prev(True)
     self.assertTrue(self._tx(self._application_msg(accel=self.MAX_ACCEL)))
@@ -239,8 +263,8 @@ class TestToyotaTss3CamrySafety(common.CarSafetyTest, common.AngleSteeringSafety
     self.assertFalse(self._tx(self._application_msg(accel=self.MAX_ACCEL + 0.001)))
     self.assertFalse(self._tx(self._application_msg(accel=self.MIN_ACCEL - 0.001)))
 
-  def test_request_plane_watchdog_and_release(self):
-    self.assertTrue(self._tx(self._application_raw_msg()))
+  def test_watchdog_and_release(self):
+    self.assertTrue(self._tx(self._application_msg()))
     self.safety.set_timer(99_999)
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
     self.safety.set_timer(100_001)
@@ -251,7 +275,7 @@ class TestToyotaTss3CamrySafety(common.CarSafetyTest, common.AngleSteeringSafety
     self.assertTrue(self._tx(self._admin_msg(False)))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
 
-  def test_stock_shaped_brake_cancel(self):
+  def test_brake_cancel(self):
     _, cancel_data, _ = fix_toyota_checksum((0x101, bytes((0x88, 0, 0, 0, 0, 0, 0, 0)), 2))
     self.assertTrue(self._tx(libsafety_py.make_CANPacket(0x101, 2, cancel_data)))
 
@@ -281,7 +305,7 @@ class TestToyotaTss3CamrySafety(common.CarSafetyTest, common.AngleSteeringSafety
     return self.packer.make_can_msg_safety("CONTROL_REQUEST", 2, {"CRUISE_OPERATING_LATCH": enable})
 
 
-class TestToyotaTss3CamryStockLongitudinalSafety(unittest.TestCase):
+class TestToyotaTss3CamryStockLongitudinalSafety(Tss3SafetyHelpers, unittest.TestCase):
   STOCK_08A = bytes.fromhex("0000000880002d47fe462afe467fff007fffff35c000100064003c005db7797f")
 
   def setUp(self):
@@ -292,61 +316,59 @@ class TestToyotaTss3CamryStockLongitudinalSafety(unittest.TestCase):
     self.safety.init_tests()
     self.safety.set_timer(0)
 
-  @staticmethod
-  def _admin_msg(arm: bool):
-    return libsafety_py.make_CANPacket(0x777, 1, bytes((7, 0xC9, 0xA8, int(arm), 0, 0, 0, 0)))
-
-  @staticmethod
-  def _fd_msg(data: bytes, bus: int):
-    msg = libsafety_py.make_CANPacket(0x08A, bus, data)
+  def _rx_stock(self, stock: bytes):
+    msg = libsafety_py.make_CANPacket(0x08A, 2, stock)
     msg[0].fd = 1
-    return msg
+    self.assertTrue(self.safety.safety_rx_hook(msg))
 
-  def _host_msg(self, stock: bytes | None = None, request_sequence: int = 12):
+  def _host_request(self, stock: bytes | None = None, request_sequence: int = 12) -> bytes:
     stock = self.STOCK_08A if stock is None else stock
-    application = build_host_application(
-      self.application_packer,
-      lat_active=False,
-      target_angle_raw=0,
-      long_active=False,
-      accel=0.0,
-      set_speed_kph=0.0,
-      request_sequence=request_sequence,
-      stock_application=stock[:28],
-    )
-    return self._fd_msg(application + bytes(4), 0)
+    return build_host_application(self.application_packer, lat_active=False, target_angle_raw=0, long_active=False,
+                                  accel=0.0, set_speed_kph=0.0, request_sequence=request_sequence, stock_application=stock[:28])
 
-  def test_stock_longitudinal_requires_recent_frc_application(self):
+  def test_arming_requires_recent_frc_request(self):
     self.assertFalse(self.safety.safety_tx_hook(self._admin_msg(True)))
-    self.assertTrue(self.safety.safety_rx_hook(self._fd_msg(self.STOCK_08A, 2)))
+    self._rx_stock(self.STOCK_08A)
     self.assertTrue(self.safety.safety_tx_hook(self._admin_msg(True)))
-    self.assertTrue(self.safety.safety_tx_hook(self._host_msg()))
 
     self.safety.set_timer(100_001)
-    self.assertFalse(self.safety.safety_tx_hook(self._host_msg()))
+    self.assertFalse(self._request(self._host_request()))
     self.assertTrue(self.safety.safety_tx_hook(self._admin_msg(False)))
     self.assertFalse(self.safety.safety_tx_hook(self._admin_msg(True)))
 
-  def test_stock_longitudinal_fields_must_match_frc(self):
-    self.assertTrue(self.safety.safety_rx_hook(self._fd_msg(self.STOCK_08A, 2)))
+  def test_longitudinal_fields_must_match_frc(self):
+    self._rx_stock(self.STOCK_08A)
     self.assertTrue(self.safety.safety_tx_hook(self._admin_msg(True)))
 
     for index in (3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 17, 20, 22, 23, 27):
       with self.subTest(index=index):
-        msg = self._host_msg()
-        msg[0].data[index] ^= 1
-        self.assertFalse(self.safety.safety_tx_hook(msg))
-        self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), 0)
-        self.assertTrue(self.safety.safety_tx_hook(self._admin_msg(True)))
+        request = bytearray(self._host_request())
+        request[index] ^= 1
+        self.assertFalse(self._request(bytes(request)))
 
-    self.assertTrue(self.safety.safety_tx_hook(self._host_msg()))
+    request = self._host_request()
+    self.assertTrue(self._request(request))
+    self.assertTrue(self._publish(request))
 
-  def test_one_frc_application_allows_multiple_100hz_host_generations(self):
-    self.assertTrue(self.safety.safety_rx_hook(self._fd_msg(self.STOCK_08A, 2)))
+  def test_only_latest_frc_requests_match(self):
+    old = bytearray(self.STOCK_08A)
+    old[8] ^= 1
+    self._rx_stock(bytes(old))
+    self._rx_stock(self.STOCK_08A)
+    self.assertTrue(self._request(self._host_request(bytes(old))))
+
+    self._rx_stock(self.STOCK_08A)
+    self.assertFalse(self._request(self._host_request(bytes(old))))
+    self.assertTrue(self._request(self._host_request()))
+
+  def test_one_frc_request_allows_multiple_generations(self):
+    self._rx_stock(self.STOCK_08A)
     self.assertTrue(self.safety.safety_tx_hook(self._admin_msg(True)))
     for request_sequence in range(3):
       self.safety.set_timer(request_sequence * 10_000)
-      self.assertTrue(self.safety.safety_tx_hook(self._host_msg(request_sequence=request_sequence)))
+      request = self._host_request(request_sequence=request_sequence)
+      self.assertTrue(self._request(request))
+      self.assertTrue(self._publish(request))
 
 
 if __name__ == "__main__":

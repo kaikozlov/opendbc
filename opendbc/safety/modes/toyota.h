@@ -76,13 +76,21 @@ static bool toyota_stock_longitudinal = false;
 static bool toyota_lta = false;
 static bool toyota_tss3 = false;
 
-// TSS3: openpilot replaces the FRC's CONTROL_REQUEST (0x08A) while the EPS signer is armed
+// TSS3: openpilot replaces the FRC's CONTROL_REQUEST (0x08A) while the EPS signer is armed.
+// Requests are checked when they are sent to the signer, and only approved requests can be published once signed.
 #define TOYOTA_TSS3_08A_TIMEOUT_US 100000U
 #define TOYOTA_TSS3_08A_LEN 28U  // without the SecOC trailer
-#define TOYOTA_TSS3_STOCK_08A_HISTORY 16U
+#define TOYOTA_TSS3_FRAGMENT_LEN 7U
+#define TOYOTA_TSS3_APPROVED_LEN 8U
+#define TOYOTA_TSS3_STOCK_08A_HISTORY 2U
 static bool toyota_tss3_08a_active = false;
 static uint32_t toyota_tss3_08a_last_tx_ts = 0U;
-static uint32_t toyota_tss3_angle_check_ts = 0U;
+static uint8_t toyota_tss3_request_next_fragment = 0U;
+static uint32_t toyota_tss3_last_request_ts = 0U;
+static uint8_t toyota_tss3_approved[TOYOTA_TSS3_APPROVED_LEN][TOYOTA_TSS3_08A_LEN];
+static uint32_t toyota_tss3_approved_ts[TOYOTA_TSS3_APPROVED_LEN];
+static bool toyota_tss3_approved_valid[TOYOTA_TSS3_APPROVED_LEN];
+static uint8_t toyota_tss3_approved_idx = 0U;
 static uint8_t toyota_tss3_stock_08a[TOYOTA_TSS3_STOCK_08A_HISTORY][TOYOTA_TSS3_08A_LEN];
 static uint32_t toyota_tss3_stock_08a_ts[TOYOTA_TSS3_STOCK_08A_HISTORY];
 static uint32_t toyota_tss3_stock_08a_last_ts = 0U;
@@ -221,8 +229,8 @@ static void toyota_rx_hook(const CANPacket_t *msg) {
   }
 }
 
-static bool toyota_tss3_stock_08a_match(const CANPacket_t *msg, uint32_t now) {
-  // with stock longitudinal, only the lateral request and sequence of a recent FRC request may change
+static bool toyota_tss3_stock_08a_match(const uint8_t request[], uint32_t now) {
+  // with stock longitudinal, only the lateral request and sequence of the latest FRC requests may change
   bool match = false;
   for (uint8_t j = 0U; j < toyota_tss3_stock_08a_cnt; j++) {
     bool candidate = safety_get_ts_elapsed(now, toyota_tss3_stock_08a_ts[j]) <= TOYOTA_TSS3_08A_TIMEOUT_US;
@@ -235,23 +243,23 @@ static bool toyota_tss3_stock_08a_match(const CANPacket_t *msg, uint32_t now) {
       } else {
         // compare the whole byte
       }
-      candidate = candidate && (((msg->data[i] ^ toyota_tss3_stock_08a[j][i]) & mask) == 0U);
+      candidate = candidate && (((request[i] ^ toyota_tss3_stock_08a[j][i]) & mask) == 0U);
     }
     match = match || candidate;
   }
   return match;
 }
 
-static bool toyota_tss3_08a_match(const CANPacket_t *msg) {
+static bool toyota_tss3_08a_match(const uint8_t request[]) {
   // only the set speed, lateral and longitudinal requests, and sequence may change
-  return (msg->data[0] == 0U) && (msg->data[1] == 0U) && (msg->data[2] == 0U) && (msg->data[3] == 0x08U) &&
-         (msg->data[4] == 0x80U) && (msg->data[5] == 0U) && (msg->data[13] == 0x7FU) && (msg->data[14] == 0xFFU) &&
-         (msg->data[15] == 0U) && (msg->data[16] == 0x7FU) && (msg->data[17] == 0xFFU) && (msg->data[20] == 0xC0U) &&
-         ((msg->data[21] & 0xC0U) == 0U) && (msg->data[22] == 0x10U) && (msg->data[23] == 0U) &&
-         (msg->data[25] == 0U) && (msg->data[27] == 0U);
+  return (request[0] == 0U) && (request[1] == 0U) && (request[2] == 0U) && (request[3] == 0x08U) &&
+         (request[4] == 0x80U) && (request[5] == 0U) && (request[13] == 0x7FU) && (request[14] == 0xFFU) &&
+         (request[15] == 0U) && (request[16] == 0x7FU) && (request[17] == 0xFFU) && (request[20] == 0xC0U) &&
+         ((request[21] & 0xC0U) == 0U) && (request[22] == 0x10U) && (request[23] == 0U) &&
+         (request[25] == 0U) && (request[27] == 0U);
 }
 
-static bool toyota_tss3_tx_hook(const CANPacket_t *msg, const LongitudinalLimits long_limits) {
+static bool toyota_tss3_request_valid(const uint8_t request[], const LongitudinalLimits long_limits, uint32_t now) {
   static const AngleSteeringLimits TOYOTA_TSS3_ANGLE_STEERING_LIMITS = {
     .max_angle = 1745,
     .angle_deg_to_can = 17.451171875F,  // 17870 / 1024
@@ -264,6 +272,102 @@ static bool toyota_tss3_tx_hook(const CANPacket_t *msg, const LongitudinalLimits
     .wheelbase = 2.825F,
   };
 
+  bool valid = toyota_stock_longitudinal ? toyota_tss3_stock_08a_match(request, now) : toyota_tss3_08a_match(request);
+
+  // LATERAL_REQUEST_ID and LATERAL_ASSIST_GAIN
+  const uint8_t lat_id = request[21] & 0x3FU;
+  const bool lat_active = (lat_id == 11U) && (request[24] == 100U);
+  const bool lat_inactive = (lat_id == 0U) && (request[24] == 50U);
+  valid = valid && (lat_active || lat_inactive) && (request[25] == 0U);
+
+  if (valid) {
+    // requests are only sent while openpilot is engaged, start from the measured angle after a gap
+    if (safety_get_ts_elapsed(now, toyota_tss3_last_request_ts) > TOYOTA_TSS3_08A_TIMEOUT_US) {
+      desired_angle_last = SAFETY_CLAMP(angle_meas.values[0], -TOYOTA_TSS3_ANGLE_STEERING_LIMITS.max_angle,
+                                        TOYOTA_TSS3_ANGLE_STEERING_LIMITS.max_angle);
+    }
+    toyota_tss3_last_request_ts = now;
+
+    // LATERAL_REQUEST_PINION_ANGLE
+    int angle = to_signed((request[18] << 8U) | request[19], 16);
+    bool violation = steer_angle_cmd_checks_vm(angle, lat_active, TOYOTA_TSS3_ANGLE_STEERING_LIMITS, TOYOTA_TSS3_STEERING_PARAMS);
+    if (safety_max_limit_check(angle, TOYOTA_TSS3_ANGLE_STEERING_LIMITS.max_angle, -TOYOTA_TSS3_ANGLE_STEERING_LIMITS.max_angle)) {
+      violation = true;
+      desired_angle_last = SAFETY_CLAMP(angle_meas.values[0], -TOYOTA_TSS3_ANGLE_STEERING_LIMITS.max_angle,
+                                        TOYOTA_TSS3_ANGLE_STEERING_LIMITS.max_angle);
+    }
+
+    if (!toyota_stock_longitudinal) {
+      // LONGITUDINAL_REQUEST_ID/ALLOCATION_METHOD and LONGITUDINAL_REQUEST_ACCEL_UPPER/LOWER
+      int accel_upper = to_signed((request[8] << 8U) | request[9], 16);
+      int accel_lower = to_signed((request[11] << 8U) | request[12], 16);
+      violation = violation || (request[6] != 0x2DU) || (request[7] != 0x47U) || (accel_upper != accel_lower);
+
+      // No gas pressed check: the motion controller in the brake ECU arbitrates driver gas against this request
+      bool accel_valid = controls_allowed && !safety_max_limit_check(accel_upper, long_limits.max_accel, long_limits.min_accel);
+      violation = violation || !(accel_valid || (accel_upper == long_limits.inactive_accel));
+    }
+    valid = !violation;
+  }
+  return valid;
+}
+
+static bool toyota_tss3_request_fragment(const CANPacket_t *msg, const LongitudinalLimits long_limits, uint32_t now) {
+  static uint8_t toyota_tss3_request[TOYOTA_TSS3_08A_LEN];
+  static uint8_t toyota_tss3_request_seq[2];  // low and high sequence nibbles, repeated in fragments 2 and 3
+
+  // the header's high nibble is the fragment index (8-B), the low nibble alternates the low and high sequence nibbles
+  const uint8_t fragment = (msg->data[0] >> 4U) & 0x3U;
+  const uint8_t seq_nibble = msg->data[0] & 0xFU;
+  bool valid = !msg->fd && ((msg->data[0] & 0xC0U) == 0x80U) && ((fragment == 0U) || (fragment == toyota_tss3_request_next_fragment));
+  valid = valid && ((fragment < 2U) || (seq_nibble == toyota_tss3_request_seq[fragment - 2U]));
+
+  if (valid) {
+    if (fragment < 2U) {
+      toyota_tss3_request_seq[fragment] = seq_nibble;
+    }
+    for (uint8_t i = 0U; i < TOYOTA_TSS3_FRAGMENT_LEN; i++) {
+      toyota_tss3_request[(fragment * TOYOTA_TSS3_FRAGMENT_LEN) + i] = msg->data[i + 1U];
+    }
+    toyota_tss3_request_next_fragment = fragment + 1U;
+  } else {
+    toyota_tss3_request_next_fragment = 0U;
+  }
+
+  // the signer only signs complete requests, so the last fragment carries the check
+  if (valid && (fragment == 3U)) {
+    toyota_tss3_request_next_fragment = 0U;
+    valid = toyota_tss3_request_valid(toyota_tss3_request, long_limits, now);
+    if (valid) {
+      for (uint8_t i = 0U; i < TOYOTA_TSS3_08A_LEN; i++) {
+        toyota_tss3_approved[toyota_tss3_approved_idx][i] = toyota_tss3_request[i];
+      }
+      toyota_tss3_approved_ts[toyota_tss3_approved_idx] = now;
+      toyota_tss3_approved_valid[toyota_tss3_approved_idx] = true;
+      toyota_tss3_approved_idx = (toyota_tss3_approved_idx + 1U) % TOYOTA_TSS3_APPROVED_LEN;
+    }
+  }
+  return valid;
+}
+
+static bool toyota_tss3_publish_approved(const CANPacket_t *msg, uint32_t now) {
+  // each approved request can be published once
+  bool approved = false;
+  for (uint8_t j = 0U; j < TOYOTA_TSS3_APPROVED_LEN; j++) {
+    bool match = !approved && toyota_tss3_approved_valid[j] &&
+                 (safety_get_ts_elapsed(now, toyota_tss3_approved_ts[j]) <= TOYOTA_TSS3_08A_TIMEOUT_US);
+    for (uint8_t i = 0U; i < TOYOTA_TSS3_08A_LEN; i++) {
+      match = match && (msg->data[i] == toyota_tss3_approved[j][i]);
+    }
+    if (match) {
+      approved = true;
+      toyota_tss3_approved_valid[j] = false;
+    }
+  }
+  return approved;
+}
+
+static bool toyota_tss3_tx_hook(const CANPacket_t *msg, const LongitudinalLimits long_limits) {
   bool tx = true;
   const uint32_t now = microsecond_timer_get();
 
@@ -283,64 +387,18 @@ static bool toyota_tss3_tx_hook(const CANPacket_t *msg, const LongitudinalLimits
       if (tx) {
         toyota_tss3_08a_active = true;
         toyota_tss3_08a_last_tx_ts = now;
-        // the first CONTROL_REQUEST is sent in the same batch, give it one frame of angle rate
-        toyota_tss3_angle_check_ts = now - (1000000U / TOYOTA_TSS3_ANGLE_STEERING_LIMITS.frequency);
-        desired_angle_last = SAFETY_CLAMP(angle_meas.values[0], -TOYOTA_TSS3_ANGLE_STEERING_LIMITS.max_angle,
-                                          TOYOTA_TSS3_ANGLE_STEERING_LIMITS.max_angle);
       }
     }
   }
 
   // signer requests: four fragments of the unsigned CONTROL_REQUEST
   if (msg_matches(msg, 0x777U, 0U)) {
-    tx = !msg->fd && ((msg->data[0] & 0xC0U) == 0x80U);
+    tx = toyota_tss3_request_fragment(msg, long_limits, now);
   }
 
-  // CONTROL_REQUEST: lateral and longitudinal requests with the SecOC trailer from the signer
+  // CONTROL_REQUEST with the SecOC trailer from the signer
   if (msg_matches(msg, 0x8AU, 0U)) {
-    bool valid = toyota_tss3_08a_active && msg->fd;
-    if (valid) {
-      valid = toyota_stock_longitudinal ? toyota_tss3_stock_08a_match(msg, now) : toyota_tss3_08a_match(msg);
-    }
-
-    bool violation = false;
-    if (valid) {
-      // LATERAL_REQUEST_ID and LATERAL_ASSIST_GAIN
-      const uint8_t lat_id = msg->data[21] & 0x3FU;
-      const bool lat_active = (lat_id == 11U) && (msg->data[24] == 100U);
-      const bool lat_inactive = (lat_id == 0U) && (msg->data[24] == 50U);
-      valid = (lat_active || lat_inactive) && (msg->data[25] == 0U);
-
-      // LATERAL_REQUEST_PINION_ANGLE
-      int angle = to_signed((msg->data[18] << 8U) | msg->data[19], 16);
-      if (lat_active || lat_inactive) {
-        // signer jitter can shorten the time between frames, but each frame was limited for a full control step
-        uint32_t interval = SAFETY_MAX(safety_get_ts_elapsed(now, toyota_tss3_angle_check_ts),
-                                       1000000U / TOYOTA_TSS3_ANGLE_STEERING_LIMITS.frequency);
-        violation = steer_angle_cmd_checks_vm_timed(angle, lat_active, TOYOTA_TSS3_ANGLE_STEERING_LIMITS,
-                                                    TOYOTA_TSS3_STEERING_PARAMS, interval);
-        toyota_tss3_angle_check_ts = now;
-      }
-      if (safety_max_limit_check(angle, TOYOTA_TSS3_ANGLE_STEERING_LIMITS.max_angle, -TOYOTA_TSS3_ANGLE_STEERING_LIMITS.max_angle)) {
-        violation = true;
-        desired_angle_last = SAFETY_CLAMP(angle_meas.values[0], -TOYOTA_TSS3_ANGLE_STEERING_LIMITS.max_angle,
-                                          TOYOTA_TSS3_ANGLE_STEERING_LIMITS.max_angle);
-      }
-
-      if (!toyota_stock_longitudinal) {
-        // LONGITUDINAL_REQUEST_ID/ALLOCATION_METHOD and LONGITUDINAL_REQUEST_ACCEL_UPPER/LOWER
-        int accel_upper = to_signed((msg->data[8] << 8U) | msg->data[9], 16);
-        int accel_lower = to_signed((msg->data[11] << 8U) | msg->data[12], 16);
-        valid = valid && (msg->data[6] == 0x2DU) && (msg->data[7] == 0x47U) && (accel_upper == accel_lower);
-
-        // No gas pressed check: blocking 0x08A faults the car, and the motion controller in the brake ECU
-        // already arbitrates driver gas against this request
-        bool accel_valid = controls_allowed && !safety_max_limit_check(accel_upper, long_limits.max_accel, long_limits.min_accel);
-        violation = violation || !(accel_valid || (accel_upper == long_limits.inactive_accel));
-      }
-    }
-
-    tx = valid && !violation;
+    tx = toyota_tss3_08a_active && msg->fd && toyota_tss3_publish_approved(msg, now);
     if (tx) {
       toyota_tss3_08a_last_tx_ts = now;
     } else {
@@ -602,7 +660,12 @@ static safety_config toyota_init(uint16_t param) {
   toyota_lta = GET_FLAG(param, TOYOTA_PARAM_LTA);
   toyota_tss3_08a_active = false;
   toyota_tss3_08a_last_tx_ts = 0U;
-  toyota_tss3_angle_check_ts = 0U;
+  toyota_tss3_request_next_fragment = 0U;
+  toyota_tss3_last_request_ts = 0U;
+  toyota_tss3_approved_idx = 0U;
+  for (uint8_t i = 0U; i < TOYOTA_TSS3_APPROVED_LEN; i++) {
+    toyota_tss3_approved_valid[i] = false;
+  }
   toyota_tss3_stock_08a_last_ts = 0U;
   toyota_tss3_stock_08a_idx = 0U;
   toyota_tss3_stock_08a_cnt = 0U;

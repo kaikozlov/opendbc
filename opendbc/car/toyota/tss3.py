@@ -100,6 +100,7 @@ class ToyotaTss3RequestTransport:
   """Signs one CONTROL_REQUEST per controller frame through the EPS and publishes the signed result.
 
   The EPS returns the SecOC freshness value and MAC. A few requests are kept in flight to hide the signer latency.
+  Panda checks each request when it is sent to the signer, and only lets approved requests be published.
   """
 
   def __init__(self, packer, *, stock_longitudinal: bool = False):

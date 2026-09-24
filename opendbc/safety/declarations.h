@@ -244,8 +244,6 @@ bool steer_torque_cmd_checks(int desired_torque, int steer_req, const TorqueStee
 bool steer_angle_cmd_checks(int desired_angle, bool steer_control_enabled, const AngleSteeringLimits limits);
 bool steer_angle_cmd_checks_vm(int desired_angle, bool steer_control_enabled, const AngleSteeringLimits limits,
                                const AngleSteeringParams params);
-bool steer_angle_cmd_checks_vm_timed(int desired_angle, bool steer_control_enabled, const AngleSteeringLimits limits,
-                                     const AngleSteeringParams params, uint32_t angle_rate_interval_us);
 bool steer_curvature_cmd_checks(int desired_curvature, int steer_power, bool steer_control_enabled, const CurvatureSteeringLimits limits);
 bool longitudinal_accel_checks(int desired_accel, const LongitudinalLimits limits);
 bool longitudinal_speed_checks(int desired_speed, const LongitudinalLimits limits);

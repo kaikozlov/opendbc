@@ -347,8 +347,8 @@ static float get_angle_from_curvature(const float curvature, const float curvatu
   return curvature * params.steer_ratio / curvature_factor * RAD_TO_DEG;
 }
 
-bool steer_angle_cmd_checks_vm_timed(int desired_angle, bool steer_control_enabled, const AngleSteeringLimits limits,
-                                     const AngleSteeringParams params, uint32_t angle_rate_interval_us) {
+bool steer_angle_cmd_checks_vm(int desired_angle, bool steer_control_enabled, const AngleSteeringLimits limits,
+                               const AngleSteeringParams params) {
   // This check uses a simple vehicle model to allow for constant lateral acceleration and jerk limits across all speeds.
   // TODO: remove the inaccurate breakpoint angle limiting function above and always use this one
 
@@ -368,10 +368,8 @@ bool steer_angle_cmd_checks_vm_timed(int desired_angle, bool steer_control_enabl
     const float max_curvature_rate_sec = MAX_LATERAL_JERK / (fudged_speed * fudged_speed);
     const float max_angle_rate_sec = get_angle_from_curvature(max_curvature_rate_sec, curvature_factor, params);
 
-    // Convert the per-second rate to the time represented by this command.
-    // Most ports publish periodically; asynchronous pipelines can pass the
-    // actual interval since their previous checked command.
-    const float max_angle_delta = max_angle_rate_sec * ((float)angle_rate_interval_us / 1e6F);
+    // finally get max angle delta per frame
+    const float max_angle_delta = max_angle_rate_sec / (float)limits.frequency;
     const int max_angle_delta_can = (max_angle_delta * limits.angle_deg_to_can) + 1.;
 
     // NOTE: symmetric up and down limits
@@ -408,10 +406,4 @@ bool steer_angle_cmd_checks_vm_timed(int desired_angle, bool steer_control_enabl
   }
 
   return violation;
-}
-
-bool steer_angle_cmd_checks_vm(int desired_angle, bool steer_control_enabled, const AngleSteeringLimits limits,
-                               const AngleSteeringParams params) {
-  return steer_angle_cmd_checks_vm_timed(desired_angle, steer_control_enabled, limits, params,
-                                         1000000U / limits.frequency);
 }
