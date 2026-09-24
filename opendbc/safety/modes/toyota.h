@@ -78,6 +78,8 @@ static bool toyota_tss3 = false;
 
 // TSS3: openpilot replaces the FRC's CONTROL_REQUEST (0x08A) while the EPS signer is armed.
 // Requests are checked when they are sent to the signer, and only approved requests can be published once signed.
+// The VMC in the brake ECU needs a continuous CONTROL_REQUEST: it sets CONTROL_RESULT.REQUEST_LOSS ~90 ms after the
+// last valid one and latches a cruise fault until restart if that persists for ~1 s.
 #define TOYOTA_TSS3_08A_TIMEOUT_US 100000U
 #define TOYOTA_TSS3_08A_LEN 28U  // without the SecOC trailer
 #define TOYOTA_TSS3_FRAGMENT_LEN 7U

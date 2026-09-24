@@ -32,6 +32,11 @@ BO_ 254 CRUISE_BUTTONS: 32 XXX
  SG_ CANCEL_BUTTON : 38|1@0+ (1,0) [0|1] "" XXX
  SG_ CANCEL_BUTTON_MIRROR_N : 61|1@0+ (1,0) [0|1] "" XXX
 
+BO_ 129 CONTROL_RESULT: 32 XXX
+ SG_ LONGITUDINAL_RESULT_ID : 53|6@0+ (1,0) [0|63] "" XXX
+ SG_ REQUEST_LOSS : 92|1@0+ (1,0) [0|1] "" XXX
+ SG_ LATERAL_RESULT_ID : 109|6@0+ (1,0) [0|63] "" XXX
+
 BO_ 138 CONTROL_REQUEST: 32 XXX
  SG_ CRUISE_OPERATING_LATCH : 27|1@0+ (1,0) [0|1] "" XXX
  SG_ SET_ME_1 : 39|1@0+ (1,0) [0|1] "" XXX
@@ -137,6 +142,7 @@ VAL_ 138 LONGITUDINAL_ALLOCATION_METHOD_UPPER 3 "Brake Only" 2 "Engine and Brake
 VAL_ 138 LONGITUDINAL_ALLOCATION_METHOD_LOWER 3 "Brake Only" 2 "Engine and Brake 2" 1 "Engine and Brake 1" 0 "Engine Only";
 
 CM_ SG_ 48 STEERING_WHEEL_TORQUE_FINE "Driver torque = STEERING_WHEEL_TORQUE_COARSE + STEERING_WHEEL_TORQUE_FINE";
+CM_ SG_ 129 REQUEST_LOSS "Set ~90 ms after the last valid CONTROL_REQUEST, a cruise fault latches until restart if it stays set for ~1 s";
 CM_ SG_ 138 LATERAL_REQUEST_PINION_ANGLE "1024/17870 deg per count";
 CM_ SG_ 138 AUTHENTICATOR "Truncated 28-bit SecOC MAC";
 CM_ SG_ 1042 LANE_LINE_1 "1 = recognized, 2 = missing, 4 = recognized while active";

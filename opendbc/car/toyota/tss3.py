@@ -17,9 +17,16 @@ SIGNER_ADDR = 0x777
 SIGNER_RESPONSE_ADDR = 0x7A9
 SIGNER_SID = 0xC9
 SIGNER_SEQUENCE_MAX = 0xFF
-SIGNER_MAX_PENDING = 8
+# The signer answers in 17 ms (p50) to 32 ms (p99). Four requests in flight hide that at 100 Hz,
+# more only add latency between computing a request and publishing it.
+SIGNER_MAX_PENDING = 4
 SIGNER_TIMEOUT_NS = 90_000_000
 GENERATION_INTERVAL_NS = int(DT_CTRL * 1e9)
+
+# The VMC in the brake ECU sets CONTROL_RESULT.REQUEST_LOSS ~90 ms after the last valid CONTROL_REQUEST and latches
+# a cruise fault until restart if it persists for ~1 s. Panda forwards the FRC's CONTROL_REQUEST again if openpilot's
+# stops for 100 ms, and it restarts the angle rate limit from the measured angle after a 100 ms gap in requests.
+CONTROL_REQUEST_TIMEOUT_NS = 100_000_000
 
 PANDA_RETURNED_OFFSET = 0x80
 PANDA_REJECTED_OFFSET = 0xC0
@@ -119,6 +126,8 @@ class ToyotaTss3RequestTransport:
 
     self.next_signer_sequence = 1
     self.next_request_sequence = 0
+    self.last_request_ns = 0
+    self.request_rejected = False
     self.pending_requests: deque[SignRequest] = deque()
     self.requests_by_sequence: dict[int, SignRequest] = {}
     self.pending_sends: list[CanData] = []
@@ -168,6 +177,10 @@ class ToyotaTss3RequestTransport:
     self._release()
 
   def _observe_tx_echo(self, address: int, data: bytes, src: int, now_ns: int) -> None:
+    # panda checks requests on the last fragment
+    if address == SIGNER_ADDR and src == TSS3_CHASSIS_BUS + PANDA_REJECTED_OFFSET and (data[0] >> 4) == 0xB:
+      self.request_rejected = True
+      return
     if address == SIGNER_ADDR and self.arm_pending and data == make_admin_msg(True).dat:
       if src == TSS3_AUX_BUS + PANDA_REJECTED_OFFSET:
         self._restart_after_failure("arm_admin_rejected")
@@ -307,14 +320,20 @@ class ToyotaTss3RequestTransport:
       stock_application=self.stock_application if self.stock_longitudinal else None,
     )
     self.next_request_sequence = (self.next_request_sequence + 1) & 0x3F
+    self.last_request_ns = now_ns
     request = SignRequest(seq, application, self.control_epoch, now_ns)
     self.pending_requests.append(request)
     self.requests_by_sequence[seq] = request
     self.pending_sends.extend(build_signer_requests(seq, application))
 
+  def angle_reference_reset(self, now_nanos: int) -> bool:
+    """Whether panda restarted its angle rate limit from the measured angle, the controller should do the same."""
+    reset = self.request_rejected or now_nanos - self.last_request_ns > CONTROL_REQUEST_TIMEOUT_NS
+    self.request_rejected = False
+    return reset
+
   def control_generation_due(self, *, enabled: bool, lat_active: bool, long_active: bool,
                              now_nanos: int) -> bool:
-
     enabled = bool(enabled)
     if not enabled or not self.can_valid:
       return False

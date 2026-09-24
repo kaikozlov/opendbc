@@ -114,6 +114,8 @@ class CarController(CarControllerBase):
           now_nanos=now_nanos,
         )
       if create_lateral_application:
+        if self.tss3_request_transport.angle_reference_reset(now_nanos):
+          self.last_angle = measured_angle
         self.last_angle = apply_steer_angle_limits_vm(
           desired_angle, self.last_angle, CS.out.vEgoRaw, measured_angle,
           lateral_command_active, self.params, self.VM,

@@ -230,8 +230,26 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     with patch.object(ci.CC.tss3_request_transport, "control_generation_due", return_value=True):
       output, _ = ci.apply(control(20.0), 2_000_000_000)
 
-    self.assertGreater(output.steeringAngleDeg, 0.20)
-    self.assertLess(output.steeringAngleDeg, 0.22)
+    # the first request is limited from the measured angle, like panda
+    step = output.steeringAngleDeg - (state.steeringAngleDeg + state.steeringAngleOffsetDeg)
+    self.assertGreater(step, 0.20)
+    self.assertLess(step, 0.22)
+
+  def test_rejected_request_restarts_angle_limit_from_measured(self):
+    ci = CarInterface(self.CP)
+    state = update_state(ci, speed_ms=25.0, hud=CAMRY_HUD)
+    measured = state.steeringAngleDeg + state.steeringAngleOffsetDeg
+    transport = ci.CC.tss3_request_transport
+
+    with patch.object(transport, "control_generation_due", return_value=True):
+      for i in range(10):
+        output, _ = ci.apply(control(20.0), 2_000_000_000 + i * 10_000_000)
+      self.assertGreater(output.steeringAngleDeg, measured + 1.0)
+
+      # panda rejected a request and restarted from the measured angle, the controller follows
+      transport.request_rejected = True
+      output, _ = ci.apply(control(20.0), 2_100_000_000)
+    self.assertLess(output.steeringAngleDeg - measured, 0.22)
 
   def test_host_request_plane_cancel_clones_native_brake_status_to_source_side(self):
     cp = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, relay_fingerprint(), [], True, False, False)

@@ -446,6 +446,21 @@ class TestToyotaTss3RequestTransport(unittest.TestCase):
     self.assertIn(CanData(SIGNER_ADDR, bytes.fromhex("07c9a80000000000"), TSS3_AUX_BUS), sends)
     self.assertEqual(len(signer_request_frames(sends)), 4)
 
+  def test_angle_reference_reset(self):
+    # panda restarts its angle rate limit from the measured angle before the first request and after a rejection
+    self.assertTrue(self.transport.angle_reference_reset(1_000_000_000))
+    sends = self.update_control(1_000_000_000)
+    self.assertFalse(self.transport.angle_reference_reset(1_010_000_000))
+
+    last_fragment = signer_request_frames(sends)[-1]
+    self.transport.observe(packets(1_011_000_000, CanData(last_fragment.address, last_fragment.dat,
+                                                         TSS3_CHASSIS_BUS + PANDA_REJECTED_OFFSET)), True)
+    self.assertTrue(self.transport.angle_reference_reset(1_012_000_000))
+    self.assertFalse(self.transport.angle_reference_reset(1_013_000_000))
+
+    # and after 100 ms without requests
+    self.assertTrue(self.transport.angle_reference_reset(1_100_000_001))
+
   def test_active_reject_releases_and_rearms(self):
     sequence = self.start_request()
     self.transport.observe(response(1_015_000_000, sequence), True)
