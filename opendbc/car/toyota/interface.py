@@ -18,12 +18,6 @@ class CarInterface(CarInterfaceBase):
 
   DRIVABLE_GEARS = (structs.CarState.GearShifter.sport,)
 
-  def update(self, can_packets):
-    ret = super().update(can_packets)
-    if self.CC.tss3_request_transport is not None:
-      self.CC.observe_tss3_request_plane(can_packets, ret.canValid)
-    return ret
-
   @staticmethod
   def get_pid_accel_limits(CP, current_speed, cruise_speed):
     return CarControllerParams(CP).ACCEL_MIN, CarControllerParams(CP).ACCEL_MAX

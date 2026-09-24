@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 import unittest
 
-from opendbc.can import CANPacker
+from opendbc.can import CANPacker, CANParser
 from opendbc.car.lateral import get_max_angle_delta_vm, get_max_angle_vm
 from opendbc.car.structs import CarParams
 from opendbc.car.toyota.carcontroller import get_safety_CP
 from opendbc.car.toyota.interface import CarInterface
-from opendbc.car.toyota.tss3 import build_host_application, build_signer_requests
+from opendbc.car.toyota import toyotacan
 from opendbc.car.toyota.values import CAR, EPS_SCALE, CarControllerParams, ToyotaSafetyFlags
 from opendbc.car.vehicle_model import VehicleModel
 from opendbc.safety.tests.libsafety import libsafety_py
@@ -14,6 +14,23 @@ import opendbc.safety.tests.common as common
 from opendbc.safety.tests.common import CANPackerSafety
 
 TRAILER = bytes(4)
+DBC = "toyota_tss3_pt_generated"
+PACKER = CANPacker(DBC)
+
+
+def build_signer_requests(seq: int, request: bytes):
+  return toyotacan.create_tss3_signer_requests(PACKER, 0, seq, request)
+
+
+def build_host_application(lat_active: bool = False, angle_raw: int = 0, accel: float = 0.0, request_sequence: int = 0,
+                           stock: bytes | None = None) -> bytes:
+  stock_values = None
+  if stock is not None:
+    parser = CANParser(DBC, [("CONTROL_REQUEST", float("nan"))], 2)
+    parser.update([(0, [(0x08A, stock[:28] + TRAILER, 2)])])
+    stock_values = dict(parser.vl["CONTROL_REQUEST"])
+  values = toyotacan.create_tss3_control_request_values(stock_values, lat_active, angle_raw, True, accel, 0.0, request_sequence)
+  return PACKER.make_can_msg("CONTROL_REQUEST", 0, values)[1][:28]
 
 
 def fix_toyota_checksum(msg):
@@ -40,8 +57,8 @@ class Tss3SafetyHelpers:
     """Send the unsigned request to the signer, returns whether the final fragment was allowed."""
     self.signer_seq = self.signer_seq % 0xFF + 1
     ok = False
-    for frame in build_signer_requests(self.signer_seq, request):
-      ok = self.safety.safety_tx_hook(libsafety_py.make_CANPacket(frame.address, frame.src, frame.dat))
+    for address, dat, bus in build_signer_requests(self.signer_seq, request):
+      ok = self.safety.safety_tx_hook(libsafety_py.make_CANPacket(address, bus, dat))
     return ok
 
   def _publish(self, request: bytes) -> bool:
@@ -67,7 +84,6 @@ class TestToyotaTss3CamrySafety(Tss3SafetyHelpers, common.CarSafetyTest, common.
 
   def setUp(self):
     self.packer = CANPackerSafety("toyota_tss3_pt_generated")
-    self.application_packer = CANPacker("toyota_tss3_pt_generated")
     self.safety = libsafety_py.libsafety
     param = EPS_SCALE[CAR.TOYOTA_CAMRY_TSS3] | ToyotaSafetyFlags.TSS3
     self.assertEqual(self.safety.set_safety_hooks(CarParams.SafetyModel.toyota, param), 0)
@@ -95,8 +111,7 @@ class TestToyotaTss3CamrySafety(Tss3SafetyHelpers, common.CarSafetyTest, common.
     return ok
 
   def _application(self, *, angle_raw: int = 0, lat_active: bool = False, accel: float = 0.0) -> bytes:
-    return build_host_application(self.application_packer, lat_active=lat_active, target_angle_raw=angle_raw,
-                                  long_active=True, accel=accel, set_speed_kph=0.0, request_sequence=0)
+    return build_host_application(lat_active=lat_active, angle_raw=angle_raw, accel=accel)
 
   def _application_msg(self, *, angle: float = 0.0, lat_active: bool = False, accel: float = 0.0):
     return self._control_request_msg(self._application(angle_raw=round(angle * self.DEG_TO_CAN), lat_active=lat_active, accel=accel))
@@ -226,7 +241,7 @@ class TestToyotaTss3CamrySafety(Tss3SafetyHelpers, common.CarSafetyTest, common.
 
   def test_request_fragments(self):
     request = self._application()
-    frames = [libsafety_py.make_CANPacket(f.address, f.src, f.dat) for f in build_signer_requests(0x5A, request)]
+    frames = [libsafety_py.make_CANPacket(address, bus, dat) for address, dat, bus in build_signer_requests(0x5A, request)]
 
     # out of order or repeated fragments are blocked
     for order in ((1, 2, 3), (0, 2, 3), (0, 1, 3), (0, 1, 2, 2), (0, 1, 1)):
@@ -309,7 +324,6 @@ class TestToyotaTss3CamryStockLongitudinalSafety(Tss3SafetyHelpers, unittest.Tes
   STOCK_08A = bytes.fromhex("0000000880002d47fe462afe467fff007fffff35c000100064003c005db7797f")
 
   def setUp(self):
-    self.application_packer = CANPacker("toyota_tss3_pt_generated")
     self.safety = libsafety_py.libsafety
     param = EPS_SCALE[CAR.TOYOTA_CAMRY_TSS3] | ToyotaSafetyFlags.TSS3 | ToyotaSafetyFlags.STOCK_LONGITUDINAL
     self.assertEqual(self.safety.set_safety_hooks(CarParams.SafetyModel.toyota, param), 0)
@@ -323,8 +337,7 @@ class TestToyotaTss3CamryStockLongitudinalSafety(Tss3SafetyHelpers, unittest.Tes
 
   def _host_request(self, stock: bytes | None = None, request_sequence: int = 12) -> bytes:
     stock = self.STOCK_08A if stock is None else stock
-    return build_host_application(self.application_packer, lat_active=False, target_angle_raw=0, long_active=False,
-                                  accel=0.0, set_speed_kph=0.0, request_sequence=request_sequence, stock_application=stock[:28])
+    return build_host_application(request_sequence=request_sequence, stock=stock)
 
   def test_arming_requires_recent_frc_request(self):
     self.assertFalse(self.safety.safety_tx_hook(self._admin_msg(True)))

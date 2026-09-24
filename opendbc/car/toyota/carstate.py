@@ -55,9 +55,24 @@ class CarState(CarStateBase):
     self.secoc_synchronization = None
     self.tss3_brake_module = None
     self.tss3_lkas_hud = {}
+    self.tss3_stock_control_request = None
+    self.tss3_signer_responses = []
+    self.tss3_signer_request_rejected = False
+    self.tss3_control_request_rejected = False
 
-  def _update_tss3(self, cp: CANParser, cp_cam: CANParser) -> structs.CarState:
+  def update_tss3(self, can_parsers) -> structs.CarState:
+    cp = can_parsers[Bus.pt]
+    cp_cam = can_parsers[Bus.cam]
+    cp_rejected = can_parsers[Bus.loopback]
     ret = structs.CarState()
+
+    # SecOC signer
+    responses = cp.vl_all["SIGNER_RESPONSE"]
+    self.tss3_signer_responses = [{sig: vals[i] for sig, vals in responses.items()} for i in range(len(responses["SIGNER_SEQUENCE"]))]
+    self.tss3_stock_control_request = copy.copy(cp_cam.vl["CONTROL_REQUEST"])
+    # panda checks the request on the last fragment
+    self.tss3_signer_request_rejected = any(int(header) >> 4 == 0xB for header in cp_rejected.vl_all["SIGNER_REQUEST"]["HEADER"])
+    self.tss3_control_request_rejected = len(cp_rejected.vl_all["CONTROL_REQUEST"]["REQUEST_SEQUENCE"]) > 0
 
     self.tss3_brake_module = copy.copy(cp.vl["BRAKE_MODULE"])
     if cp_cam.vl_all["LKAS_HUD"]["LTA_MODE"]:
@@ -144,10 +159,11 @@ class CarState(CarStateBase):
     return ret
 
   def update(self, can_parsers) -> structs.CarState:
+    if self.CP.flags & ToyotaFlags.TSS3:
+      return self.update_tss3(can_parsers)
+
     cp = can_parsers[Bus.pt]
     cp_cam = can_parsers[Bus.cam]
-    if self.CP.flags & ToyotaFlags.TSS3:
-      return self._update_tss3(cp, cp_cam)
 
     ret = structs.CarState()
     cp_acc = cp_cam if (self.CP.flags & ToyotaFlags.TSS2) and not (self.CP.flags & ToyotaFlags.RADAR_ACC) else cp
@@ -296,34 +312,45 @@ class CarState(CarStateBase):
     return ret
 
   @staticmethod
+  def get_can_parsers_tss3(CP):
+    pt_messages = [
+      ("STEER_ANGLE_SENSOR", 100),
+      ("EPS_STATUS", 100),
+      ("WHEEL_SPEEDS", 100),
+      ("BRAKE_MODULE", 50),
+      ("GAS_PEDAL", 40),
+      ("GEAR_PACKET_HYBRID", 50),
+      ("CRUISE_BUTTONS", 30),
+      ("READY_STATUS", 1),
+      ("ESP_CONTROL", 3),
+      ("BLINKERS_STATE", 1),
+      ("BODY_CONTROL_STATE", 3),
+      ("BODY_CONTROL_STATE_2", 3),
+      ("LIGHT_STALK", 1),
+      ("SIGNER_RESPONSE", float('nan')),
+    ]
+    cam_messages = [
+      ("CONTROL_REQUEST", 40),
+      ("CRUISE_DISPLAY", 1),
+      ("LKAS_HUD", 1),
+    ]
+    if CP.flags & ToyotaFlags.HAS_BSM:
+      cam_messages.append(("BSM", 1))
+    rejected_messages = [
+      ("CONTROL_REQUEST", float('nan')),
+      ("SIGNER_REQUEST", float('nan')),
+    ]
+    return {
+      Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, TSS3_CHASSIS_BUS),
+      Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], cam_messages, TSS3_SOURCE_BUS),
+      # frames panda rejected are echoed back on bus + 192
+      Bus.loopback: CANParser(DBC[CP.carFingerprint][Bus.pt], rejected_messages, TSS3_CHASSIS_BUS + 192),
+    }
+
+  @staticmethod
   def get_can_parsers(CP):
     if CP.flags & ToyotaFlags.TSS3:
-      pt_messages = [
-        ("STEER_ANGLE_SENSOR", 100),
-        ("EPS_STATUS", 100),
-        ("WHEEL_SPEEDS", 100),
-        ("BRAKE_MODULE", 50),
-        ("GAS_PEDAL", 40),
-        ("GEAR_PACKET_HYBRID", 50),
-        ("CRUISE_BUTTONS", 30),
-        ("READY_STATUS", 1),
-        ("ESP_CONTROL", 3),
-        ("BLINKERS_STATE", 1),
-        ("BODY_CONTROL_STATE", 3),
-        ("BODY_CONTROL_STATE_2", 3),
-        ("LIGHT_STALK", 1),
-      ]
-      cam_messages = [
-        ("CONTROL_REQUEST", 40),
-        ("CRUISE_DISPLAY", 1),
-        ("LKAS_HUD", 1),
-      ]
-      if CP.flags & ToyotaFlags.HAS_BSM:
-        cam_messages.append(("BSM", 1))
-      return {
-        Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, TSS3_CHASSIS_BUS),
-        Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], cam_messages, TSS3_SOURCE_BUS),
-      }
+      return CarState.get_can_parsers_tss3(CP)
 
     pt_messages = [
       ("BLINKERS_STATE", float('nan')),

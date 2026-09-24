@@ -77,6 +77,57 @@ def create_tss3_brake_cancel_command(packer, stock_brake, bus):
   return packer.make_can_msg("BRAKE_MODULE", bus, values)
 
 
+def create_tss3_control_request_values(stock_request, lat_active: bool, angle_raw: int, long_active: bool, accel: float,
+                                       set_speed_kph: float, request_sequence: int):
+  """CONTROL_REQUEST signals, with stock longitudinal only the lateral request and sequence of the FRC's are replaced."""
+  lateral = {
+    "LATERAL_REQUEST_PINION_ANGLE": angle_raw * 0.001000121519,
+    "LATERAL_REQUEST_ID": 11 if lat_active else 0,  # LTA/LCA
+    "LATERAL_ASSIST_GAIN": 1.0 if lat_active else 0.5,
+    "LATERAL_DAMPING_GAIN": 0,
+    "REQUEST_SEQUENCE": request_sequence,
+  }
+  if stock_request is not None:
+    return {**stock_request, **lateral}
+
+  accel = accel if long_active else 0.0
+  return {
+    "CRUISE_OPERATING_LATCH": 1,
+    "SET_ME_1": 1,
+    "LONGITUDINAL_REQUEST_ID_UPPER": 11,
+    "LONGITUDINAL_ALLOCATION_METHOD_UPPER": 1,  # engine and brake
+    "LONGITUDINAL_REQUEST_ID_LOWER": 17,
+    "LONGITUDINAL_ALLOCATION_METHOD_LOWER": 3,  # brake only
+    "LONGITUDINAL_REQUEST_ACCEL_UPPER": accel,
+    "LONGITUDINAL_REQUEST_ACCEL_LOWER": accel,
+    "SET_SPEED": min(max(round(set_speed_kph), 0), 255),
+    "SET_ME_X7FFF": 0x7FFF,
+    "SET_ME_X7FFF_2": 0x7FFF,
+    "CRUISE_STATE_MIRROR": 3,
+    "CRUISE_REQUEST_ACTIVE": 1,
+    **lateral,
+  }
+
+
+def create_tss3_signer_requests(packer, bus: int, signer_sequence: int, application: bytes):
+  # four fragments of the 28-byte request, headers alternate the low and high nibble of the sequence
+  nibbles = (signer_sequence & 0xF, signer_sequence >> 4)
+  msgs = []
+  for fragment in range(4):
+    data = application[fragment * 7:(fragment + 1) * 7]
+    msgs.append(packer.make_can_msg("SIGNER_REQUEST", bus, {
+      "HEADER": 0x80 | (fragment << 4) | nibbles[fragment % 2],
+      "DATA_1": int.from_bytes(data[:3], "big"),
+      "DATA_2": int.from_bytes(data[3:], "big"),
+    }))
+  return msgs
+
+
+def create_tss3_signer_arm(packer, bus: int, arm: bool):
+  # arm: panda publishes openpilot's CONTROL_REQUEST instead of the FRC's, release: the FRC's again
+  return packer.make_can_msg("SIGNER_REQUEST", bus, {"HEADER": 0x07, "DATA_1": 0xC9A800 | int(arm)})
+
+
 def create_tss3_lkas_hud(packer, bus, stock_hud, left_line: bool, right_line: bool, lat_active: bool, steer_alert: bool):
   values = copy.copy(stock_hud)
 

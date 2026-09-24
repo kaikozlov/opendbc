@@ -8,7 +8,7 @@ from opendbc.car.common.pid import PIDController
 from opendbc.car.secoc import add_mac, build_sync_mac
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.toyota import toyotacan
-from opendbc.car.toyota.tss3 import TSS3_CHASSIS_BUS, TSS3_SOURCE_BUS, ToyotaTss3RequestTransport
+from opendbc.car.toyota.tss3 import TSS3_CHASSIS_BUS, TSS3_SOURCE_BUS, SignerTransport
 from opendbc.car.toyota.values import CAR, CarControllerParams, ToyotaFlags
 from opendbc.car.vehicle_model import VehicleModel
 from opendbc.can import CANPacker
@@ -83,72 +83,55 @@ class CarController(CarControllerBase):
     self.secoc_acc_message_counter = 0
     self.secoc_prev_reset_counter = 0
 
-    self.tss3_request_transport = ToyotaTss3RequestTransport(
-      self.packer, stock_longitudinal=not self.CP.openpilotLongitudinalControl,
-    ) if self.CP.flags & ToyotaFlags.TSS3 else None
+    if self.CP.flags & ToyotaFlags.TSS3:
+      self.signer = SignerTransport(self.packer, stock_longitudinal=not self.CP.openpilotLongitudinalControl)
+      # Vehicle model used for lateral limiting
+      self.VM = VehicleModel(get_safety_CP())
 
-    # Vehicle model used for lateral limiting
-    self.VM = VehicleModel(get_safety_CP()) if self.CP.flags & ToyotaFlags.TSS3 else None
+  def update_tss3(self, CC, CS, now_nanos):
+    actuators = CC.actuators
+    hud_control = CC.hudControl
+    can_sends = self.signer.receive(CS, CC.enabled, now_nanos)
 
-  def observe_tss3_request_plane(self, can_packets, can_valid: bool) -> None:
-    if self.tss3_request_transport is not None:
-      self.tss3_request_transport.observe(can_packets, can_valid)
+    # *** steer angle ***
+    measured_angle = CS.out.steeringAngleDeg + CS.out.steeringAngleOffsetDeg
+    # the FRC cancels cruise if lateral stays active while the driver turns the wheel past what we can command
+    lat_active = CC.latActive and abs(measured_angle) < self.params.ANGLE_LIMITS.STEER_ANGLE_MAX
+    # only advance the rate limit when a new request will be signed, like panda
+    if not lat_active or self.signer.request_due(CS, CC.enabled, now_nanos):
+      if self.signer.angle_reference_reset(now_nanos):
+        self.last_angle = measured_angle
+      self.last_angle = apply_steer_angle_limits_vm(actuators.steeringAngleDeg + CS.out.steeringAngleOffsetDeg, self.last_angle,
+                                                    CS.out.vEgoRaw, measured_angle, lat_active, self.params, self.VM)
+
+    # *** gas and brake ***
+    long_active = self.CP.openpilotLongitudinalControl and CC.longActive
+    self.accel = float(np.clip(actuators.accel, self.params.ACCEL_MIN, self.params.ACCEL_MAX)) if long_active else 0.0
+
+    can_sends.extend(self.signer.send(CS, CC.enabled, lat_active, self.last_angle, long_active, self.accel, now_nanos))
+
+    if CC.cruiseControl.cancel:
+      can_sends.append(toyotacan.create_tss3_brake_cancel_command(self.packer, CS.tss3_brake_module, TSS3_SOURCE_BUS))
+
+    # *** hud ui ***
+    # at 5Hz, or immediately on alert change
+    steer_alert = hud_control.visualAlert in (VisualAlert.steerRequired, VisualAlert.ldw)
+    send_ui = steer_alert != self.alert_active
+    self.alert_active = steer_alert
+    if CS.tss3_lkas_hud and (self.frame % 20 == 0 or send_ui):
+      can_sends.append(toyotacan.create_tss3_lkas_hud(self.packer, TSS3_CHASSIS_BUS, CS.tss3_lkas_hud, hud_control.leftLaneVisible,
+                                                      hud_control.rightLaneVisible, CC.latActive, steer_alert))
+
+    new_actuators = actuators.as_builder()
+    new_actuators.steeringAngleDeg = self.last_angle
+    new_actuators.accel = self.accel
+
+    self.frame += 1
+    return new_actuators, can_sends
 
   def update(self, CC, CS, now_nanos):
     if self.CP.flags & ToyotaFlags.TSS3:
-      output = CC.actuators.as_builder()
-      can_sends = []
-
-      measured_angle = CS.out.steeringAngleDeg + CS.out.steeringAngleOffsetDeg
-      # the FRC cancels cruise if lateral stays active while the driver turns the wheel past what we can command
-      lateral_command_active = CC.latActive and abs(measured_angle) < self.params.ANGLE_LIMITS.STEER_ANGLE_MAX
-      longitudinal_command_active = self.CP.openpilotLongitudinalControl and CC.longActive
-      hud_control = CC.hudControl
-
-      # only advance the rate-limited angle when a new application will be signed
-      desired_angle = CC.actuators.steeringAngleDeg + CS.out.steeringAngleOffsetDeg
-      create_lateral_application = not lateral_command_active or \
-        self.tss3_request_transport.control_generation_due(
-          enabled=CC.enabled,
-          lat_active=lateral_command_active,
-          long_active=longitudinal_command_active,
-          now_nanos=now_nanos,
-        )
-      if create_lateral_application:
-        if self.tss3_request_transport.angle_reference_reset(now_nanos):
-          self.last_angle = measured_angle
-        self.last_angle = apply_steer_angle_limits_vm(
-          desired_angle, self.last_angle, CS.out.vEgoRaw, measured_angle,
-          lateral_command_active, self.params, self.VM,
-        )
-      output.steeringAngleDeg = self.last_angle
-
-      if CC.cruiseControl.cancel:
-        can_sends.append(toyotacan.create_tss3_brake_cancel_command(self.packer, CS.tss3_brake_module, TSS3_SOURCE_BUS))
-
-      # LKAS HUD at 5Hz, or immediately on alert change
-      steer_alert = hud_control.visualAlert in (VisualAlert.steerRequired, VisualAlert.ldw)
-      send_ui = steer_alert != self.alert_active
-      self.alert_active = steer_alert
-      if CS.tss3_lkas_hud and (self.frame % 20 == 0 or send_ui):
-        can_sends.append(toyotacan.create_tss3_lkas_hud(self.packer, TSS3_CHASSIS_BUS, CS.tss3_lkas_hud, hud_control.leftLaneVisible,
-                                                        hud_control.rightLaneVisible, CC.latActive, steer_alert))
-
-      output.accel = float(np.clip(CC.actuators.accel, self.params.ACCEL_MIN, self.params.ACCEL_MAX)) \
-        if longitudinal_command_active else 0.0
-
-      can_sends.extend(self.tss3_request_transport.update_control(
-        enabled=CC.enabled,
-        lat_active=lateral_command_active,
-        target_angle_deg=output.steeringAngleDeg,
-        long_active=longitudinal_command_active,
-        accel=output.accel,
-        set_speed_kph=CS.out.vCruise,
-        now_nanos=now_nanos,
-      ))
-
-      self.frame += 1
-      return output, can_sends
+      return self.update_tss3(CC, CS, now_nanos)
 
     actuators = CC.actuators
     stopping = actuators.longControlState == LongCtrlState.stopping
