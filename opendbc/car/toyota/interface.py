@@ -4,6 +4,7 @@ from opendbc.car.toyota.carcontroller import CarController
 from opendbc.car.toyota.radar_interface import RadarInterface
 from opendbc.car.toyota.values import Ecu, CAR, DBC, ToyotaFlags, CarControllerParams, TSS2_CAR, RADAR_ACC_CAR, NO_DSU_CAR, \
                                                   MIN_ACC_SPEED, EPS_SCALE, NO_STOP_TIMER_CAR, ToyotaSafetyFlags, UNSUPPORTED_DSU_CAR
+from opendbc.car.toyota.tss3 import TSS3_SOURCE_BUS
 from opendbc.car.disable_ecu import disable_ecu
 from opendbc.car.interfaces import CarInterfaceBase
 from opendbc.sunnypilot.car.toyota.values import ToyotaFlagsSP, ToyotaSafetyFlagsSP
@@ -25,6 +26,7 @@ class CarInterface(CarInterfaceBase):
   @staticmethod
   def _get_params(ret: structs.CarParams, candidate, fingerprint, car_fw, alpha_long, is_release, docs) -> structs.CarParams:
     ret.brand = "toyota"
+
     ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.toyota)]
     ret.safetyConfigs[0].safetyParam = EPS_SCALE[candidate]
 
@@ -37,9 +39,16 @@ class CarInterface(CarInterfaceBase):
       ret.safetyConfigs[0].safetyParam |= ToyotaSafetyFlags.SECOC.value
       ret.dashcamOnly = is_release
 
-    if ret.flags & ToyotaFlags.ANGLE_CONTROL:
+    if ret.flags & ToyotaFlags.TSS3:
+      # the FRC's CONTROL_REQUEST is signed by the EPS, see tss3.py
+      ret.safetyConfigs[0].safetyParam |= ToyotaSafetyFlags.TSS3.value
+      ret.dashcamOnly = is_release
+      ret.steerAtStandstill = True
+
+    if ret.flags & (ToyotaFlags.ANGLE_CONTROL | ToyotaFlags.TSS3):
       ret.steerControlType = SteerControlType.angle
-      ret.safetyConfigs[0].safetyParam |= ToyotaSafetyFlags.LTA.value
+      if ret.flags & ToyotaFlags.ANGLE_CONTROL:
+        ret.safetyConfigs[0].safetyParam |= ToyotaSafetyFlags.LTA.value
 
       # LTA control can be more delayed and winds up more often
       ret.steerActuatorDelay = 0.18
@@ -79,11 +88,17 @@ class CarInterface(CarInterfaceBase):
       # TODO: Some of these platforms are not advertised to have full range ACC, do they really all have sng?
       stop_and_go = True
 
+    elif ret.flags & ToyotaFlags.TSS3:
+      stop_and_go = True
+
     ret.centerToFront = ret.wheelbase * 0.44
 
     # TODO: Some TSS-P platforms have BSM, but are flipped based on region or driving direction.
     # Detect flipped signals and enable for C-HR and others
     if 0x3F6 in fingerprint[0] and ret.flags & ToyotaFlags.TSS2:
+      ret.flags |= ToyotaFlags.HAS_BSM.value
+    # BSM comes from the FRC on TSS3
+    if 0x3F6 in fingerprint.get(TSS3_SOURCE_BUS, {}) and ret.flags & ToyotaFlags.TSS3:
       ret.flags |= ToyotaFlags.HAS_BSM.value
 
     # No radar dbc for cars without DSU which are not TSS 2.0
@@ -98,6 +113,10 @@ class CarInterface(CarInterfaceBase):
       if alpha_long and candidate in RADAR_ACC_CAR:
         ret.flags |= ToyotaFlags.DISABLE_RADAR.value
 
+    # TSS3 longitudinal replaces the FRC's acceleration request, it is new
+    if ret.flags & ToyotaFlags.TSS3:
+      ret.alphaLongitudinalAvailable = True
+
     # openpilot longitudinal enabled by default:
     #  - cars w/ DSU disconnected
     #  - TSS2 cars with camera sending ACC_CONTROL where we can block it
@@ -105,7 +124,8 @@ class CarInterface(CarInterfaceBase):
     #  - TSS2 radar ACC cars (disables radar)
 
     ret.openpilotLongitudinalControl = ((bool(ret.flags & ToyotaFlags.TSS2) and not (ret.flags & ToyotaFlags.RADAR_ACC)) or
-                                        bool(ret.flags & ToyotaFlags.DISABLE_RADAR.value))
+                                        bool(ret.flags & ToyotaFlags.DISABLE_RADAR.value) or
+                                        (bool(ret.flags & ToyotaFlags.TSS3) and alpha_long))
 
     ret.autoResumeSng = ret.openpilotLongitudinalControl and candidate in NO_STOP_TIMER_CAR
 
@@ -122,6 +142,9 @@ class CarInterface(CarInterfaceBase):
       # Hybrids have much quicker longitudinal actuator response
       if ret.flags & ToyotaFlags.HYBRID.value:
         ret.longitudinalActuatorDelay = 0.05
+
+    if ret.flags & ToyotaFlags.TSS3:
+      ret.longitudinalActuatorDelay = 0.2
 
     return ret
 
@@ -162,7 +185,7 @@ class CarInterface(CarInterfaceBase):
     # reuse logic from _get_params
     # if the smartDSU is detected, openpilot can send ACC_CONTROL and the smartDSU will block it from the DSU or radar.
     # since we don't yet parse radar on TSS2/TSS-P radar-based ACC cars, gate longitudinal behind experimental toggle
-    stock_cp.alphaLongitudinalAvailable = use_sdsu or candidate in RADAR_ACC_CAR
+    stock_cp.alphaLongitudinalAvailable = use_sdsu or candidate in RADAR_ACC_CAR or bool(stock_cp.flags & ToyotaFlags.TSS3)
 
     if use_sdsu:
       use_sdsu = use_sdsu and alpha_long
@@ -179,7 +202,8 @@ class CarInterface(CarInterfaceBase):
     #  - TSS2 radar ACC cars w/o smartDSU installed (disables radar)
     stock_cp.openpilotLongitudinalControl = use_sdsu or \
       candidate in (TSS2_CAR - RADAR_ACC_CAR) or \
-      bool(stock_cp.flags & ToyotaFlags.DISABLE_RADAR)
+      bool(stock_cp.flags & ToyotaFlags.DISABLE_RADAR) or \
+      (bool(stock_cp.flags & ToyotaFlags.TSS3) and alpha_long)
 
     ret.enableGasInterceptor = 0x201 in fingerprint[0] and stock_cp.openpilotLongitudinalControl and \
                                not stock_cp.flags & ToyotaFlags.SECOC
