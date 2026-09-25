@@ -303,6 +303,15 @@ class TestToyotaTss3CamrySafety(Tss3SafetyHelpers, common.CarSafetyTest, common.
     bad_checksum[-1] ^= 1
     self.assertFalse(self._tx(libsafety_py.make_CANPacket(0x101, 2, bytes(bad_checksum))))
 
+  def test_brake_cancel_from_recorded_state(self):
+    # BRAKE_MODULE frames recorded on a Camry, released and pressed
+    for frame in ("800000000000008a", "801200000000009c", "800000020000008c", "8800000400000096"):
+      with self.subTest(frame=frame):
+        parser = CANParser(DBC, [("BRAKE_MODULE", float("nan"))], 0)
+        parser.update([(0, [(0x101, bytes.fromhex(frame), 0)])])
+        address, dat, bus = toyotacan.create_tss3_brake_cancel_command(PACKER, dict(parser.vl["BRAKE_MODULE"]), 2)
+        self.assertTrue(self._tx(libsafety_py.make_CANPacket(address, bus, dat)))
+
   def _user_brake_msg(self, brake):
     return self.packer.make_can_msg_safety("BRAKE_MODULE", 0, {"BRAKE_PRESSED": brake}, fix_toyota_checksum)
 
