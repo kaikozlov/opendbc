@@ -283,6 +283,10 @@ typedef struct {
   struct sample_t meas;          // last 6 steer curvatures
 } CurvatureSteeringState;
 
+#define TOYOTA_TSS3_08A_LEN 28U  // without the SecOC trailer
+#define TOYOTA_TSS3_APPROVED_LEN 8U
+#define TOYOTA_TSS3_STOCK_08A_HISTORY 2U
+
 typedef struct {
   // This can be set by the safety hooks
   bool controls_allowed;
@@ -345,6 +349,22 @@ typedef struct {
   bool tesla_autopark;
   bool tesla_autopark_prev;
 
+  bool toyota_tss3_08a_active;
+  uint32_t toyota_tss3_08a_last_tx_ts;
+  uint8_t toyota_tss3_request_next_fragment;
+  uint32_t toyota_tss3_last_request_ts;
+  uint8_t toyota_tss3_request[TOYOTA_TSS3_08A_LEN];
+  uint8_t toyota_tss3_request_seq[2];  // low and high sequence nibbles, repeated in fragments 2 and 3
+  uint8_t toyota_tss3_approved[TOYOTA_TSS3_APPROVED_LEN][TOYOTA_TSS3_08A_LEN];
+  uint32_t toyota_tss3_approved_ts[TOYOTA_TSS3_APPROVED_LEN];
+  bool toyota_tss3_approved_valid[TOYOTA_TSS3_APPROVED_LEN];
+  uint8_t toyota_tss3_approved_idx;
+  uint8_t toyota_tss3_stock_08a[TOYOTA_TSS3_STOCK_08A_HISTORY][TOYOTA_TSS3_08A_LEN];
+  uint32_t toyota_tss3_stock_08a_ts[TOYOTA_TSS3_STOCK_08A_HISTORY];
+  uint32_t toyota_tss3_stock_08a_last_ts;
+  uint8_t toyota_tss3_stock_08a_idx;
+  uint8_t toyota_tss3_stock_08a_cnt;
+
   bool volkswagen_set_button_prev;
   bool volkswagen_resume_button_prev;
   bool volkswagen_brake_pedal_switch;
@@ -393,6 +413,7 @@ typedef struct {
   bool toyota_alt_brake;
   bool toyota_stock_longitudinal;
   bool toyota_lta;
+  bool toyota_tss3;
   int toyota_dbc_eps_torque_factor;   // conversion factor for STEER_TORQUE_EPS in %: see dbc file
 
   bool volkswagen_longitudinal;
