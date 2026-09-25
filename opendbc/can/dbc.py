@@ -8,7 +8,7 @@ from opendbc import DBC_PATH, get_generated_dbcs
 
 # TODO: these should just be passed in along with the DBC file
 from opendbc.car.honda.hondacan import honda_checksum
-from opendbc.car.toyota.toyotacan import toyota_checksum
+from opendbc.car.toyota.toyotacan import toyota_checksum, toyota_e2e_checksum
 from opendbc.car.subaru.subarucan import subaru_checksum
 from opendbc.car.chrysler.chryslercan import chrysler_checksum, fca_giorgio_checksum
 from opendbc.car.hyundai.hyundaican import hyundai_can_checksum
@@ -44,6 +44,7 @@ class SignalType:
   FORD_CHECKSUM = 16
   MG_CHECKSUM = 17
   HYUNDAI_CHECKSUM = 18
+  TOYOTA_E2E_CHECKSUM = 19
 
 
 @dataclass
@@ -58,8 +59,8 @@ class Signal:
   offset: float
   is_little_endian: bool
   type: int = SignalType.DEFAULT
-  calc_checksum: 'Callable[[int, Signal, bytearray], int] | None' = None
-  checksum_fields: tuple['Signal', ...] = ()
+  calc_checksum: "Callable[[int, Signal, bytearray], int] | None" = None
+  checksum_fields: tuple["Signal", ...] = ()
   max_counter: int = field(init=False)  # a counter's last value before it wraps to 0
   counter_shift: int = 0  # where this signal's bits go in a counter split across signals
 
@@ -201,6 +202,7 @@ class DBC:
 
 # ***** checksum functions *****
 
+
 def tesla_setup_signal(sig: Signal, dbc_name: str, line_num: int) -> None:
   if sig.name.endswith("Counter"):
     sig.type = SignalType.COUNTER
@@ -226,8 +228,7 @@ def mg_setup_signal(sig: Signal, dbc_name: str, line_num: int) -> None:
 
 
 def hyundai_setup_signal(sig: Signal, dbc_name: str, line_num: int) -> None:
-  if ((sig.name == "Checksum" and sig.size == 4) or sig.name in ("CheckSum_TCS3", "CR_VSM_ChkSum") or
-      sig.name.startswith("WHL_SPD_Checksum_")):
+  if (sig.name == "Checksum" and sig.size == 4) or sig.name in ("CheckSum_TCS3", "CR_VSM_ChkSum") or sig.name.startswith("WHL_SPD_Checksum_"):
     sig.type = SignalType.HYUNDAI_CHECKSUM
     sig.calc_checksum = hyundai_can_checksum
   elif sig.name in ("AliveCounter", "AliveCounterTCS", "CR_VSM_Alive", "CF_Clu_AliveCnt1"):
@@ -253,6 +254,8 @@ class ChecksumState:
 def get_checksum_state(dbc_name: str) -> ChecksumState | None:
   if dbc_name.startswith(("honda_", "acura_")):
     return ChecksumState(SignalType.HONDA_CHECKSUM, honda_checksum)
+  elif dbc_name.startswith("toyota_tss3_radar"):
+    return ChecksumState(SignalType.TOYOTA_E2E_CHECKSUM, toyota_e2e_checksum)
   elif dbc_name.startswith(("toyota_", "lexus_")):
     return ChecksumState(SignalType.TOYOTA_CHECKSUM, toyota_checksum)
   elif dbc_name == "hyundai_can_generated":
@@ -284,8 +287,7 @@ def get_checksum_state(dbc_name: str) -> ChecksumState | None:
     return ChecksumState(SignalType.BYD_CHECKSUM, byd_checksum)
   elif dbc_name == "ford_lincoln_base_pt":
     # Other _Cs fields are optional or use model-specific checksum algorithms.
-    return ChecksumState(SignalType.FORD_CHECKSUM, ford_checksum, ford_setup_signal, checksum_pattern=r"_Cs$",
-                         checksum_fields=FORD_CHECKSUM_FIELDS)
+    return ChecksumState(SignalType.FORD_CHECKSUM, ford_checksum, ford_setup_signal, checksum_pattern=r"_Cs$", checksum_fields=FORD_CHECKSUM_FIELDS)
   elif dbc_name == "mg":
     return ChecksumState(SignalType.MG_CHECKSUM, mg_checksum, mg_setup_signal, checksum_pattern=r"Chksm|^ChLKARespToqPVHSC2$")
   elif dbc_name == "rivian_primary_actuator":
@@ -298,8 +300,7 @@ def set_signal_type(sig: Signal, chk: ChecksumState | None, dbc_name: str, line_
   if chk:
     if chk.setup_signal:
       chk.setup_signal(sig, dbc_name, line_num)
-    if (re.search(chk.checksum_pattern, sig.name) and
-        (chk.checksum_fields is None or address in chk.checksum_fields)):
+    if re.search(chk.checksum_pattern, sig.name) and (chk.checksum_fields is None or address in chk.checksum_fields):
       sig.type = chk.checksum_type
       sig.calc_checksum = chk.calc_checksum
     elif sig.name == "COUNTER":
