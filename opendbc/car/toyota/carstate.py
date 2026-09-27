@@ -70,8 +70,7 @@ class CarState(CarStateBase):
     responses = cp.vl_all["SIGNER_RESPONSE"]
     self.tss3_signer_responses = [{sig: vals[i] for sig, vals in responses.items()} for i in range(len(responses["SIGNER_SEQUENCE"]))]
     self.tss3_stock_control_request = copy.copy(cp_cam.vl["CONTROL_REQUEST"])
-    # panda checks the request on the last fragment
-    self.tss3_signer_request_rejected = any(int(header) >> 4 == 0xB for header in cp_rejected.vl_all["SIGNER_REQUEST"]["HEADER"])
+    self.tss3_signer_request_rejected = any(int(header) == 0xC0 for header in cp_rejected.vl_all["SIGNER_REQUEST"]["HEADER"])
     self.tss3_control_request_rejected = len(cp_rejected.vl_all["CONTROL_REQUEST"]["REQUEST_SEQUENCE"]) > 0
 
     self.tss3_brake_module = copy.copy(cp.vl["BRAKE_MODULE"])

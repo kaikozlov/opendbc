@@ -18,8 +18,8 @@ DBC = "toyota_tss3_pt_generated"
 PACKER = CANPacker(DBC)
 
 
-def build_signer_requests(seq: int, request: bytes):
-  return toyotacan.create_tss3_signer_requests(PACKER, 0, seq, request)
+def build_signer_request(seq: int, request: bytes):
+  return toyotacan.create_tss3_signer_request(PACKER, 0, seq, request)
 
 
 def build_host_application(lat_active: bool = False, angle_raw: int = 0, accel: float = 0.0, request_sequence: int = 0,
@@ -41,8 +41,6 @@ def fix_toyota_checksum(msg):
 
 
 class Tss3SafetyHelpers:
-  signer_seq = 0
-
   @staticmethod
   def _admin_msg(arm: bool):
     return libsafety_py.make_CANPacket(0x777, 1, bytes((7, 0xC9, 0xA8, int(arm), 0, 0, 0, 0)))
@@ -54,12 +52,9 @@ class Tss3SafetyHelpers:
     return msg
 
   def _request(self, request: bytes) -> bool:
-    """Send the unsigned request to the signer, returns whether the final fragment was allowed."""
-    self.signer_seq = self.signer_seq % 0xFF + 1
-    ok = False
-    for address, dat, bus in build_signer_requests(self.signer_seq, request):
-      ok = self.safety.safety_tx_hook(libsafety_py.make_CANPacket(address, bus, dat))
-    return ok
+    """Send the unsigned request to the signer, the signer sequence carries its REQUEST_SEQUENCE."""
+    address, dat, bus = build_signer_request(0x40 | (request[26] & 0x3F), request)
+    return self.safety.safety_tx_hook(libsafety_py.make_CANPacket(address, bus, dat))
 
   def _publish(self, request: bytes) -> bool:
     return self.safety.safety_tx_hook(self._control_request_msg(request))
@@ -231,34 +226,20 @@ class TestToyotaTss3CamrySafety(Tss3SafetyHelpers, common.CarSafetyTest, common.
     self.assertTrue(self._tx(self._admin_msg(True)))
     self.assertTrue(self._publish(request))
 
-  def test_request_schema(self):
-    request = self._application()
-    for index in (0, 1, 2, 3, 4, 5, 6, 7, 13, 14, 15, 16, 17, 20, 22, 23, 25, 27):
-      data = bytearray(request)
-      data[index] ^= 1
-      self.assertFalse(self._request(bytes(data)), index)
-    self.assertTrue(self._request(request))
+  def test_compact_request(self):
+    request = build_host_application(request_sequence=0x1A)
+    address, dat, bus = build_signer_request(0x5A, request)
+    self.assertEqual((address, dat, bus), (0x777, bytes.fromhex("c00000000000005a"), 0))
+    self.assertTrue(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(address, bus, dat)))
 
-  def test_request_fragments(self):
-    request = self._application()
-    frames = [libsafety_py.make_CANPacket(address, bus, dat) for address, dat, bus in build_signer_requests(0x5A, request)]
+    for index, value in ((0, 0x7F), (0, 0x80), (0, 0xC1), (6, 4), (6, 0x40), (7, 0)):
+      invalid = bytearray(dat)
+      invalid[index] = value
+      self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x777, 0, bytes(invalid))))
 
-    # out of order or repeated fragments are blocked
-    for order in ((1, 2, 3), (0, 2, 3), (0, 1, 3), (0, 1, 2, 2), (0, 1, 1)):
-      results = [self.safety.safety_tx_hook(frames[i]) for i in order]
-      self.assertFalse(results[-1], order)
-
-    # fragments 2 and 3 must repeat the sequence nibbles of fragments 0 and 1
-    for index in (2, 3):
-      bad = [bytearray(bytes(f[0].data)[:8]) for f in frames]
-      bad[index][0] ^= 1
-      results = [self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x777, 0, bytes(d))) for d in bad]
-      self.assertFalse(results[index])
-
-    for data in (bytes((0x7F, 1, 2, 3, 4, 5, 6, 7)), bytes((0xC0, 1, 2, 3, 4, 5, 6, 7))):
-      self.assertFalse(self.safety.safety_tx_hook(libsafety_py.make_CANPacket(0x777, 0, data)))
-
-    self.assertTrue(all(self.safety.safety_tx_hook(f) for f in frames))
+    fd = libsafety_py.make_CANPacket(address, bus, dat)
+    fd[0].fd = 1
+    self.assertFalse(self.safety.safety_tx_hook(fd))
 
   def test_admin_msgs(self):
     for action in (False, True):
@@ -359,22 +340,22 @@ class TestToyotaTss3CamryStockLongitudinalSafety(Tss3SafetyHelpers, unittest.Tes
     self.assertFalse(self.safety.safety_tx_hook(self._admin_msg(True)))
 
   def test_longitudinal_fields_must_match_frc(self):
-    self._rx_stock(self.STOCK_08A)
-    self.assertTrue(self.safety.safety_tx_hook(self._admin_msg(True)))
-
     for index in (3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 17, 20, 22, 23, 27):
       with self.subTest(index=index):
-        request = bytearray(self._host_request())
-        request[index] ^= 1
-        self.assertFalse(self._request(bytes(request)))
+        stock = bytearray(self.STOCK_08A)
+        stock[index] ^= 1
+        self._rx_stock(bytes(stock))
+        self.assertFalse(self._request(self._host_request()))
 
+    self._rx_stock(self.STOCK_08A)
+    self.assertTrue(self.safety.safety_tx_hook(self._admin_msg(True)))
     request = self._host_request()
     self.assertTrue(self._request(request))
     self.assertTrue(self._publish(request))
 
   def test_only_latest_frc_requests_match(self):
     old = bytearray(self.STOCK_08A)
-    old[8] ^= 1
+    old[10] ^= 1
     self._rx_stock(bytes(old))
     self._rx_stock(self.STOCK_08A)
     self.assertTrue(self._request(self._host_request(bytes(old))))

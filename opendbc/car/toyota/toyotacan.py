@@ -109,18 +109,13 @@ def create_tss3_control_request_values(stock_request, lat_active: bool, angle_ra
   }
 
 
-def create_tss3_signer_requests(packer, bus: int, signer_sequence: int, application: bytes):
-  # four fragments of the 28-byte request, headers alternate the low and high nibble of the sequence
-  nibbles = (signer_sequence & 0xF, signer_sequence >> 4)
-  msgs = []
-  for fragment in range(4):
-    data = application[fragment * 7:(fragment + 1) * 7]
-    msgs.append(packer.make_can_msg("SIGNER_REQUEST", bus, {
-      "HEADER": 0x80 | (fragment << 4) | nibbles[fragment % 2],
-      "DATA_1": int.from_bytes(data[:3], "big"),
-      "DATA_2": int.from_bytes(data[3:], "big"),
-    }))
-  return msgs
+def create_tss3_signer_request(packer, bus: int, signer_sequence: int, application: bytes):
+  # the accel, set speed, pinion angle and lateral ID of the 28-byte request, the signer rebuilds the rest
+  return packer.make_can_msg("SIGNER_REQUEST", bus, {
+    "HEADER": 0xC0,
+    "DATA_1": int.from_bytes(application[8:11], "big"),
+    "DATA_2": int.from_bytes(application[18:20] + bytes((application[21], signer_sequence)), "big"),
+  })
 
 
 def create_tss3_signer_arm(packer, bus: int, arm: bool):

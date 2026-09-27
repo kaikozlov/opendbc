@@ -169,7 +169,7 @@ CM_ SG_ 48 STEERING_WHEEL_TORQUE_FINE "Driver torque = STEERING_WHEEL_TORQUE_COA
 CM_ SG_ 129 REQUEST_LOSS "Set ~90 ms after the last valid CONTROL_REQUEST, a cruise fault latches until restart if it stays set for ~1 s";
 CM_ SG_ 138 LATERAL_REQUEST_PINION_ANGLE "1024/17870 deg per count";
 CM_ SG_ 138 AUTHENTICATOR "Truncated 28-bit SecOC MAC";
-CM_ BO_ 1911 "Requests to the EPS-resident SecOC signer. HEADER 0x80-0xB0 | sequence nibble: fragment 0-3 of a 28-byte CONTROL_REQUEST, 0x07: arm (DATA_1 0xC9A801) or release (0xC9A800) openpilot's CONTROL_REQUEST";
+CM_ BO_ 1911 "Requests to the EPS-resident SecOC signer. HEADER 0xC0: one compact canonical CONTROL_REQUEST (acceleration bound, set speed, pinion angle, lateral ID, full signer sequence); 0x07: arm (DATA_1 0xC9A801) or release (0xC9A800) openpilot's CONTROL_REQUEST";
 CM_ BO_ 1961 "Signer response with the SecOC trailer for the CONTROL_REQUEST with this SIGNER_SEQUENCE";
 CM_ SG_ 1042 LANE_LINE_1 "1 = recognized, 2 = missing, 4 = recognized while active";
 VAL_ 1042 LTA_MODE 20 "active" 18 "available" 16 "off" ;

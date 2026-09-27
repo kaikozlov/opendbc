@@ -2,7 +2,7 @@ import unittest
 from types import SimpleNamespace
 
 from opendbc.can import CANPacker, CANParser
-from opendbc.car.toyota.tss3 import SIGNER_MAX_PENDING, SIGNER_TIMEOUT_NS, TSS3_AUX_BUS, TSS3_CHASSIS_BUS, SignerTransport
+from opendbc.car.toyota.tss3 import SIGNER_MAX_PENDING, SIGNER_SEQUENCE_MIN, SIGNER_TIMEOUT_NS, TSS3_AUX_BUS, TSS3_CHASSIS_BUS, SignerTransport
 
 DBC = "toyota_tss3_pt_generated"
 ARM, RELEASE = bytes.fromhex("07c9a80100000000"), bytes.fromhex("07c9a80000000000")
@@ -41,14 +41,13 @@ class TestSignerTransport(unittest.TestCase):
     self.t += 10 * MS
     return sends
 
-  def test_request_fragments_and_signed_publication(self):
+  def test_compact_request_and_signed_publication(self):
     sends = self.step()
-    fragments = signer_requests(sends)
-    self.assertEqual([dat[0] for dat, _ in fragments], [0x81, 0x90, 0xA1, 0xB0])
-    self.assertTrue(all(bus == TSS3_CHASSIS_BUS for _, bus in fragments))
-    application = b"".join(dat[1:] for dat, _ in fragments)
+    requests = signer_requests(sends)
+    self.assertEqual(requests, [(bytes.fromhex("c001f44600110b40"), TSS3_CHASSIS_BUS)])
+    application = bytes.fromhex("0000000880002d4701f44601f47fff007fff0011c00b100064000000")
 
-    sends = self.step(state([response(1)]))
+    sends = self.step(state([response(SIGNER_SEQUENCE_MIN)]))
     self.assertEqual(sends[0], (0x777, ARM, TSS3_AUX_BUS))
     frame = published(sends)[0]
     self.assertEqual(frame[:28], application)
@@ -63,7 +62,9 @@ class TestSignerTransport(unittest.TestCase):
     parser = CANParser(DBC, [("CONTROL_REQUEST", float("nan"))], 2)
     parser.update([(0, [(0x08A, stock_frame, 2)])])
     self.signer = SignerTransport(self.packer, stock_longitudinal=True)
-    application = b"".join(dat[1:] for dat, _ in signer_requests(self.step(state(stock=dict(parser.vl["CONTROL_REQUEST"])))))
+    stock = dict(parser.vl["CONTROL_REQUEST"])
+    self.step(state(stock=stock))
+    application = published(self.step(state([response(SIGNER_SEQUENCE_MIN)], stock=stock)))[0][:28]
     for i, (ours, stock) in enumerate(zip(application, stock_frame[:28], strict=True)):
       mask = {18: 0, 19: 0, 24: 0, 25: 0, 21: 0xC0, 26: 0xC0}.get(i, 0xFF)  # as panda checks it
       self.assertEqual(ours & mask, stock & mask, i)
@@ -74,7 +75,7 @@ class TestSignerTransport(unittest.TestCase):
     self.assertEqual(len(self.signer.pending), SIGNER_MAX_PENDING)
 
     sequences = []
-    for seq in range(1, 9):
+    for seq in range(SIGNER_SEQUENCE_MIN, SIGNER_SEQUENCE_MIN + 8):
       frames = published(self.step(state([response(seq)])))
       self.assertEqual(len(frames), 1)
       sequences.append(frames[0][26] & 0x3F)
@@ -84,34 +85,34 @@ class TestSignerTransport(unittest.TestCase):
     self.step()
     self.step()
     # response for the second request, the first was lost
-    self.assertEqual(published(self.step(state([response(2)])))[0][26] & 0x3F, 1)
-    self.assertNotIn(1, self.signer.pending)
+    self.assertEqual(published(self.step(state([response(SIGNER_SEQUENCE_MIN + 1)])))[0][26] & 0x3F, 1)
+    self.assertNotIn(SIGNER_SEQUENCE_MIN, self.signer.pending)
 
-    self.step(state([response(3)]))
-    # request 4 was lost, request 5 is two steps after the last published and waits 20 ms
-    self.assertEqual(published(self.step(state([response(5)]))), [])
+    self.step(state([response(SIGNER_SEQUENCE_MIN + 2)]))
+    # the next-but-one response is not pending yet and cannot publish anything
+    self.assertEqual(published(self.step(state([response(SIGNER_SEQUENCE_MIN + 4)]))), [])
 
   def test_signer_error_and_invalid_responses_are_skipped(self):
     self.step()
-    bad = dict(response(1), SIGNER_SEQUENCE_INVERTED=0)
+    bad = dict(response(SIGNER_SEQUENCE_MIN), SIGNER_SEQUENCE_INVERTED=0)
     self.assertEqual(published(self.step(state([bad, response(99)]))), [])
-    assert 1 in self.signer.pending
-    self.step(state([response(1, status=5)]))
-    self.assertNotIn(1, self.signer.pending)
+    assert SIGNER_SEQUENCE_MIN in self.signer.pending
+    self.step(state([response(SIGNER_SEQUENCE_MIN, status=5)]))
+    self.assertNotIn(SIGNER_SEQUENCE_MIN, self.signer.pending)
 
   def test_release_on_disable_invalid_can_and_timeout(self):
     for release in ({"enabled": False}, {"CS": state(can_valid=False)}):
       with self.subTest(**{k: str(v) for k, v in release.items()}):
         self.setUp()
         self.step()
-        self.step(state([response(1)]))
+        self.step(state([response(SIGNER_SEQUENCE_MIN)]))
         sends = self.step(**release)
         assert (0x777, RELEASE, TSS3_AUX_BUS) in sends
         self.assertEqual((self.signer.active, len(self.signer.pending)), (False, 0))
 
     self.setUp()
     self.step()
-    self.step(state([response(1)]))
+    self.step(state([response(SIGNER_SEQUENCE_MIN)]))
     for _ in range(SIGNER_TIMEOUT_NS // (10 * MS) + 1):
       sends = self.step()
     assert (0x777, RELEASE, TSS3_AUX_BUS) in sends
@@ -119,11 +120,20 @@ class TestSignerTransport(unittest.TestCase):
   def test_rejected_publication_releases_and_rearms(self):
     self.step()
     self.step()
-    self.step(state([response(1)]))
-    sends = self.step(state([response(2)], control_request_rejected=True))
+    self.step(state([response(SIGNER_SEQUENCE_MIN)]))
+    sends = self.step(state([response(SIGNER_SEQUENCE_MIN + 1)], control_request_rejected=True))
     self.assertEqual([dat for addr, dat, _ in sends if addr == 0x777 and dat[0] == 0x07], [RELEASE])
     self.step()
-    assert (0x777, ARM, TSS3_AUX_BUS) in self.step(state([response(4)]))
+    assert (0x777, ARM, TSS3_AUX_BUS) in self.step(state([response(SIGNER_SEQUENCE_MIN + 3)]))
+
+  def test_sequence_wrap_keeps_compact_and_application_sequences_coupled(self):
+    self.signer.next_signer_sequence = 0xFF
+    self.assertEqual(signer_requests(self.step())[0][0][7], 0xFF)
+
+    sends = self.step(state([response(0xFF)]))
+    self.assertEqual(published(sends)[0][26] & 0x3F, 0x3F)
+    self.assertEqual(signer_requests(sends)[0][0][7], SIGNER_SEQUENCE_MIN)
+    self.assertEqual(published(self.step(state([response(SIGNER_SEQUENCE_MIN)])))[0][26] & 0x3F, 0)
 
   def test_angle_reference_reset(self):
     self.assertTrue(self.signer.angle_reference_reset(self.t))

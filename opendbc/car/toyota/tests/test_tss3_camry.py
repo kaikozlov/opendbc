@@ -114,7 +114,8 @@ class TestToyotaCamryTSS3(unittest.TestCase):
       self.assertEqual((state.steerFaultTemporary, state.steerFaultPermanent), (fault, False))
 
   def test_signer_state_from_can(self):
-    update_state(self.ci, extra=[CanData(0x7A9, bytes.fromhex("c90500fa12345678"), 0), CanData(0x777, b"\xb5" + bytes(7), 192),
+    update_state(self.ci, extra=[CanData(0x7A9, bytes.fromhex("c90500fa12345678"), 0),
+                                 CanData(0x777, bytes.fromhex("c000000000000001"), 192),
                                  CanData(0x08A, CAMRY_COMMON[0x08A], 192)], iterations=1)
     CS = self.ci.CS
     self.assertEqual([(r["SIGNER_SEQUENCE"], r["SIGNER_SEQUENCE_INVERTED"], r["AUTHENTICATOR"]) for r in CS.tss3_signer_responses],

@@ -14,6 +14,8 @@ TSS3_AUX_BUS = 1
 TSS3_SOURCE_BUS = 2
 
 SIGNER_SID = 0xC9
+# the low six bits are the REQUEST_SEQUENCE, 0 is not a valid signer sequence
+SIGNER_SEQUENCE_MIN = 0x40
 SIGNER_SEQUENCE_MAX = 0xFF
 # The signer answers in 17 ms (p50) to 32 ms (p99). Four requests in flight hide that at 100 Hz,
 # more only add latency between computing a request and publishing it.
@@ -49,8 +51,7 @@ class SignerTransport:
     self.packer = packer
     self.stock_longitudinal = stock_longitudinal
     self.pending: OrderedDict[int, SignRequest] = OrderedDict()  # by signer sequence, in request order
-    self.next_signer_sequence = 1
-    self.next_request_sequence = 0
+    self.next_signer_sequence = SIGNER_SEQUENCE_MIN
     self.last_request_ns = 0
     self.request_rejected = False
     self.active = False  # panda publishes openpilot's CONTROL_REQUEST instead of the FRC's
@@ -100,7 +101,8 @@ class SignerTransport:
 
     if not enabled or not CS.out.canValid:
       self._release(sends)
-      self.next_request_sequence = 0
+      # restart REQUEST_SEQUENCE at zero without reusing a recent signer sequence
+      self.next_signer_sequence = ((self.next_signer_sequence + 0x3F) & 0xC0) or SIGNER_SEQUENCE_MIN
     elif self.started_ns and now_ns - (self.last_publish_ns or self.started_ns) > SIGNER_TIMEOUT_NS:
       self._release(sends, "signer_timeout")
     return sends
@@ -149,16 +151,15 @@ class SignerTransport:
 
     # then sign the latest request
     if len(self.pending) < SIGNER_MAX_PENDING:
+      seq = self.next_signer_sequence
       stock_request = CS.tss3_stock_control_request if self.stock_longitudinal else None
       values = toyotacan.create_tss3_control_request_values(stock_request, lat_active, target_angle_deg_to_raw(angle_deg),
-                                                            long_active, accel, CS.out.vCruise, self.next_request_sequence)
+                                                            long_active, accel, CS.out.vCruise, seq & 0x3F)
       application = self.packer.make_can_msg("CONTROL_REQUEST", TSS3_CHASSIS_BUS, values)[1][:28]
-      seq = self.next_signer_sequence
-      self.next_signer_sequence = seq % SIGNER_SEQUENCE_MAX + 1
+      self.next_signer_sequence = SIGNER_SEQUENCE_MIN if seq == SIGNER_SEQUENCE_MAX else seq + 1
       self.pending.pop(seq, None)
       self.pending[seq] = SignRequest(values, now_ns)
-      self.next_request_sequence = (self.next_request_sequence + 1) & 0x3F
       self.last_request_ns = now_ns
-      sends.extend(toyotacan.create_tss3_signer_requests(self.packer, TSS3_CHASSIS_BUS, seq, application))
+      sends.append(toyotacan.create_tss3_signer_request(self.packer, TSS3_CHASSIS_BUS, seq, application))
 
     return sends
