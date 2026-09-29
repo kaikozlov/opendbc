@@ -74,6 +74,10 @@
 // Requests are checked when they are sent to the signer, and only approved requests can be published once signed.
 // The VMC in the brake ECU needs a continuous CONTROL_REQUEST: it sets CONTROL_RESULT.REQUEST_LOSS ~90 ms after the
 // last valid one and latches a cruise fault until restart if that persists for ~1 s.
+// PCS braking is requested in the FRC's CONTROL_REQUEST, so openpilot's is released for the FRC's to reach the VMC
+// untouched. Forwarding is decided before the RX hook sees a frame, so the first PCS request is still blocked (~25 ms
+// at 40 Hz), like Honda Nidec's stock AEB forwarding. Forwarding it too needs panda to pass the frame to the fwd hook
+// or run the RX hook first.
 #define TOYOTA_TSS3_08A_TIMEOUT_US 100000U
 #define TOYOTA_TSS3_FRAGMENT_LEN 7U
 
@@ -124,6 +128,12 @@ static void toyota_rx_hook(const CANPacket_t *msg) {
       }
 
       pcm_cruise_check(GET_BIT(msg, 27U));  // CONTROL_REQUEST.CRUISE_OPERATING_LATCH
+
+      const uint8_t long_request_id = msg->data[7] >> 2U;  // CONTROL_REQUEST.LONGITUDINAL_REQUEST_ID_LOWER
+      safety.toyota_tss3_stock_pcs = (long_request_id == 33U) || (long_request_id == 34U);
+      if (safety.toyota_tss3_stock_pcs) {
+        safety.toyota_tss3_08a_active = false;
+      }
     }
 
     // STEER_ANGLE_SENSOR, in LATERAL_REQUEST_PINION_ANGLE units
@@ -359,7 +369,7 @@ static bool toyota_tss3_tx_hook(const CANPacket_t *msg, const LongitudinalLimits
       // with stock longitudinal, openpilot needs a recent FRC request to copy
       bool stock_08a_recent = (safety.toyota_tss3_stock_08a_cnt > 0U) &&
                               (safety_get_ts_elapsed(now, safety.toyota_tss3_stock_08a_last_ts) <= TOYOTA_TSS3_08A_TIMEOUT_US);
-      tx = !safety_setup.toyota_stock_longitudinal || stock_08a_recent;
+      tx = !safety.toyota_tss3_stock_pcs && (!safety_setup.toyota_stock_longitudinal || stock_08a_recent);
       if (tx) {
         safety.toyota_tss3_08a_active = true;
         safety.toyota_tss3_08a_last_tx_ts = now;

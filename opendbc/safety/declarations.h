@@ -350,6 +350,7 @@ typedef struct {
   bool tesla_autopark_prev;
 
   bool toyota_tss3_08a_active;
+  bool toyota_tss3_stock_pcs;
   uint32_t toyota_tss3_08a_last_tx_ts;
   uint8_t toyota_tss3_request_next_fragment;
   uint32_t toyota_tss3_last_request_ts;
