@@ -60,6 +60,7 @@ class SignerTransport:
     self.started_ns = 0
     self.last_publish_ns = 0
     self.last_publish_sequence: int | None = None
+    self.openpilot_longitudinal_active: bool | None = None
 
   def _release(self, sends: list[CanData], reason: str | None = None) -> None:
     if reason is not None:
@@ -137,6 +138,13 @@ class SignerTransport:
     sends: list[CanData] = []
     if not enabled or not CS.out.canValid:
       return sends
+
+    openpilot_longitudinal_active = not self.stock_longitudinal and long_active
+    if self.openpilot_longitudinal_active is not None and openpilot_longitudinal_active != self.openpilot_longitudinal_active:
+      # Never publish queued requests from the previous longitudinal owner. Yield to the FRC until
+      # the first request for the new mode has been signed.
+      self._release(sends)
+    self.openpilot_longitudinal_active = openpilot_longitudinal_active
     if self.started_ns == 0:
       self.started_ns = now_ns
 
@@ -153,9 +161,9 @@ class SignerTransport:
 
     # then sign the latest request
     if len(self.pending) < SIGNER_MAX_PENDING:
-      stock_request = CS.tss3_stock_control_request if self.stock_longitudinal else None
+      stock_request = None if openpilot_longitudinal_active else CS.tss3_stock_control_request
       values = toyotacan.create_tss3_control_request_values(stock_request, lat_active, target_angle_deg_to_raw(angle_deg),
-                                                            long_active, accel, CS.out.vCruise, self.next_request_sequence)
+                                                            accel, CS.out.vCruise, self.next_request_sequence)
       application = self.packer.make_can_msg("CONTROL_REQUEST", TSS3_CHASSIS_BUS, values)[1][:28]
       seq = self.next_signer_sequence
       self.next_signer_sequence = seq % SIGNER_SEQUENCE_MAX + 1

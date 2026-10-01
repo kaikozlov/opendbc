@@ -530,7 +530,7 @@ def build_host_application(lat_active: bool = False, angle_raw: int = 0, accel: 
     parser = CANParser(TSS3_DBC, [("CONTROL_REQUEST", float("nan"))], 2)
     parser.update([(0, [(0x08A, stock[:28] + TSS3_TRAILER, 2)])])
     stock_values = dict(parser.vl["CONTROL_REQUEST"])
-  values = toyotacan.create_tss3_control_request_values(stock_values, lat_active, angle_raw, True, accel, 0.0, request_sequence)
+  values = toyotacan.create_tss3_control_request_values(stock_values, lat_active, angle_raw, accel, 0.0, request_sequence)
   return TSS3_PACKER.make_can_msg("CONTROL_REQUEST", 0, values)[1][:28]
 
 
@@ -543,6 +543,7 @@ def fix_toyota_checksum(msg):
 
 # FRC CONTROL_REQUESTs recorded around a PCS event: stock ACC braking, then both PCS braking request IDs (34, 33)
 TSS3_FRC_08A = bytes.fromhex("0000000880002d47f0605ef0607fff007fff000c4000100000000a00fc472d50")
+TSS3_FRC_INACTIVE_08A = bytes.fromhex("0000000080000012ff2200ff227fff007fffff530000000000000100edbabd90")
 TSS3_FRC_PCS_08A = (bytes.fromhex("0000000cc0002d8bf0605ef0607fff007fff000b4000100000000b003a194b8d"),
                     bytes.fromhex("00000008c0002d87f0605ef0607fff007fff000d400030000000130006f38fbe"))
 
@@ -797,12 +798,19 @@ class TestToyotaTss3CamrySafety(Tss3SafetyHelpers, common.CarSafetyTest, common.
     return self._control_request_msg(self._application(angle_raw=round(angle * self.DEG_TO_CAN), lat_active=lat_active, accel=accel))
 
   def _accel_msg(self, accel: float):
+    if accel == self.INACTIVE_ACCEL and not self.safety.get_controls_allowed():
+      self._rx_frc_08a(TSS3_FRC_INACTIVE_08A)
+      return self._control_request_msg(build_host_application(stock=TSS3_FRC_INACTIVE_08A))
     return self._application_msg(accel=accel)
 
   def _angle_cmd_msg(self, angle: float, enabled: bool, increment_timer: bool = True):
     if increment_timer:
       self.safety.set_timer(self.angle_cmd_count * int(1e6 / self.LATERAL_FREQUENCY))
       self.angle_cmd_count += 1
+    if not self.safety.get_controls_allowed():
+      self._rx_frc_08a(TSS3_FRC_INACTIVE_08A)
+      request = build_host_application(angle_raw=round(angle * self.DEG_TO_CAN), lat_active=enabled, stock=TSS3_FRC_INACTIVE_08A)
+      return self._control_request_msg(request)
     return self._application_msg(angle=angle, lat_active=enabled)
 
   def _angle_raw_cmd_msg(self, angle_raw: int):
@@ -859,7 +867,10 @@ class TestToyotaTss3CamrySafety(Tss3SafetyHelpers, common.CarSafetyTest, common.
     self.assertTrue(self.safety.get_controls_allowed_lateral())
     self.assertFalse(self.safety.get_controls_allowed())
 
-    self.assertTrue(self._tx(self._application_msg(lat_active=True)))
+    self._rx_frc_08a(TSS3_FRC_INACTIVE_08A)
+    request = build_host_application(lat_active=True, stock=TSS3_FRC_INACTIVE_08A)
+    self.assertTrue(self._tx(self._control_request_msg(request)))
+    self.assertFalse(self._tx(self._application_msg(lat_active=True)))
     self.assertFalse(self._tx(self._application_msg(lat_active=True, accel=0.1)))
 
   def test_angle_reference_restarts_after_request_gap(self):
@@ -903,27 +914,33 @@ class TestToyotaTss3CamrySafety(Tss3SafetyHelpers, common.CarSafetyTest, common.
     request = self._application(angle_raw=10, lat_active=True, accel=1.0)
     self.assertTrue(self._request(request))
 
-    # frames already with the signer are still published, new requests need controls
+    # The signer pipeline may publish a request approved before controls were revoked.
     self.safety.set_controls_allowed(False)
     self.assertTrue(self._publish(request))
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)
     self.assertFalse(self._request(self._application(angle_raw=10, lat_active=True)))
     self.assertFalse(self._request(self._application(accel=1.0)))
-    self.assertTrue(self._request(self._application()))
+    self.assertFalse(self._request(self._application()))
+
+    self._rx_frc_08a(TSS3_FRC_INACTIVE_08A)
+    self.assertTrue(self._request(build_host_application(stock=TSS3_FRC_INACTIVE_08A)))
 
   def test_each_approval_publishes_once(self):
+    self.safety.set_controls_allowed(True)
     request = self._application()
     self.assertTrue(self._request(request))
     self.assertTrue(self._publish(request))
     self.assertFalse(self._publish(request))
 
   def test_approval_expires(self):
+    self.safety.set_controls_allowed(True)
     request = self._application()
     self.assertTrue(self._request(request))
     self.safety.set_timer(100_001)
     self.assertFalse(self._publish(request))
 
   def test_unapproved_publication_yields_to_frc(self):
+    self.safety.set_controls_allowed(True)
     request = self._application()
     self.assertTrue(self._request(request))
 
@@ -939,6 +956,7 @@ class TestToyotaTss3CamrySafety(Tss3SafetyHelpers, common.CarSafetyTest, common.
     self.assertTrue(self._publish(request))
 
   def test_request_schema(self):
+    self.safety.set_controls_allowed(True)
     request = self._application()
     flips = [(index, 0x01) for index in (0, 1, 2, 3, 4, 5, 6, 7, 13, 14, 15, 16, 17, 20, 22, 23, 25, 27)] + [(21, 0x40), (21, 0x80)]
     flips += [(20, 0x40), (20, 0x80), (20, 0xC0)]
@@ -949,6 +967,7 @@ class TestToyotaTss3CamrySafety(Tss3SafetyHelpers, common.CarSafetyTest, common.
     self.assertTrue(self._request(request))
 
   def test_request_fragments(self):
+    self.safety.set_controls_allowed(True)
     request = self._application()
     frames = [libsafety_py.make_CANPacket(address, bus, dat) for address, dat, bus in build_signer_requests(0x5A, request)]
 
@@ -988,6 +1007,7 @@ class TestToyotaTss3CamrySafety(Tss3SafetyHelpers, common.CarSafetyTest, common.
     self.assertFalse(self._tx(self._application_msg(accel=self.MIN_ACCEL - 0.001)))
 
   def test_watchdog_and_release(self):
+    self.safety.set_controls_allowed(True)
     self.assertTrue(self._tx(self._application_msg()))
     self.safety.set_timer(99_999)
     self.assertEqual(self.safety.safety_fwd_hook(2, 0x08A), -1)

@@ -7,6 +7,8 @@ from opendbc.car.toyota.tss3 import SIGNER_MAX_PENDING, SIGNER_TIMEOUT_NS, TSS3_
 DBC = "toyota_tss3_pt_generated"
 ARM, RELEASE = bytes.fromhex("07c9a80100000000"), bytes.fromhex("07c9a80000000000")
 TRAILER = {"MSG_CNT_LOWER": 1, "RESET_FLAG": 2, "AUTHENTICATOR": 0x1234567}
+STOCK_ACTIVE = bytes.fromhex("0000000880002d47fe462afe467fff007fffff35c000100064003c005db7797f")
+STOCK_INACTIVE = bytes.fromhex("0000000080000012ff2200ff227fff007fffff530000000000000100edbabd90")
 MS = 1_000_000
 
 
@@ -34,10 +36,10 @@ class TestSignerTransport(unittest.TestCase):
     self.signer = SignerTransport(self.packer, stock_longitudinal=False)
     self.t = 1_000 * MS
 
-  def step(self, CS=None, enabled=True, angle=1.0, accel=0.5):
+  def step(self, CS=None, enabled=True, angle=1.0, long_active=True, accel=0.5):
     CS = CS or state()
     sends = self.signer.receive(CS, enabled, self.t)
-    sends += self.signer.send(CS, enabled, True, angle, True, accel, self.t)
+    sends += self.signer.send(CS, enabled, True, angle, long_active, accel, self.t)
     self.t += 10 * MS
     return sends
 
@@ -59,14 +61,44 @@ class TestSignerTransport(unittest.TestCase):
     self.assertAlmostEqual(parser.vl["CONTROL_REQUEST"]["LONGITUDINAL_REQUEST_ACCEL_UPPER"], 0.5)
 
   def test_stock_longitudinal_only_replaces_lateral_fields_and_sequence(self):
-    stock_frame = bytes.fromhex("0000000880002d47fe462afe467fff007fffff35c000100064003c005db7797f")
     parser = CANParser(DBC, [("CONTROL_REQUEST", float("nan"))], 2)
-    parser.update([(0, [(0x08A, stock_frame, 2)])])
+    parser.update([(0, [(0x08A, STOCK_ACTIVE, 2)])])
     self.signer = SignerTransport(self.packer, stock_longitudinal=True)
     application = b"".join(dat[1:] for dat, _ in signer_requests(self.step(state(stock=dict(parser.vl["CONTROL_REQUEST"])))))
-    for i, (ours, stock) in enumerate(zip(application, stock_frame[:28], strict=True)):
+    for i, (ours, stock) in enumerate(zip(application, STOCK_ACTIVE[:28], strict=True)):
       mask = {18: 0, 19: 0, 24: 0, 25: 0, 21: 0xC0, 26: 0xC0}.get(i, 0xFF)  # as panda checks it
       self.assertEqual(ours & mask, stock & mask, i)
+
+  def test_inactive_openpilot_longitudinal_preserves_frc_fields(self):
+    parser = CANParser(DBC, [("CONTROL_REQUEST", float("nan"))], 2)
+    parser.update([(0, [(0x08A, STOCK_INACTIVE, 2)])])
+    stock = dict(parser.vl["CONTROL_REQUEST"])
+    application = b"".join(dat[1:] for dat, _ in signer_requests(self.step(state(stock=stock), long_active=False)))
+    for i, (ours, frc) in enumerate(zip(application, STOCK_INACTIVE[:28], strict=True)):
+      mask = {18: 0, 19: 0, 24: 0, 25: 0, 21: 0xC0, 26: 0xC0}.get(i, 0xFF)
+      self.assertEqual(ours & mask, frc & mask, i)
+
+  def test_longitudinal_owner_transition_releases_queued_requests(self):
+    parser = CANParser(DBC, [("CONTROL_REQUEST", float("nan"))], 2)
+    parser.update([(0, [(0x08A, STOCK_INACTIVE, 2)])])
+    CS = state(stock=dict(parser.vl["CONTROL_REQUEST"]))
+
+    self.step(CS)
+    self.step(state([response(1)], stock=CS.tss3_stock_control_request))
+    self.assertTrue(self.signer.active)
+    sends = self.step(state([response(2)], stock=CS.tss3_stock_control_request), long_active=False)
+    assert (0x777, RELEASE, TSS3_AUX_BUS) in sends
+    self.assertEqual(published(sends), [])
+    application = b"".join(dat[1:] for dat, _ in signer_requests(sends))
+    for i, (ours, frc) in enumerate(zip(application, STOCK_INACTIVE[:28], strict=True)):
+      mask = {18: 0, 19: 0, 24: 0, 25: 0, 21: 0xC0, 26: 0xC0}.get(i, 0xFF)
+      self.assertEqual(ours & mask, frc & mask, i)
+
+    # Switching back also drops the now-signed stock-preserving request before publication.
+    sends = self.step(state([response(3)], stock=CS.tss3_stock_control_request), long_active=True)
+    self.assertEqual(published(sends), [])
+    application = b"".join(dat[1:] for dat, _ in signer_requests(sends))
+    self.assertEqual(application[6:8], b"\x2d\x47")
 
   def test_pipeline_publishes_in_order_at_100hz(self):
     for _ in range(SIGNER_MAX_PENDING + 2):

@@ -77,9 +77,9 @@ def create_tss3_brake_cancel_command(packer, stock_brake, bus):
   return packer.make_can_msg("BRAKE_MODULE", bus, values)
 
 
-def create_tss3_control_request_values(stock_request, lat_active: bool, angle_raw: int, long_active: bool, accel: float,
-                                       set_speed_kph: float, request_sequence: int):
-  """CONTROL_REQUEST signals, with stock longitudinal only the lateral request and sequence of the FRC's are replaced."""
+def create_tss3_control_request_values(stock_request, lat_active: bool, angle_raw: int, accel: float, set_speed_kph: float,
+                                       request_sequence: int):
+  """Replace only lateral fields when preserving the FRC's longitudinal applications."""
   lateral = {
     "LATERAL_REQUEST_PINION_ANGLE": angle_raw * 0.001000121519,
     "LATERAL_REQUEST_ID": 11 if lat_active else 0,  # LTA/LCA
@@ -90,7 +90,7 @@ def create_tss3_control_request_values(stock_request, lat_active: bool, angle_ra
   if stock_request is not None:
     return {**stock_request, **lateral}
 
-  accel = accel if long_active else 0.0
+  # Without an FRC request, this is always an active openpilot longitudinal application.
   return {
     "CRUISE_OPERATING_LATCH": 1,
     "SET_ME_1": 1,

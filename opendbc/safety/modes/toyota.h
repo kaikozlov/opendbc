@@ -354,7 +354,9 @@ static bool toyota_tss3_request_valid(const uint8_t request[], const Longitudina
     .wheelbase = 2.825F,
   };
 
-  bool valid = toyota_stock_longitudinal ? toyota_tss3_stock_08a_match(request, now) : toyota_tss3_08a_match(request);
+  const bool stock_match = toyota_tss3_stock_08a_match(request, now);
+  const bool openpilot_longitudinal_match = !toyota_stock_longitudinal && toyota_tss3_08a_match(request);
+  bool valid = stock_match || openpilot_longitudinal_match;
 
   // LATERAL_REQUEST_ID and LATERAL_ASSIST_GAIN
   const uint8_t lat_id = request[21] & 0x3FU;
@@ -379,15 +381,16 @@ static bool toyota_tss3_request_valid(const uint8_t request[], const Longitudina
                                         TOYOTA_TSS3_ANGLE_STEERING_LIMITS.max_angle);
     }
 
-    if (!toyota_stock_longitudinal) {
-      // LONGITUDINAL_REQUEST_ID/ALLOCATION_METHOD and LONGITUDINAL_REQUEST_ACCEL_UPPER/LOWER
+    if (openpilot_longitudinal_match) {
+      // An openpilot longitudinal application owns engine/brake allocation even when accel is zero.
+      // Without longitudinal authorization, the request must instead preserve a recent FRC request.
       int accel_upper = to_signed((request[8] << 8U) | request[9], 16);
       int accel_lower = to_signed((request[11] << 8U) | request[12], 16);
       violation = violation || (request[6] != 0x2DU) || (request[7] != 0x47U) || (accel_upper != accel_lower);
 
       // No gas pressed check: the motion controller in the brake ECU arbitrates driver gas against this request
-      bool accel_valid = controls_allowed && !safety_max_limit_check(accel_upper, long_limits.max_accel, long_limits.min_accel);
-      violation = violation || !(accel_valid || (accel_upper == long_limits.inactive_accel));
+      violation = violation || !controls_allowed ||
+                  safety_max_limit_check(accel_upper, long_limits.max_accel, long_limits.min_accel);
     }
     valid = !violation;
   }

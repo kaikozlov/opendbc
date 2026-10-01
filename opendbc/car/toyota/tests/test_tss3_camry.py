@@ -26,6 +26,7 @@ CAMRY_COMMON = {
   0x620: bytes.fromhex("000000008000001a"),
   0x622: bytes.fromhex("0000000000730000"),
 }
+FRC_INACTIVE_08A = bytes.fromhex("0000000080000012ff2200ff227fff007fffff530000000000000100edbabd90")
 FRC_IDS = {0x08A, 0x251, 0x3F6, 0x412, 0x5AE}  # from the FRC on bus 2
 ANGLE_MAX = CarControllerParams.TSS3_ANGLE_LIMITS.STEER_ANGLE_MAX
 
@@ -158,11 +159,15 @@ class TestToyotaCamryTSS3(unittest.TestCase):
         self.assertTrue(any(address == 0x777 and bus == 0 for address, _, bus in self.apply(control())[1]))
 
   def test_mads_lateral_only(self):
-    update_state(self.ci, speed_ms=10.0)
+    update_state(self.ci, speed_ms=10.0, x08A=FRC_INACTIVE_08A)
 
     _, sends = self.apply(control(enabled=False))
     self.assertEqual(sum(address == 0x777 and bus == 0 for address, _, bus in sends), 4)
-    self.assertEqual(self.last_request()["LATERAL_REQUEST_ID"], 11)
+    request = self.last_request()
+    self.assertEqual(request["LATERAL_REQUEST_ID"], 11)
+    self.assertEqual(request["LONGITUDINAL_REQUEST_ID_UPPER"], 0)
+    self.assertEqual(request["CRUISE_OPERATING_LATCH"], 0)
+    self.assertEqual(request["CRUISE_REQUEST_ACTIVE"], 0)
 
     _, sends = self.apply(control(active=False, enabled=False))
     self.assertFalse(any(address in (0x777, 0x08A) and bus == 0 for address, _, bus in sends))
@@ -245,7 +250,10 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     for requested, expected in ((1.2, 1.2), (3.0, 2.0), (-4.0, -3.5)):
       output, _ = self.apply(control(active=False, accel=requested, long_active=True))
       self.assertAlmostEqual(output.accel, expected)
+
+    update_state(self.ci, speed_ms=5.0, x08A=FRC_INACTIVE_08A)
     self.assertEqual(self.apply(control(active=False, accel=1.0))[0].accel, 0.0)
+    self.assertEqual(self.last_request()["LONGITUDINAL_REQUEST_ID_UPPER"], 0)
 
     _, stock_long = build_interface(False)
     update_state(stock_long, speed_ms=5.0)
