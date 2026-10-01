@@ -63,6 +63,8 @@
   {.msg = {{0x116, 0, 8, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},   \
   {.msg = {{0x101, 0, 8, 50U, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},                            \
   {.msg = {{0x08A, 2, 32, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},  \
+  {.msg = {{0x251, 2, 8, 1U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true, .ignore_frequency_check = true}, { 0 }, { 0 }}},  \
+  {.msg = {{0x412, 2, 8, 1U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true, .ignore_frequency_check = true}, { 0 }, { 0 }}},  \
 
 #define TOYOTA_SECOC_RX_CHECKS                                                                                                             \
   TOYOTA_COMMON_RX_CHECKS(false)                                                                                                           \
@@ -100,6 +102,8 @@ static bool toyota_tss3 = false;
 #define TOYOTA_TSS3_STOCK_08A_HISTORY 2U
 static bool toyota_tss3_08a_active = false;
 static bool toyota_tss3_stock_pcs = false;
+static uint8_t toyota_tss3_lta_mode = 0U;
+static bool toyota_tss3_lta_button_pressed = false;
 static uint32_t toyota_tss3_08a_last_tx_ts = 0U;
 static uint8_t toyota_tss3_request_next_fragment = 0U;
 static uint32_t toyota_tss3_last_request_ts = 0U;
@@ -156,6 +160,27 @@ static int TOYOTA_GET_INTERCEPTOR(const CANPacket_t *msg) {
 
 static void toyota_rx_hook(const CANPacket_t *msg) {
   if (toyota_tss3) {
+    // Synthesize a one-receive-cycle button pulse, matching CarState's LTA toggle events.
+    if (toyota_tss3_lta_button_pressed) {
+      mads_button_press = MADS_BUTTON_NOT_PRESSED;
+      toyota_tss3_lta_button_pressed = false;
+    }
+    if ((msg->addr == 0x251U) && (msg->bus == 2U)) {
+      acc_main_on = GET_BIT(msg, 12U);  // CRUISE_DISPLAY.CRUISE_MAIN_STATE
+    }
+    if ((msg->addr == 0x412U) && (msg->bus == 2U)) {
+      const uint8_t mode = msg->data[0];  // LKAS_HUD.LTA_MODE
+      if ((mode == 0x10U) || (mode == 0x12U) || (mode == 0x14U)) {
+        // Available and active are the same switch position. Unknown modes do not change it,
+        // and the first known sample establishes a baseline rather than manufacturing a press.
+        if ((toyota_tss3_lta_mode != 0U) && ((mode == 0x10U) != (toyota_tss3_lta_mode == 0x10U))) {
+          mads_button_press = MADS_BUTTON_PRESSED;
+          toyota_tss3_lta_button_pressed = true;
+        }
+        toyota_tss3_lta_mode = mode;
+      }
+    }
+
     // CONTROL_REQUEST from the FRC
     if ((msg->addr == 0x8AU) && (msg->bus == 2U) && (GET_LEN(msg) == 32U)) {
       for (uint8_t i = 0U; i < TOYOTA_TSS3_08A_LEN; i++) {
@@ -734,6 +759,11 @@ static safety_config toyota_init(uint16_t param) {
   toyota_lta = GET_FLAG(param, TOYOTA_PARAM_LTA);
   toyota_tss3_08a_active = false;
   toyota_tss3_stock_pcs = false;
+  toyota_tss3_lta_mode = 0U;
+  if (toyota_tss3_lta_button_pressed) {
+    mads_button_press = MADS_BUTTON_NOT_PRESSED;
+  }
+  toyota_tss3_lta_button_pressed = false;
   toyota_tss3_08a_last_tx_ts = 0U;
   toyota_tss3_request_next_fragment = 0U;
   toyota_tss3_last_request_ts = 0U;

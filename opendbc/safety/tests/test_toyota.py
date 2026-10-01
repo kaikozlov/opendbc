@@ -551,6 +551,141 @@ class Tss3SafetyHelpers:
   signer_seq = 0
 
   @staticmethod
+  def _mads_main_msg(enabled):
+    address, data, bus = TSS3_PACKER.make_can_msg("CRUISE_DISPLAY", 2, {"CRUISE_MAIN_STATE": enabled})
+    return libsafety_py.make_CANPacket(address, bus, data)
+
+  @staticmethod
+  def _mads_hud_msg(mode):
+    address, data, bus = TSS3_PACKER.make_can_msg("LKAS_HUD", 2, {"LTA_MODE": mode})
+    return libsafety_py.make_CANPacket(address, bus, data)
+
+  def _mads_heartbeat_disengage(self):
+    self.safety.set_heartbeat_engaged_mads(False)
+    for _ in range(3):
+      self.safety.mads_heartbeat_engaged_check()
+    self.assertFalse(self.safety.get_controls_allowed_lateral())
+    self.safety.set_heartbeat_engaged_mads(True)
+    self.safety.mads_heartbeat_engaged_check()
+
+  def test_mads_main_receive(self):
+    for enabled in (False, True):
+      with self.subTest(mads=enabled):
+        self._reset_safety_hooks()
+        self.safety.set_mads_params(enabled, False, False)
+        self._rx(self._mads_main_msg(False))
+        self.assertFalse(self.safety.get_controls_allowed_lateral())
+        self._rx(self._mads_main_msg(True))
+        self.assertTrue(self.safety.get_acc_main_on())
+        self.assertEqual(self.safety.get_controls_allowed_lateral(), enabled)
+        self.assertFalse(self.safety.get_controls_allowed())
+        self._rx(self._mads_main_msg(False))
+        self.assertFalse(self.safety.get_acc_main_on())
+        self.assertFalse(self.safety.get_controls_allowed_lateral())
+
+  def test_mads_switch_reengagement(self):
+    self.safety.set_mads_params(True, False, False)
+    self._rx(self._mads_hud_msg(0x10))
+    self._rx(self._mads_main_msg(True))
+    self.assertTrue(self.safety.get_controls_allowed_lateral())
+    # The host treats both off->on and on->off as LKAS button presses.
+    for mode in (0x12, 0x10, 0x14, 0x10):
+      with self.subTest(mode=mode):
+        self._mads_heartbeat_disengage()
+        self._rx(self._mads_main_msg(True))
+        self.assertFalse(self.safety.get_controls_allowed_lateral())
+        self._rx(self._mads_hud_msg(mode))
+        self.assertTrue(self.safety.get_controls_allowed_lateral())
+        self.assertFalse(self.safety.get_controls_allowed())
+        self._mads_heartbeat_disengage()
+        self._rx(self._mads_main_msg(True))
+        self._rx(self._mads_hud_msg(mode))
+        self.assertFalse(self.safety.get_controls_allowed_lateral())
+
+  def test_mads_switch_initial_unknown_and_active_modes(self):
+    for initial_mode in (0x10, 0x12, 0x14):
+      with self.subTest(initial_mode=initial_mode):
+        self._reset_safety_hooks()
+        self.safety.set_mads_params(True, False, False)
+        # First observation and unknown modes must not manufacture a press.
+        self._rx(self._mads_hud_msg(0x40))
+        self._rx(self._mads_hud_msg(initial_mode))
+        self._rx(self._mads_hud_msg(0x40))
+        self._rx(self._mads_hud_msg(initial_mode))
+        self.assertFalse(self.safety.get_controls_allowed_lateral())
+        if initial_mode != 0x10:
+          self._rx(self._mads_hud_msg(0x14 if initial_mode == 0x12 else 0x12))
+          self.assertFalse(self.safety.get_controls_allowed_lateral())
+        self._rx(self._mads_main_msg(False))
+        self._rx(self._mads_hud_msg(0x12 if initial_mode == 0x10 else 0x10))
+        self.assertTrue(self.safety.get_controls_allowed_lateral())
+        self.assertFalse(self.safety.get_controls_allowed())
+
+  def test_mads_switch_disabled(self):
+    self.safety.set_mads_params(False, False, False)
+    for mode in (0x10, 0x12, 0x10):
+      self._rx(self._mads_main_msg(True))
+      self._rx(self._mads_hud_msg(mode))
+      self.assertFalse(self.safety.get_controls_allowed_lateral())
+      self.assertFalse(self.safety.get_controls_allowed())
+
+  def test_mads_switch_receive_bus_and_length(self):
+    self.safety.set_mads_params(True, False, False)
+    self._rx(self._mads_hud_msg(0x10))
+    for make_msg, value in ((self._mads_main_msg, True), (self._mads_hud_msg, 0x12)):
+      for bus, length in ((0, 8), (1, 8), (2, 7), (2, 12)):
+        with self.subTest(message=make_msg.__name__, bus=bus, length=length):
+          msg = make_msg(value)
+          data = bytes(msg[0].data[0:8]).ljust(length, b"\0")[:length]
+          self._rx(libsafety_py.make_CANPacket(msg[0].addr, bus, data))
+          self.assertFalse(self.safety.get_acc_main_on())
+          self.assertFalse(self.safety.get_controls_allowed_lateral())
+    self._rx(self._mads_hud_msg(0x12))
+    self.assertTrue(self.safety.get_controls_allowed_lateral())
+
+  def test_mads_brake_after_received_engagement(self):
+    for disengage, pause in ((True, False), (False, True)):
+      with self.subTest(disengage=disengage, pause=pause):
+        self._reset_safety_hooks()
+        self.safety.set_mads_params(True, disengage, pause)
+        self._rx(self._mads_main_msg(True))
+        self.assertTrue(self.safety.get_controls_allowed_lateral())
+        for pressed in (True, False):
+          msg = TSS3_PACKER.make_can_msg("BRAKE_MODULE", 0, {"BRAKE_PRESSED": pressed})
+          address, data, bus = fix_toyota_checksum(msg)
+          self._rx(libsafety_py.make_CANPacket(address, bus, data))
+          self.assertEqual(self.safety.get_controls_allowed_lateral(), pause and not pressed)
+          self.assertFalse(self.safety.get_controls_allowed())
+
+  def test_mads_switch_receive_liveness(self):
+    messages = [self._mads_main_msg(True), self._mads_hud_msg(0x10)]
+    for name, bus in (("STEER_ANGLE_SENSOR", 0), ("WHEEL_SPEEDS", 0), ("GAS_PEDAL", 0),
+                      ("BRAKE_MODULE", 0), ("CONTROL_REQUEST", 2)):
+      msg = TSS3_PACKER.make_can_msg(name, bus, {"CRUISE_OPERATING_LATCH": True} if name == "CONTROL_REQUEST" else {})
+      if name == "BRAKE_MODULE":
+        msg = fix_toyota_checksum(msg)
+      address, data, bus = msg
+      messages.append(libsafety_py.make_CANPacket(address, bus, data))
+    for missing in (None, 0x251, 0x412):
+      with self.subTest(missing=missing):
+        self._reset_safety_hooks()
+        self.safety.set_mads_params(True, False, False)
+        self.safety.set_timer(0)
+        for msg in messages:
+          self._rx(msg)
+        self.safety.safety_tick_current_safety_config()
+        self.assertTrue(self.safety.get_controls_allowed())
+        self.assertTrue(self.safety.get_controls_allowed_lateral())
+        # The 1 Hz switch messages use the standard ten-missed-messages timeout.
+        self.safety.set_timer(10_000_001)
+        for msg in messages:
+          if msg[0].addr != missing:
+            self._rx(msg)
+        self.safety.safety_tick_current_safety_config()
+        self.assertEqual(self.safety.get_controls_allowed(), missing is None)
+        self.assertEqual(self.safety.get_controls_allowed_lateral(), missing is None)
+
+  @staticmethod
   def _admin_msg(arm: bool):
     return libsafety_py.make_CANPacket(0x777, 1, bytes((7, 0xC9, 0xA8, int(arm), 0, 0, 0, 0)))
 
@@ -719,9 +854,10 @@ class TestToyotaTss3CamrySafety(Tss3SafetyHelpers, common.CarSafetyTest, common.
 
   def test_mads_lateral_only_request(self):
     self._reset_speed_measurement(10.)
-    self.safety.set_controls_allowed(False)
-    self.safety.set_controls_allowed_lateral(True)
-    self.safety.set_desired_angle_last(0)
+    self.safety.set_mads_params(True, False, False)
+    self._rx(self._mads_main_msg(True))
+    self.assertTrue(self.safety.get_controls_allowed_lateral())
+    self.assertFalse(self.safety.get_controls_allowed())
 
     self.assertTrue(self._tx(self._application_msg(lat_active=True)))
     self.assertFalse(self._tx(self._application_msg(lat_active=True, accel=0.1)))
