@@ -628,7 +628,11 @@ class TestToyotaTss3CamrySafety(Tss3SafetyHelpers, common.CarSafetyTest, common.
   LATERAL_FREQUENCY = 100
 
   def setUp(self):
-    super().setUp()
+    self.packer = CANPackerSafety(self.DBC)
+    self.safety = libsafety_py.libsafety
+    self.safety.set_current_safety_param_sp(0)
+    self.safety.set_safety_hooks(self.SAFETY_MODEL, self.SAFETY_PARAM)
+    self.safety.init_tests()
     self.safety.set_timer(0)
     self.assertTrue(self._tx(self._admin_msg(True)))
     self.angle_cmd_count = 0
@@ -910,7 +914,10 @@ class TestToyotaTss3CamryStockLongitudinalSafety(Tss3SafetyHelpers, common.Safet
   STOCK_08A = bytes.fromhex("0000000880002d47fe462afe467fff007fffff35c000100064003c005db7797f")
 
   def setUp(self):
-    super().setUp()
+    self.safety = libsafety_py.libsafety
+    self.safety.set_current_safety_param_sp(0)
+    self.safety.set_safety_hooks(self.SAFETY_MODEL, self.SAFETY_PARAM)
+    self.safety.init_tests()
     self.safety.set_timer(0)
 
   def _rx_stock(self, stock: bytes):

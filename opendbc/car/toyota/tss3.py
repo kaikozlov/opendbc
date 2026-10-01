@@ -143,6 +143,7 @@ class SignerTransport:
     # publish at most one signed request per frame
     if self._publish_ready(now_ns):
       _, request = self.pending.popitem(last=False)
+      assert request.trailer is not None
       if not self.active:
         sends.append(toyotacan.create_tss3_signer_arm(self.packer, TSS3_AUX_BUS, True))
         self.active = True

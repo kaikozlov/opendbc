@@ -157,7 +157,7 @@ static int TOYOTA_GET_INTERCEPTOR(const CANPacket_t *msg) {
 static void toyota_rx_hook(const CANPacket_t *msg) {
   if (toyota_tss3) {
     // CONTROL_REQUEST from the FRC
-    if (msg_matches(msg, 0x8AU, 2U, 32U)) {
+    if ((msg->addr == 0x8AU) && (msg->bus == 2U) && (GET_LEN(msg) == 32U)) {
       for (uint8_t i = 0U; i < TOYOTA_TSS3_08A_LEN; i++) {
         toyota_tss3_stock_08a[toyota_tss3_stock_08a_idx][i] = msg->data[i];
       }
@@ -178,7 +178,7 @@ static void toyota_rx_hook(const CANPacket_t *msg) {
     }
 
     // STEER_ANGLE_SENSOR, in LATERAL_REQUEST_PINION_ANGLE units
-    if (msg_matches(msg, 0x25U, 0U)) {
+    if ((msg->addr == 0x25U) && (msg->bus == 0U)) {
       int angle_coarse = to_signed(((msg->data[0] & 0xFU) << 8U) | msg->data[1], 12);
       int angle_fraction = to_signed((msg->data[4] >> 4U) & 0xFU, 4);
       int angle_tenths = (angle_coarse * 15) + angle_fraction;
@@ -429,7 +429,7 @@ static bool toyota_tss3_tx_hook(const CANPacket_t *msg, const LongitudinalLimits
   const uint32_t now = microsecond_timer_get();
 
   // signer admin: arm or release openpilot's CONTROL_REQUEST
-  if (msg_matches(msg, 0x777U, 1U)) {
+  if ((msg->addr == 0x777U) && (msg->bus == 1U)) {
     bool admin = !msg->fd && (msg->data[0] == 7U) && (msg->data[1] == 0xC9U) && (msg->data[2] == 0xA8U) && (msg->data[3] <= 1U) &&
                  (msg->data[4] == 0U) && (msg->data[5] == 0U) && (msg->data[6] == 0U) && (msg->data[7] == 0U);
     if (!admin) {
@@ -449,12 +449,12 @@ static bool toyota_tss3_tx_hook(const CANPacket_t *msg, const LongitudinalLimits
   }
 
   // signer requests: four fragments of the unsigned CONTROL_REQUEST
-  if (msg_matches(msg, 0x777U, 0U)) {
+  if ((msg->addr == 0x777U) && (msg->bus == 0U)) {
     tx = toyota_tss3_request_fragment(msg, long_limits, now);
   }
 
   // CONTROL_REQUEST with the SecOC trailer from the signer
-  if (msg_matches(msg, 0x8AU, 0U)) {
+  if ((msg->addr == 0x8AU) && (msg->bus == 0U)) {
     tx = toyota_tss3_08a_active && msg->fd && toyota_tss3_publish_approved(msg, now);
     if (tx) {
       toyota_tss3_08a_last_tx_ts = now;
@@ -465,13 +465,13 @@ static bool toyota_tss3_tx_hook(const CANPacket_t *msg, const LongitudinalLimits
   }
 
   // BRAKE_MODULE with only BRAKE_PRESSED set cancels stock cruise
-  if (msg_matches(msg, 0x101U, 2U)) {
+  if ((msg->addr == 0x101U) && (msg->bus == 2U)) {
     tx = (toyota_compute_checksum(msg) == toyota_get_checksum(msg)) && (msg->data[0] == 0x88U) &&
          (msg->data[2] == 0U) && (msg->data[4] == 0U) && (msg->data[5] == 0U) && (msg->data[6] == 0U);
   }
 
   // LKAS_HUD
-  if (msg_matches(msg, 0x412U, 0U)) {
+  if ((msg->addr == 0x412U) && (msg->bus == 0U)) {
     tx = !msg->fd;
   }
 

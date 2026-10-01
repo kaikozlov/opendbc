@@ -3566,6 +3566,16 @@
     ],
     "package": "All"
   },
+  "Toyota Camry Hybrid 2026": {
+    "platform": "TOYOTA_CAMRY_TSS3",
+    "make": "Toyota",
+    "brand": "toyota",
+    "model": "Camry Hybrid",
+    "year": [
+      "2026"
+    ],
+    "package": "All"
+  },
   "Toyota Corolla 2017-19": {
     "platform": "TOYOTA_COROLLA",
     "make": "Toyota",

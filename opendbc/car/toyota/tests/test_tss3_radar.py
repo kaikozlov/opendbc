@@ -14,7 +14,8 @@ class TestToyotaTSS3Radar(unittest.TestCase):
   def setUp(self):
     CP = CarInterface.get_non_essential_params(CAR.TOYOTA_CAMRY_TSS3)
     CP.radarUnavailable = False
-    self.ri = RadarInterface(CP)
+    CP_SP = CarInterface.get_non_essential_params_sp(CP, CAR.TOYOTA_CAMRY_TSS3)
+    self.ri = RadarInterface(CP, CP_SP)
     self.packer = CANPacker('toyota_tss3_radar_generated')
     self.t = 1_000_000_000
 

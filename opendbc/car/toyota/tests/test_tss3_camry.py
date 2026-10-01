@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 from opendbc.car import Bus, CanData, structs
 from opendbc.car.toyota.interface import CarInterface
-from opendbc.car.toyota.values import CAR, CarControllerParams, ToyotaFlags, ToyotaSafetyFlags
+from opendbc.car.toyota.values import CAR, CarControllerParams, ToyotaSafetyFlags
 
 CAMRY_COMMON = {
   0x025: bytes.fromhex("000100005000007e0000000000000000000000000000000000000000bb6fee54"),
@@ -36,13 +36,22 @@ def fingerprint():
     fp[2 if address in FRC_IDS else 0][address] = len(data)
   return fp
 
+def build_interface(alpha_long=True, is_release=False):
+  CP = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint(), [], alpha_long, is_release, False)
+  CP_SP = CarInterface.get_params_sp(CP, CAR.TOYOTA_CAMRY_TSS3, fingerprint(), [], alpha_long, is_release, False)
+  return CP, CarInterface(CP, CP_SP)
+
+
+def control_sp():
+  return structs.CarControlSP()
+
 
 def update_state(ci, iterations=20, speed_ms=0.0, extra=(), **frames):
   msgs = CAMRY_COMMON | {int(k[1:], 16): v for k, v in frames.items()}  # e.g. x08A=b"..."
   msgs[0x0AA] = (6767 + round(speed_ms * 360)).to_bytes(2, "big") * 4
   for _ in range(iterations):
     packets = [CanData(address, data, 2 if address in FRC_IDS else 0) for address, data in msgs.items()] + list(extra)
-    state = ci.update([(update_state.t, packets)])
+    state, _ = ci.update([(update_state.t, packets)])
     update_state.t += 10_000_000
   return state
 update_state.t = 1_000_000_000
@@ -64,13 +73,12 @@ def control(angle=0.0, active=True, accel=0.0, long_active=False, enabled=True, 
 
 class TestToyotaCamryTSS3(unittest.TestCase):
   def setUp(self):
-    self.CP = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint(), [], True, False, False)
-    self.ci = CarInterface(self.CP)
+    self.CP, self.ci = build_interface()
     self.t = 2_000_000_000
 
   def apply(self, cc):
     self.t += 10_000_000
-    return self.ci.apply(cc, self.t)
+    return self.ci.apply(cc, control_sp(), self.t)
 
   def last_request(self):
     return next(reversed(self.ci.CC.signer.pending.values())).values
@@ -81,7 +89,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
       self.assertEqual((CP.openpilotLongitudinalControl, CP.autoResumeSng), (alpha_long, alpha_long))
       self.assertEqual(bool(CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.STOCK_LONGITUDINAL), not alpha_long)
       self.assertTrue(CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.TSS3)
-      self.assertTrue(CP.flags & ToyotaFlags.HAS_BSM)
+      self.assertTrue(CP.enableBsm)
     self.assertTrue(CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint(), [], False, True, False).dashcamOnly)
 
   def test_carstate(self):
@@ -94,7 +102,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
 
   def test_delayed_hold_standstill(self):
     for alpha_long in (False, True):
-      ci = CarInterface(CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint(), [], alpha_long, False, False))
+      _, ci = build_interface(alpha_long)
       for bytes_4_7, speed, hold in ((b"\x80\x00\x2d\x47", 0, False), (b"\xa0\x00\x2d\x67", 0, True),
                                      (b"\xa0\x00\x2c\x66", 0, True), (b"\x80\x00\x47\x65", 5, False)):
         with self.subTest(alpha_long=alpha_long, request=bytes_4_7.hex()):
@@ -133,7 +141,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     release = (0x777, bytes((7, 0xC9, 0xA8, 0, 0, 0, 0, 0)), 1)
     for alpha_long in (False, True):
       with self.subTest(alpha_long=alpha_long):
-        self.ci = CarInterface(CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint(), [], alpha_long, False, False))
+        _, self.ci = build_interface(alpha_long)
         update_state(self.ci, speed_ms=10.0)
         self.assertTrue(any(address == 0x777 and bus == 0 for address, _, bus in self.apply(control())[1]))
 
@@ -229,9 +237,9 @@ class TestToyotaCamryTSS3(unittest.TestCase):
       self.assertAlmostEqual(output.accel, expected)
     self.assertEqual(self.apply(control(active=False, accel=1.0))[0].accel, 0.0)
 
-    stock_long = CarInterface(CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint(), [], False, False, False))
+    _, stock_long = build_interface(False)
     update_state(stock_long, speed_ms=5.0)
-    self.assertEqual(stock_long.apply(control(active=False, accel=1.0, long_active=True), self.t)[0].accel, 0.0)
+    self.assertEqual(stock_long.apply(control(active=False, accel=1.0, long_active=True), control_sp(), self.t)[0].accel, 0.0)
 
   def test_cancel_and_hud(self):
     update_state(self.ci, x412=bytes.fromhex("1000002200ee9307"))

@@ -124,7 +124,7 @@ class CarInterface(CarInterfaceBase):
                                         bool(ret.flags & ToyotaFlags.DISABLE_RADAR.value) or
                                         (bool(ret.flags & ToyotaFlags.TSS3) and alpha_long))
 
-    ret.autoResumeSng = ret.openpilotLongitudinalControl and candidate in NO_STOP_TIMER_CAR
+    ret.autoResumeSng = ret.openpilotLongitudinalControl and (candidate in NO_STOP_TIMER_CAR or bool(ret.flags & ToyotaFlags.TSS3))
 
     if not ret.openpilotLongitudinalControl:
       ret.safetyConfigs[0].safetyParam |= ToyotaSafetyFlags.STOCK_LONGITUDINAL.value
@@ -175,6 +175,11 @@ class CarInterface(CarInterfaceBase):
           if fw.ecu == "eps" and not fw.fwVersion == b'8965B47060\x00\x00\x00\x00\x00\x00':
             stock_cp.steerActuatorDelay = 0.25
             CarInterfaceBase.configure_torque_tune(candidate, stock_cp.lateralTuning, steering_angle_deadzone_deg=0.0)
+
+    # TSS3 longitudinal capability is determined by the Toyota interface above.
+    # Legacy sunnypilot DSU detection does not apply to this architecture.
+    if stock_cp.flags & ToyotaFlags.TSS3:
+      return ret
 
     use_sdsu = bool(ret.flags & ToyotaFlagsSP.SMART_DSU)
 
