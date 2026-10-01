@@ -60,7 +60,7 @@ update_state.t = 1_000_000_000
 def control(angle=0.0, active=True, accel=0.0, long_active=False, enabled=True, cancel=False, steer_alert=False):
   cc = structs.CarControl()
   cc.enabled = enabled
-  cc.latActive = enabled and active
+  cc.latActive = active
   cc.longActive = enabled and long_active
   cc.cruiseControl.cancel = cancel
   cc.actuators.steeringAngleDeg = angle
@@ -156,6 +156,16 @@ class TestToyotaCamryTSS3(unittest.TestCase):
 
         update_state(self.ci, speed_ms=10.0)
         self.assertTrue(any(address == 0x777 and bus == 0 for address, _, bus in self.apply(control())[1]))
+
+  def test_mads_lateral_only(self):
+    update_state(self.ci, speed_ms=10.0)
+
+    _, sends = self.apply(control(enabled=False))
+    self.assertEqual(sum(address == 0x777 and bus == 0 for address, _, bus in sends), 4)
+    self.assertEqual(self.last_request()["LATERAL_REQUEST_ID"], 11)
+
+    _, sends = self.apply(control(active=False, enabled=False))
+    self.assertFalse(any(address in (0x777, 0x08A) and bus == 0 for address, _, bus in sends))
 
   def test_eps_status(self):
     override = bytes.fromhex("12000003330930b9130330053c800e99030b0000053c07b50000000042c3b381")

@@ -717,6 +717,15 @@ class TestToyotaTss3CamrySafety(Tss3SafetyHelpers, common.CarSafetyTest, common.
         self.safety.set_desired_angle_last(0)
         self.assertFalse(self._tx(self._angle_raw_cmd_msg(sign * (max_delta_raw + 1))))
 
+  def test_mads_lateral_only_request(self):
+    self._reset_speed_measurement(10.)
+    self.safety.set_controls_allowed(False)
+    self.safety.set_controls_allowed_lateral(True)
+    self.safety.set_desired_angle_last(0)
+
+    self.assertTrue(self._tx(self._application_msg(lat_active=True)))
+    self.assertFalse(self._tx(self._application_msg(lat_active=True, accel=0.1)))
+
   def test_angle_reference_restarts_after_request_gap(self):
     # after 100 ms without requests, the rate limit restarts from the measured angle, clamped to the command range
     self._reset_speed_measurement(5.)
