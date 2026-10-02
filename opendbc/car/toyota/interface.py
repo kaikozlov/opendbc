@@ -142,8 +142,6 @@ class CarInterface(CarInterfaceBase):
 
     if ret.flags & ToyotaFlags.TSS3:
       ret.longitudinalActuatorDelay = 0.2
-      # The FRC remains online for PCS, but cruise engagement belongs to openpilot when it controls longitudinal.
-      ret.pcmCruise = not ret.openpilotLongitudinalControl
 
     return ret
 

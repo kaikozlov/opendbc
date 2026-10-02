@@ -50,7 +50,6 @@ class CarState(CarStateBase, CarStateExt):
     self.distance_button = 0
     self.tss3_cruise_button = 0
     self.tss3_lta_switch_state = None
-    self.tss3_main_on = False
 
     self.pcm_follow_distance = 0
 
@@ -141,8 +140,6 @@ class CarState(CarStateBase, CarStateExt):
       self.tss3_cruise_button = 4
     else:
       self.tss3_cruise_button = 0
-    if self.CP.openpilotLongitudinalControl and self.tss3_cruise_button == 4 and previous_button != 4:
-      self.tss3_main_on = not self.tss3_main_on
     button_events = create_button_events(self.tss3_cruise_button, previous_button, {
       1: ButtonType.cancel,
       2: ButtonType.decelCruise,
@@ -162,19 +159,15 @@ class CarState(CarStateBase, CarStateExt):
     ret.buttonEvents = button_events
 
     request = cp_cam.vl["CONTROL_REQUEST"]
-    if self.CP.openpilotLongitudinalControl:
-      ret.cruiseState.available = self.tss3_main_on
-      ret.cruiseState.enabled = False
-      ret.cruiseState.speed = 0
-    else:
-      ret.cruiseState.available = bool(cp_cam.vl["CRUISE_DISPLAY"]["CRUISE_MAIN_STATE"])
-      ret.cruiseState.enabled = bool(request["CRUISE_OPERATING_LATCH"])
-      ret.cruiseState.speed = request["SET_SPEED"] * CV.KPH_TO_MS
-      ret.cruiseState.standstill = ret.cruiseState.enabled and bool(request["DELAYED_HOLD_STATE"])
-      cluster_set_speed = cp_cam.vl["CRUISE_DISPLAY"]["UI_SET_SPEED"]
-      if ret.cruiseState.speed != 0 and cluster_set_speed > 0:
-        is_metric = cp.vl["BODY_CONTROL_STATE_2"]["UNITS"] in (1, 2)
-        ret.cruiseState.speedCluster = cluster_set_speed * (CV.KPH_TO_MS if is_metric else CV.MPH_TO_MS)
+    ret.cruiseState.enabled = bool(request["CRUISE_OPERATING_LATCH"])
+    # with openpilot longitudinal, the VMC never receives the FRC's hold request
+    ret.cruiseState.standstill = not self.CP.openpilotLongitudinalControl and ret.cruiseState.enabled and bool(request["DELAYED_HOLD_STATE"])
+    ret.cruiseState.available = bool(cp_cam.vl["CRUISE_DISPLAY"]["CRUISE_MAIN_STATE"])
+    ret.cruiseState.speed = request["SET_SPEED"] * CV.KPH_TO_MS
+    cluster_set_speed = cp_cam.vl["CRUISE_DISPLAY"]["UI_SET_SPEED"]
+    if ret.cruiseState.speed != 0 and cluster_set_speed > 0:
+      is_metric = cp.vl["BODY_CONTROL_STATE_2"]["UNITS"] in (1, 2)
+      ret.cruiseState.speedCluster = cluster_set_speed * (CV.KPH_TO_MS if is_metric else CV.MPH_TO_MS)
 
     # PCS braking is requested in the FRC's CONTROL_REQUEST, panda forwards it to the VMC untouched. its warning is on PCS_HUD
     self.tss3_stock_pcs = request["LONGITUDINAL_REQUEST_ID_LOWER"] in PCS_REQUEST_IDS

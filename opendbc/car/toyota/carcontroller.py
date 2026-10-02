@@ -118,10 +118,7 @@ class CarController(CarControllerBase, GasInterceptorCarController):
 
     can_sends.extend(self.signer.send(CS, request_active, lat_active, self.last_angle, long_active, self.accel, now_nanos))
 
-    frc_cruise_latched = bool(CS.tss3_stock_control_request and
-                              CS.tss3_stock_control_request["CRUISE_OPERATING_LATCH"])
-    cancel_frc_cruise = self.CP.openpilotLongitudinalControl and frc_cruise_latched and not CS.tss3_stock_pcs
-    if CC.cruiseControl.cancel or (cancel_frc_cruise and self.frame % 10 == 0):
+    if CC.cruiseControl.cancel:
       can_sends.append(toyotacan.create_tss3_brake_cancel_command(self.packer, CS.tss3_brake_module, TSS3_SOURCE_BUS))
 
     # *** hud ui ***
