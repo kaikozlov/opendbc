@@ -556,6 +556,14 @@ class Tss3SafetyHelpers:
     address, data, bus = TSS3_PACKER.make_can_msg("CRUISE_DISPLAY", 2, {"CRUISE_MAIN_STATE": enabled})
     return libsafety_py.make_CANPacket(address, bus, data)
 
+  def _set_mads_main(self, enabled):
+    if self.SAFETY_PARAM & ToyotaSafetyFlags.STOCK_LONGITUDINAL:
+      self._rx(self._mads_main_msg(enabled))
+    else:
+      if self.safety.get_acc_main_on() != enabled:
+        self._rx(self._cruise_button_msg("main"))
+      self._rx(self._cruise_button_msg())
+
   @staticmethod
   def _mads_hud_msg(mode):
     address, data, bus = TSS3_PACKER.make_can_msg("LKAS_HUD", 2, {"LTA_MODE": mode})
@@ -574,32 +582,32 @@ class Tss3SafetyHelpers:
       with self.subTest(mads=enabled):
         self._reset_safety_hooks()
         self.safety.set_mads_params(enabled, False, False)
-        self._rx(self._mads_main_msg(False))
+        self._set_mads_main(False)
         self.assertFalse(self.safety.get_controls_allowed_lateral())
-        self._rx(self._mads_main_msg(True))
+        self._set_mads_main(True)
         self.assertTrue(self.safety.get_acc_main_on())
         self.assertEqual(self.safety.get_controls_allowed_lateral(), enabled)
         self.assertFalse(self.safety.get_controls_allowed())
-        self._rx(self._mads_main_msg(False))
+        self._set_mads_main(False)
         self.assertFalse(self.safety.get_acc_main_on())
         self.assertFalse(self.safety.get_controls_allowed_lateral())
 
   def test_mads_switch_reengagement(self):
     self.safety.set_mads_params(True, False, False)
     self._rx(self._mads_hud_msg(0x10))
-    self._rx(self._mads_main_msg(True))
+    self._set_mads_main(True)
     self.assertTrue(self.safety.get_controls_allowed_lateral())
     # The host treats both off->on and on->off as LKAS button presses.
     for mode in (0x12, 0x10, 0x14, 0x10):
       with self.subTest(mode=mode):
         self._mads_heartbeat_disengage()
-        self._rx(self._mads_main_msg(True))
+        self._set_mads_main(True)
         self.assertFalse(self.safety.get_controls_allowed_lateral())
         self._rx(self._mads_hud_msg(mode))
         self.assertTrue(self.safety.get_controls_allowed_lateral())
         self.assertFalse(self.safety.get_controls_allowed())
         self._mads_heartbeat_disengage()
-        self._rx(self._mads_main_msg(True))
+        self._set_mads_main(True)
         self._rx(self._mads_hud_msg(mode))
         self.assertFalse(self.safety.get_controls_allowed_lateral())
 
@@ -617,7 +625,7 @@ class Tss3SafetyHelpers:
         if initial_mode != 0x10:
           self._rx(self._mads_hud_msg(0x14 if initial_mode == 0x12 else 0x12))
           self.assertFalse(self.safety.get_controls_allowed_lateral())
-        self._rx(self._mads_main_msg(False))
+        self._set_mads_main(False)
         self._rx(self._mads_hud_msg(0x12 if initial_mode == 0x10 else 0x10))
         self.assertTrue(self.safety.get_controls_allowed_lateral())
         self.assertFalse(self.safety.get_controls_allowed())
@@ -625,7 +633,7 @@ class Tss3SafetyHelpers:
   def test_mads_switch_disabled(self):
     self.safety.set_mads_params(False, False, False)
     for mode in (0x10, 0x12, 0x10):
-      self._rx(self._mads_main_msg(True))
+      self._set_mads_main(True)
       self._rx(self._mads_hud_msg(mode))
       self.assertFalse(self.safety.get_controls_allowed_lateral())
       self.assertFalse(self.safety.get_controls_allowed())
@@ -649,7 +657,7 @@ class Tss3SafetyHelpers:
       with self.subTest(disengage=disengage, pause=pause):
         self._reset_safety_hooks()
         self.safety.set_mads_params(True, disengage, pause)
-        self._rx(self._mads_main_msg(True))
+        self._set_mads_main(True)
         self.assertTrue(self.safety.get_controls_allowed_lateral())
         for pressed in (True, False):
           msg = TSS3_PACKER.make_can_msg("BRAKE_MODULE", 0, {"BRAKE_PRESSED": pressed})
@@ -659,7 +667,7 @@ class Tss3SafetyHelpers:
           self.assertFalse(self.safety.get_controls_allowed())
 
   def test_mads_switch_receive_liveness(self):
-    messages = [self._mads_main_msg(True), self._mads_hud_msg(0x10)]
+    messages = [self._mads_main_msg(True), self._mads_hud_msg(0x10), self._cruise_button_msg()]
     for name, bus in (("STEER_ANGLE_SENSOR", 0), ("WHEEL_SPEEDS", 0), ("GAS_PEDAL", 0),
                       ("BRAKE_MODULE", 0), ("CONTROL_REQUEST", 2)):
       msg = TSS3_PACKER.make_can_msg(name, bus, {"CRUISE_OPERATING_LATCH": True} if name == "CONTROL_REQUEST" else {})
@@ -671,6 +679,10 @@ class Tss3SafetyHelpers:
       with self.subTest(missing=missing):
         self._reset_safety_hooks()
         self.safety.set_mads_params(True, False, False)
+        self._set_mads_main(True)
+        if not self.SAFETY_PARAM & ToyotaSafetyFlags.STOCK_LONGITUDINAL:
+          self._rx(self._cruise_button_msg("set"))
+          self._rx(self._cruise_button_msg())
         self.safety.set_timer(0)
         for msg in messages:
           self._rx(msg)
@@ -687,19 +699,46 @@ class Tss3SafetyHelpers:
         self.assertEqual(self.safety.get_controls_allowed_lateral(), missing is None)
 
   @staticmethod
+  def _cruise_button_msg(button=None):
+    values = {
+      "RES_BUTTON_MIRROR_N": 1,
+      "SET_BUTTON_MIRROR_N": 1,
+      "CANCEL_BUTTON_MIRROR_N": 1,
+    }
+    if button is not None:
+      signal = {
+        "main": "MAIN_BUTTON",
+        "resume": "RES_BUTTON",
+        "set": "SET_BUTTON",
+        "cancel": "CANCEL_BUTTON",
+      }[button]
+      values[signal] = 1
+      if button != "main":
+        values[f"{signal}_MIRROR_N"] = 0
+    address, data, bus = TSS3_PACKER.make_can_msg("CRUISE_BUTTONS", 0, values)
+    msg = libsafety_py.make_CANPacket(address, bus, data)
+    msg[0].fd = 1
+    return msg
+
+  @staticmethod
   def _admin_msg(arm: bool):
     return libsafety_py.make_CANPacket(0x777, 1, bytes((7, 0xC9, 0xA8, int(arm), 0, 0, 0, 0)))
 
-  def _rx_frc_08a(self, request: bytes):
+  @staticmethod
+  def _frc_08a_msg(request: bytes):
     msg = libsafety_py.make_CANPacket(0x08A, 2, request)
     msg[0].fd = 1
-    self.assertTrue(self.safety.safety_rx_hook(msg))
+    return msg
+
+  def _rx_frc_08a(self, request: bytes):
+    self.assertTrue(self.safety.safety_rx_hook(self._frc_08a_msg(request)))
 
   def test_frc_pcs_request_is_forwarded(self):
     stock_longitudinal = bool(self.SAFETY_PARAM & ToyotaSafetyFlags.STOCK_LONGITUDINAL)
     for pcs in TSS3_FRC_PCS_08A:
       with self.subTest(pcs=pcs.hex()):
         self._rx_frc_08a(TSS3_FRC_08A)
+        self.safety.set_controls_allowed(True)
         self.assertTrue(self.safety.safety_tx_hook(self._admin_msg(True)))
         request = build_host_application(stock=TSS3_FRC_08A if stock_longitudinal else None)
         self.assertTrue(self._request(request))
@@ -747,10 +786,11 @@ class TestToyotaTss3CamrySafety(Tss3SafetyHelpers, common.CarSafetyTest, common.
   DBC = TSS3_DBC
   SAFETY_MODEL = CarParams.SafetyModel.toyota
   SAFETY_PARAM = EPS_SCALE[CAR.TOYOTA_CAMRY_TSS3] | ToyotaSafetyFlags.TSS3
+  PCM_CRUISE = False
 
   TX_MSGS = [[0x777, 1], [0x777, 0], [0x08A, 0], [0x101, 2], [0x412, 0]]
   RELAY_MALFUNCTION_ADDRS = {0: (0x08A, 0x412)}
-  FWD_BLACKLISTED_ADDRS = {2: [0x08A, 0x412]}
+  FWD_BLACKLISTED_ADDRS = {0: [0x0FE], 2: [0x08A, 0x412]}
 
   MAX_ACCEL = 2.0
   MIN_ACCEL = -3.5
@@ -790,6 +830,43 @@ class TestToyotaTss3CamrySafety(Tss3SafetyHelpers, common.CarSafetyTest, common.
       # re-arm after a rejected frame hands 0x08A back to the FRC
       super()._tx(self._admin_msg(True))
     return ok
+
+  def test_button_owned_cruise_engagement(self):
+    self.assertFalse(self.safety.get_acc_main_on())
+    self._rx(self._mads_main_msg(True))
+    self.assertFalse(self.safety.get_acc_main_on())
+    self._rx(self._cruise_button_msg("main"))
+    self.assertTrue(self.safety.get_acc_main_on())
+    self._rx(self._cruise_button_msg())
+
+    for button in ("set", "resume"):
+      self.safety.set_controls_allowed(False)
+      self._rx(self._cruise_button_msg(button))
+      self.assertFalse(self.safety.get_controls_allowed())
+      self._rx(self._cruise_button_msg())
+      self.assertTrue(self.safety.get_controls_allowed())
+
+    self._rx(self._cruise_button_msg("cancel"))
+    self.assertFalse(self.safety.get_controls_allowed())
+    self._rx(self._cruise_button_msg())
+    self._rx(self._cruise_button_msg("main"))
+    self.assertFalse(self.safety.get_acc_main_on())
+    self.assertFalse(self.safety.get_controls_allowed())
+    self._rx(self._cruise_button_msg("set"))
+    self._rx(self._cruise_button_msg())
+    self.assertFalse(self.safety.get_controls_allowed())
+
+  def test_cruise_button_forwarding(self):
+    # openpilot reads buttons natively on bus 0; none of CRUISE_BUTTONS reaches the FRC
+    self.assertEqual(self.safety.safety_fwd_hook(0, 0xFE), -1)
+    self.assertEqual(self.safety.safety_fwd_hook(2, 0xFE), 0)
+
+  def test_frc_cruise_latch_does_not_control_engagement(self):
+    self._rx_frc_08a(TSS3_FRC_08A)
+    self.assertFalse(self.safety.get_controls_allowed())
+    self.safety.set_controls_allowed(True)
+    self._rx_frc_08a(TSS3_FRC_INACTIVE_08A)
+    self.assertTrue(self.safety.get_controls_allowed())
 
   def _application(self, *, angle_raw: int = 0, lat_active: bool = False, accel: float = 0.0, request_sequence: int = 0) -> bytes:
     return build_host_application(lat_active=lat_active, angle_raw=angle_raw, accel=accel, request_sequence=request_sequence)
@@ -863,7 +940,7 @@ class TestToyotaTss3CamrySafety(Tss3SafetyHelpers, common.CarSafetyTest, common.
   def test_mads_lateral_only_request(self):
     self._reset_speed_measurement(10.)
     self.safety.set_mads_params(True, False, False)
-    self._rx(self._mads_main_msg(True))
+    self._set_mads_main(True)
     self.assertTrue(self.safety.get_controls_allowed_lateral())
     self.assertFalse(self.safety.get_controls_allowed())
 
@@ -1087,6 +1164,15 @@ class TestToyotaTss3CamryStockLongitudinalSafety(Tss3SafetyHelpers, common.Safet
 
   def _rx_stock(self, stock: bytes):
     self._rx_frc_08a(stock)
+
+  def test_cruise_buttons_remain_owned_by_frc(self):
+    self.assertEqual(self.safety.safety_fwd_hook(0, 0xFE), 2)
+
+  def test_frc_cruise_latch_controls_engagement(self):
+    self._rx_frc_08a(TSS3_FRC_08A)
+    self.assertTrue(self.safety.get_controls_allowed())
+    self._rx_frc_08a(TSS3_FRC_INACTIVE_08A)
+    self.assertFalse(self.safety.get_controls_allowed())
 
   def _host_request(self, stock: bytes | None = None, request_sequence: int = 12) -> bytes:
     stock = self.STOCK_08A if stock is None else stock

@@ -62,6 +62,7 @@
   {.msg = {{0x0AA, 0, 8, 100U, .ignore_checksum = true, .ignore_counter = true}, { 0 }, { 0 }}},                               \
   {.msg = {{0x116, 0, 8, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},   \
   {.msg = {{0x101, 0, 8, 50U, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},                            \
+  {.msg = {{0x0FE, 0, 32, 30U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},   \
   {.msg = {{0x08A, 2, 32, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},  \
   {.msg = {{0x251, 2, 8, 1U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true, .ignore_frequency_check = true}, { 0 }, { 0 }}},  \
   {.msg = {{0x412, 2, 8, 1U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true, .ignore_frequency_check = true}, { 0 }, { 0 }}},  \
@@ -92,9 +93,7 @@ static bool toyota_tss3 = false;
 // The VMC in the brake ECU needs a continuous CONTROL_REQUEST: it sets CONTROL_RESULT.REQUEST_LOSS ~90 ms after the
 // last valid one and latches a cruise fault until restart if that persists for ~1 s.
 // PCS braking is requested in the FRC's CONTROL_REQUEST, so openpilot's is released for the FRC's to reach the VMC
-// untouched. Forwarding is decided before the RX hook sees a frame, so the first PCS request is still blocked (~25 ms
-// at 40 Hz), like Honda Nidec's stock AEB forwarding. Forwarding it too needs panda to pass the frame to the fwd hook
-// or run the RX hook first.
+// untouched.
 #define TOYOTA_TSS3_08A_TIMEOUT_US 100000U
 #define TOYOTA_TSS3_08A_LEN 28U  // without the SecOC trailer
 #define TOYOTA_TSS3_FRAGMENT_LEN 7U
@@ -104,6 +103,9 @@ static bool toyota_tss3_08a_active = false;
 static bool toyota_tss3_stock_pcs = false;
 static uint8_t toyota_tss3_lta_mode = 0U;
 static bool toyota_tss3_lta_button_pressed = false;
+static bool toyota_tss3_main_button_pressed = false;
+static bool toyota_tss3_set_button_pressed = false;
+static bool toyota_tss3_resume_button_pressed = false;
 static uint32_t toyota_tss3_08a_last_tx_ts = 0U;
 static uint8_t toyota_tss3_request_next_fragment = 0U;
 static uint32_t toyota_tss3_last_request_ts = 0U;
@@ -165,8 +167,29 @@ static void toyota_rx_hook(const CANPacket_t *msg) {
       mads_button_press = MADS_BUTTON_NOT_PRESSED;
       toyota_tss3_lta_button_pressed = false;
     }
-    if ((msg->addr == 0x251U) && (msg->bus == 2U)) {
+    if (toyota_stock_longitudinal && (msg->addr == 0x251U) && (msg->bus == 2U)) {
       acc_main_on = GET_BIT(msg, 12U);  // CRUISE_DISPLAY.CRUISE_MAIN_STATE
+    }
+    if (!toyota_stock_longitudinal && (msg->addr == 0xFEU) && (msg->bus == 0U) && (GET_LEN(msg) == 32U)) {
+      const bool main_button = GET_BIT(msg, 58U);
+      const bool set_button = GET_BIT(msg, 39U) && !GET_BIT(msg, 62U);
+      const bool resume_button = GET_BIT(msg, 31U) && !GET_BIT(msg, 55U);
+      const bool cancel_button = GET_BIT(msg, 38U) && !GET_BIT(msg, 61U);
+
+      if (main_button && !toyota_tss3_main_button_pressed) {
+        acc_main_on = !acc_main_on;
+      }
+      if (!acc_main_on || cancel_button) {
+        controls_allowed = false;
+      } else if ((toyota_tss3_set_button_pressed && !set_button) ||
+                 (toyota_tss3_resume_button_pressed && !resume_button)) {
+        controls_allowed = true;
+      } else {
+      }
+
+      toyota_tss3_main_button_pressed = main_button;
+      toyota_tss3_set_button_pressed = set_button;
+      toyota_tss3_resume_button_pressed = resume_button;
     }
     if ((msg->addr == 0x412U) && (msg->bus == 2U)) {
       const uint8_t mode = msg->data[0];  // LKAS_HUD.LTA_MODE
@@ -193,7 +216,9 @@ static void toyota_rx_hook(const CANPacket_t *msg) {
         toyota_tss3_stock_08a_cnt++;
       }
 
-      pcm_cruise_check(GET_BIT(msg, 27U));  // CONTROL_REQUEST.CRUISE_OPERATING_LATCH
+      if (toyota_stock_longitudinal) {
+        pcm_cruise_check(GET_BIT(msg, 27U));  // CONTROL_REQUEST.CRUISE_OPERATING_LATCH
+      }
 
       const uint8_t long_request_id = msg->data[7] >> 2U;  // CONTROL_REQUEST.LONGITUDINAL_REQUEST_ID_LOWER
       toyota_tss3_stock_pcs = (long_request_id == 33U) || (long_request_id == 34U);
@@ -699,8 +724,17 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
 }
 
 static bool toyota_fwd_hook(int bus_num, int addr) {
-  // block the FRC's CONTROL_REQUEST while openpilot sends it, forward it again if openpilot stops
   bool block = false;
+
+  // While openpilot owns longitudinal engagement, CRUISE_BUTTONS must not reach the FRC:
+  // the live FRC would engage stock cruise and fight openpilot for the signed request stream.
+  // openpilot still reads the buttons directly from bus 0, so engagement is unaffected.
+  // Stock longitudinal forwards everything so the FRC keeps full button ownership.
+  if (toyota_tss3 && !toyota_stock_longitudinal && (bus_num == 0) && (addr == 0xFE)) {
+    block = true;
+  }
+
+  // block the FRC's CONTROL_REQUEST while openpilot sends it, forward it again if openpilot stops
   if (toyota_tss3_08a_active && (bus_num == 2) && (addr == 0x8A)) {
     if (safety_get_ts_elapsed(microsecond_timer_get(), toyota_tss3_08a_last_tx_ts) > TOYOTA_TSS3_08A_TIMEOUT_US) {
       toyota_tss3_08a_active = false;
@@ -767,6 +801,9 @@ static safety_config toyota_init(uint16_t param) {
     mads_button_press = MADS_BUTTON_NOT_PRESSED;
   }
   toyota_tss3_lta_button_pressed = false;
+  toyota_tss3_main_button_pressed = false;
+  toyota_tss3_set_button_pressed = false;
+  toyota_tss3_resume_button_pressed = false;
   toyota_tss3_08a_last_tx_ts = 0U;
   toyota_tss3_request_next_fragment = 0U;
   toyota_tss3_last_request_ts = 0U;

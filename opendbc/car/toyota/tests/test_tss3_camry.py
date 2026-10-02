@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import patch
 
+from opendbc.can import CANPacker
 from opendbc.car import Bus, CanData, structs
 from opendbc.car.toyota.interface import CarInterface
 from opendbc.car.toyota.values import CAR, CarControllerParams, ToyotaSafetyFlags
@@ -29,6 +30,26 @@ CAMRY_COMMON = {
 FRC_INACTIVE_08A = bytes.fromhex("0000000080000012ff2200ff227fff007fffff530000000000000100edbabd90")
 FRC_IDS = {0x08A, 0x251, 0x3F6, 0x412, 0x5AE}  # from the FRC on bus 2
 ANGLE_MAX = CarControllerParams.TSS3_ANGLE_LIMITS.STEER_ANGLE_MAX
+TSS3_PACKER = CANPacker("toyota_tss3_pt_generated")
+
+
+def cruise_button_frame(button=None):
+  values = {
+    "RES_BUTTON_MIRROR_N": 1,
+    "SET_BUTTON_MIRROR_N": 1,
+    "CANCEL_BUTTON_MIRROR_N": 1,
+  }
+  if button is not None:
+    signal = {
+      "main": "MAIN_BUTTON",
+      "resume": "RES_BUTTON",
+      "set": "SET_BUTTON",
+      "cancel": "CANCEL_BUTTON",
+    }[button]
+    values[signal] = 1
+    if button != "main":
+      values[f"{signal}_MIRROR_N"] = 0
+  return TSS3_PACKER.make_can_msg("CRUISE_BUTTONS", 0, values)[1]
 
 
 def fingerprint():
@@ -88,6 +109,7 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     for alpha_long in (True, False):
       CP = CarInterface.get_params(CAR.TOYOTA_CAMRY_TSS3, fingerprint(), [], alpha_long, False, False)
       self.assertEqual((CP.openpilotLongitudinalControl, CP.autoResumeSng), (alpha_long, alpha_long))
+      self.assertEqual(CP.pcmCruise, not alpha_long)
       self.assertEqual(bool(CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.STOCK_LONGITUDINAL), not alpha_long)
       self.assertTrue(CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.TSS3)
       self.assertTrue(CP.enableBsm)
@@ -98,8 +120,26 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     state = update_state(self.ci)
     self.assertTrue(state.canValid)
     self.assertEqual(state.gearShifter, structs.CarState.GearShifter.drive)
-    self.assertTrue(state.cruiseState.available and state.cruiseState.enabled)
+    self.assertFalse(state.cruiseState.available or state.cruiseState.enabled)
     self.assertFalse(state.carNotReady or state.steerFaultTemporary or state.steerFaultPermanent)
+
+    state = update_state(self.ci, iterations=1, x0FE=cruise_button_frame("main"))
+    self.assertEqual([(event.type, event.pressed) for event in state.buttonEvents],
+                     [(structs.CarState.ButtonEvent.Type.mainCruise, True)])
+    self.assertTrue(state.cruiseState.available)
+    state = update_state(self.ci, iterations=1, x0FE=cruise_button_frame())
+    self.assertTrue(state.cruiseState.available)
+
+    update_state(self.ci, iterations=1, x0FE=cruise_button_frame("set"))
+    state = update_state(self.ci, iterations=1, x0FE=cruise_button_frame())
+    self.assertTrue(state.buttonEnable)
+    self.assertTrue(state.cruiseState.available)
+    self.assertFalse(state.cruiseState.enabled)
+
+    stock_cp, stock_ci = build_interface(False)
+    stock_state = update_state(stock_ci)
+    self.assertTrue(stock_cp.pcmCruise)
+    self.assertTrue(stock_state.cruiseState.available and stock_state.cruiseState.enabled)
 
   def test_delayed_hold_standstill(self):
     for alpha_long in (False, True):
@@ -258,6 +298,11 @@ class TestToyotaCamryTSS3(unittest.TestCase):
     _, stock_long = build_interface(False)
     update_state(stock_long, speed_ms=5.0)
     self.assertEqual(stock_long.apply(control(active=False, accel=1.0, long_active=True), control_sp(), self.t)[0].accel, 0.0)
+
+  def test_openpilot_longitudinal_cancels_preexisting_frc_cruise(self):
+    update_state(self.ci)
+    _, sends = self.apply(control(active=False, enabled=False))
+    assert (0x101, bytes.fromhex("8800000100000093"), 2) in sends
 
   def test_cancel_and_hud(self):
     update_state(self.ci, x412=bytes.fromhex("1000002200ee9307"))

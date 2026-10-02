@@ -1073,6 +1073,7 @@ class CarSafetyTest(SafetyTest, MadsSafetyTestBase):
   STANDSTILL_THRESHOLD: float = 0.0
   GAS_PRESSED_THRESHOLD = 0
   RELAY_MALFUNCTION_ADDRS: dict[int, tuple[int, ...]] | None = None
+  PCM_CRUISE = True
 
   @classmethod
   def setUpClass(cls):
@@ -1166,17 +1167,23 @@ class CarSafetyTest(SafetyTest, MadsSafetyTestBase):
       self.assertEqual(pressed, get_brake_pressed_prev())
 
   def test_enable_control_allowed_from_cruise(self):
+    if not self.PCM_CRUISE:
+      self.skipTest("engagement is owned by cruise buttons")
     self._rx(self._pcm_status_msg(False))
     self.assertFalse(self.safety.get_controls_allowed())
     self._rx(self._pcm_status_msg(True))
     self.assertTrue(self.safety.get_controls_allowed())
 
   def test_disable_control_allowed_from_cruise(self):
+    if not self.PCM_CRUISE:
+      self.skipTest("engagement is owned by cruise buttons")
     self.safety.set_controls_allowed(1)
     self._rx(self._pcm_status_msg(False))
     self.assertFalse(self.safety.get_controls_allowed())
 
   def test_cruise_engaged_prev(self):
+    if not self.PCM_CRUISE:
+      self.skipTest("engagement is owned by cruise buttons")
     for engaged in [True, False]:
       self._rx(self._pcm_status_msg(engaged))
       self.assertEqual(engaged, self.safety.get_cruise_engaged_prev())
