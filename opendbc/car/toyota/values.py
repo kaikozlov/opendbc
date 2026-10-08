@@ -248,6 +248,17 @@ class CAR(Platforms):
     ],
     CarSpecs(mass=3060. * CV.LB_TO_KG, wheelbase=2.67, steerRatio=13.9, tireStiffnessFactor=0.444),
   )
+  TOYOTA_CROWN_TSS3 = ToyotaTSS3PlatformConfig(
+    [ToyotaTSS3CarDocs("Toyota Crown Hybrid 2024")],
+    # Mass and wheelbase are the published Crown Limited figures (3980 lb curb,
+    # 112.2 in). steerRatio is measured off this car rather than borrowed from
+    # the class: a rear-axle 0x0AA wheel-speed yaw estimate against 0x025 over a
+    # ~17 kph cornering capture gives 15.5 (through-origin fit 15.47,
+    # per-sample median 15.46, IQR 14.4-17.2, rear track 1.605 m).
+    # tireStiffnessFactor is the untuned TNGA-K sedan value the Camry uses.
+    CarSpecs(mass=3980. * CV.LB_TO_KG, wheelbase=2.84988, steerRatio=15.5, tireStiffnessFactor=0.7933),
+    flags=ToyotaFlags.HYBRID,
+  )
   TOYOTA_HIGHLANDER = PlatformConfig(
     [
       ToyotaCarDocs("Toyota Highlander 2017-19", video="https://www.youtube.com/watch?v=0wS0wXSLzoo"),
@@ -587,10 +598,22 @@ FW_QUERY_CONFIG = FwQueryConfig(
       bus=1,
       obd_multiplexing=False,
     ),
+    # NOTE: the Crown's forward camera answers F181 on bus 1 only (bus 0 timed
+    # out on every DID tried), so no request here reaches it and its entry in
+    # FW_VERSIONS is currently unmatchable. Adding a bus-1 fwdCamera request
+    # fixes that but costs ~0.20s on the Toyota scan, which puts
+    # test_fw_query_timing over its 0.85s reference -- the sub-addressed
+    # 0x750/0x6d camera address is queried serially rather than in the
+    # parallel batch. Left out deliberately; the Crown still resolves on
+    # eps + abs via non_essential_ecus below.
   ],
   non_essential_ecus={
     # FIXME: On some models, abs can sometimes be missing
     Ecu.abs: [CAR.TOYOTA_RAV4, CAR.TOYOTA_COROLLA, CAR.TOYOTA_HIGHLANDER, CAR.TOYOTA_SIENNA, CAR.LEXUS_IS, CAR.TOYOTA_ALPHARD_TSS2],
+    # The Crown answers fwdCamera F181 on bus 1, not bus 0 (measured: bus 0
+    # times out on every DID tried). It is therefore outside the reach of the
+    # bus-0 requests, and eps+abs alone have to be able to resolve the car.
+    Ecu.fwdCamera: [CAR.TOYOTA_CROWN_TSS3],
     # On some models, the engine can show on two different addresses
     Ecu.engine: [CAR.TOYOTA_HIGHLANDER, CAR.TOYOTA_CAMRY, CAR.TOYOTA_COROLLA_TSS2, CAR.TOYOTA_CHR, CAR.TOYOTA_CHR_TSS2, CAR.LEXUS_IS,
                  CAR.LEXUS_IS_TSS2, CAR.LEXUS_RC, CAR.LEXUS_NX, CAR.LEXUS_NX_TSS2, CAR.LEXUS_RX, CAR.LEXUS_RX_TSS2],
