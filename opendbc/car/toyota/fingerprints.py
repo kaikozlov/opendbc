@@ -16,23 +16,14 @@ FW_VERSIONS = {
       b'\x01F152633K0000\x00\x00\x00\x00',
     ],
   },
-  # 2024 Crown Limited (JTDAAAAF3R3...), captured live from the car on bus 1.
-  # fwdCamera was measured bus-1-only -- bus 0 timed out on every DID tried --
-  # so no request currently reaches it and it is listed non-essential in
-  # values.py; the car resolves on eps + abs. The record is kept because it is
-  # real captured data and becomes matchable the moment bus 1 is queried for
-  # it (see the note on the requests list in values.py).
-  # This car also returns engine and fwdRadar records, but both were only seen
-  # on bus 1 and are only ever queried on bus 0, so carrying them here would
-  # make the car unmatchable. They are deliberately left out.
   CAR.TOYOTA_CROWN_TSS3: {
-    (Ecu.eps, 0x7A1, None): [
+    (Ecu.eps, 0x7a1, None): [
       b'\x028965F3012000\x00\x00\x00\x008A3113008000\x00\x00\x00\x00',
     ],
     (Ecu.fwdCamera, 0x792, None): [
       b'\x018646F30161A0\x00\x00\x00\x00',
     ],
-    (Ecu.abs, 0x7B0, None): [
+    (Ecu.abs, 0x7b0, None): [
       b'\x01F152630E0100\x00\x00\x00\x00',
     ],
   },
