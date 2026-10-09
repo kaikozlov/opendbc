@@ -598,22 +598,10 @@ FW_QUERY_CONFIG = FwQueryConfig(
       bus=1,
       obd_multiplexing=False,
     ),
-    # NOTE: the Crown's forward camera answers F181 on bus 1 only (bus 0 timed
-    # out on every DID tried), so no request here reaches it and its entry in
-    # FW_VERSIONS is currently unmatchable. Adding a bus-1 fwdCamera request
-    # fixes that but costs ~0.20s on the Toyota scan, which puts
-    # test_fw_query_timing over its 0.85s reference -- the sub-addressed
-    # 0x750/0x6d camera address is queried serially rather than in the
-    # parallel batch. Left out deliberately; the Crown still resolves on
-    # eps + abs via non_essential_ecus below.
   ],
   non_essential_ecus={
     # FIXME: On some models, abs can sometimes be missing
     Ecu.abs: [CAR.TOYOTA_RAV4, CAR.TOYOTA_COROLLA, CAR.TOYOTA_HIGHLANDER, CAR.TOYOTA_SIENNA, CAR.LEXUS_IS, CAR.TOYOTA_ALPHARD_TSS2],
-    # The Crown answers fwdCamera F181 on bus 1, not bus 0 (measured: bus 0
-    # times out on every DID tried). It is therefore outside the reach of the
-    # bus-0 requests, and eps+abs alone have to be able to resolve the car.
-    Ecu.fwdCamera: [CAR.TOYOTA_CROWN_TSS3],
     # On some models, the engine can show on two different addresses
     Ecu.engine: [CAR.TOYOTA_HIGHLANDER, CAR.TOYOTA_CAMRY, CAR.TOYOTA_COROLLA_TSS2, CAR.TOYOTA_CHR, CAR.TOYOTA_CHR_TSS2, CAR.LEXUS_IS,
                  CAR.LEXUS_IS_TSS2, CAR.LEXUS_RC, CAR.LEXUS_NX, CAR.LEXUS_NX_TSS2, CAR.LEXUS_RX, CAR.LEXUS_RX_TSS2],
