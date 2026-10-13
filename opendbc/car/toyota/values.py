@@ -253,17 +253,17 @@ class CAR(Platforms):
       ToyotaTSS3CarDocs("Toyota Corolla 2023"),
       ToyotaTSS3CarDocs("Toyota Corolla Hybrid 2025"),
     ],
-    CarSpecs(mass=3060. * CV.LB_TO_KG, wheelbase=2.70, steerRatio=13.9, tireStiffnessFactor=0.444),
+    CarSpecs(wheelbase=2.70, steerRatio=13.9, tireStiffnessFactor=0.444),
   )
   TOYOTA_CROWN_TSS3 = ToyotaTSS3PlatformConfig(
     [ToyotaTSS3CarDocs("Toyota Crown Hybrid 2024")],
-    # Mass and wheelbase are the published Crown Limited figures (3980 lb curb,
-    # 112.2 in). steerRatio is measured off this car rather than borrowed from
-    # the class: a rear-axle 0x0AA wheel-speed yaw estimate against 0x025 over a
+    # Wheelbase is the published Crown Limited figure  (112.2 in).
+    # steerRatio is measured off this car rather than borrowed from the class:
+    # a rear-axle 0x0AA wheel-speed yaw estimate against 0x025 over a
     # ~17 kph cornering capture gives 15.5 (through-origin fit 15.47,
     # per-sample median 15.46, IQR 14.4-17.2, rear track 1.605 m).
     # tireStiffnessFactor is the untuned TNGA-K sedan value the Camry uses.
-    CarSpecs(mass=3980. * CV.LB_TO_KG, wheelbase=2.84988, steerRatio=15.5, tireStiffnessFactor=0.7933),
+    CarSpecs(wheelbase=2.84988, steerRatio=15.5, tireStiffnessFactor=0.7933),
     flags=ToyotaFlags.HYBRID,
   )
   TOYOTA_HIGHLANDER = PlatformConfig(
