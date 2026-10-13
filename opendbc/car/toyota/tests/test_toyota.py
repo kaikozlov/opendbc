@@ -143,8 +143,9 @@ class TestToyotaInterfaces(unittest.TestCase):
         present_ecus = {ecu[0] for ecu in ecus}
         missing_ecus = common_ecus - present_ecus
         if car_model == CAR.TOYOTA_CROWN_TSS3:
-          # missing fwdRadar for now, will update fingerprint when collected.
           missing_ecus -= {Ecu.fwdRadar}
+        if car_model == CAR.TOYOTA_COROLLA_TSS3:
+          missing_ecus -= {Ecu.fwdCamera}
         assert len(missing_ecus) == 0
 
         # Some exceptions for other common ECUs
@@ -190,11 +191,10 @@ class TestToyotaFingerprint(unittest.TestCase):
             continue
           if platform_code_ecu == Ecu.abs and car_model in (CAR.TOYOTA_ALPHARD_TSS2,):
             continue
-<<<<<<< HEAD
-=======
-          if platform_code_ecu == Ecu.fwdRadar and car_model in (CAR.TOYOTA_CAMRY_TSS3, CAR.TOYOTA_CROWN_TSS3):
+          if platform_code_ecu == Ecu.fwdRadar and car_model == CAR.TOYOTA_CROWN_TSS3:
             continue
->>>>>>> 1b9fe67b (Toyota Crown TSS3: add fingerprint + platform config)
+          if platform_code_ecu == Ecu.fwdCamera and car_model == CAR.TOYOTA_COROLLA_TSS3:
+            continue
           assert platform_code_ecu in [e[0] for e in ecus]
 
   def test_fw_format(self):
