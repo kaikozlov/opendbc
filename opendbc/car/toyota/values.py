@@ -248,6 +248,13 @@ class CAR(Platforms):
     ],
     CarSpecs(wheelbase=2.67, steerRatio=13.9, tireStiffnessFactor=0.444),
   )
+  TOYOTA_COROLLA_TSS3 = ToyotaTSS3PlatformConfig(
+    [
+      ToyotaTSS3CarDocs("Toyota Corolla 2023"),
+      ToyotaTSS3CarDocs("Toyota Corolla Hybrid 2025"),
+    ],
+    CarSpecs(mass=3060. * CV.LB_TO_KG, wheelbase=2.70, steerRatio=13.9, tireStiffnessFactor=0.444),
+  )
   TOYOTA_CROWN_TSS3 = ToyotaTSS3PlatformConfig(
     [ToyotaTSS3CarDocs("Toyota Crown Hybrid 2024")],
     # Mass and wheelbase are the published Crown Limited figures (3980 lb curb,

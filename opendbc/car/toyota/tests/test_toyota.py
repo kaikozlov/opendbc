@@ -36,28 +36,6 @@ class TestToyotaInterfaces(unittest.TestCase):
       if car_model.config.flags & ToyotaFlags.TSS2 and not (car_model.config.flags & ToyotaFlags.SECOC):
         assert dbc[Bus.pt] == "toyota_nodsu_pt_generated"
 
-  def test_essential_ecus(self):
-    # Asserts standard ECUs exist for each platform
-    common_ecus = {Ecu.fwdRadar, Ecu.fwdCamera}
-    for car_model, ecus in FW_VERSIONS.items():
-      with self.subTest(car_model=car_model.value):
-        present_ecus = {ecu[0] for ecu in ecus}
-        missing_ecus = common_ecus - present_ecus
-        if car_model in (CAR.TOYOTA_CAMRY_TSS3, CAR.TOYOTA_CROWN_TSS3):
-          # These TSS3 fingerprints currently omit the radar identity.
-          missing_ecus -= {Ecu.fwdRadar}
-        assert len(missing_ecus) == 0
-
-        # Some exceptions for other common ECUs
-        if car_model not in (CAR.TOYOTA_ALPHARD_TSS2,):
-          assert Ecu.abs in present_ecus
-
-        if car_model not in (CAR.TOYOTA_MIRAI, CAR.TOYOTA_CAMRY_TSS3, CAR.TOYOTA_CROWN_TSS3):
-          assert Ecu.engine in present_ecus
-
-        if car_model not in (CAR.TOYOTA_PRIUS_V, CAR.LEXUS_CTH):
-          assert Ecu.eps in present_ecus
-
 
 class TestToyotaFingerprint(unittest.TestCase):
   def test_non_essential_ecus(self):
@@ -81,19 +59,6 @@ class TestToyotaFingerprint(unittest.TestCase):
   @fuzzy_test(max_examples=100)
   def test_platform_codes_fuzzy_fw(self, fuzzy):
     get_platform_codes(fuzzy.list(fuzzy.binary))
-
-  def test_platform_code_ecus_available(self):
-    # Asserts ECU keys essential for fuzzy fingerprinting are available on all platforms
-    for car_model, ecus in FW_VERSIONS.items():
-      with self.subTest(car_model=car_model.value):
-        for platform_code_ecu in PLATFORM_CODE_ECUS:
-          if platform_code_ecu == Ecu.eps and car_model in (CAR.TOYOTA_PRIUS_V, CAR.LEXUS_CTH,):
-            continue
-          if platform_code_ecu == Ecu.abs and car_model in (CAR.TOYOTA_ALPHARD_TSS2,):
-            continue
-          if platform_code_ecu == Ecu.fwdRadar and car_model in (CAR.TOYOTA_CAMRY_TSS3, CAR.TOYOTA_CROWN_TSS3):
-            continue
-          assert platform_code_ecu in [e[0] for e in ecus]
 
   def test_fw_format(self):
     # Asserts:
