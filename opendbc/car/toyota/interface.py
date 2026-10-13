@@ -2,7 +2,7 @@ from opendbc.car import Bus, structs, get_safety_config, uds
 from opendbc.car.toyota.carstate import CarState
 from opendbc.car.toyota.carcontroller import CarController
 from opendbc.car.toyota.radar_interface import RadarInterface
-from opendbc.car.toyota.tss3 import TSS3_SOURCE_BUS
+from opendbc.car.toyota.tss3 import TSS3_CHASSIS_BUS, TSS3_SOURCE_BUS
 from opendbc.car.toyota.values import Ecu, CAR, DBC, ToyotaFlags, CarControllerParams, MIN_ACC_SPEED, \
                                                   EPS_SCALE, ToyotaSafetyFlags
 from opendbc.car.disable_ecu import disable_ecu
@@ -63,7 +63,8 @@ class CarInterface(CarInterfaceBase):
     # In TSS2 cars, the camera does long control
     found_ecus = [fw.ecu for fw in car_fw]
 
-    if Ecu.hybrid in found_ecus:
+    if Ecu.hybrid in found_ecus or (candidate == CAR.TOYOTA_COROLLA_TSS3 and
+                                   (Ecu.electricBrakeBooster in found_ecus or 0x127 in fingerprint.get(TSS3_CHASSIS_BUS, {}))):
       ret.flags |= ToyotaFlags.HYBRID.value
 
     if candidate == CAR.TOYOTA_PRIUS:
