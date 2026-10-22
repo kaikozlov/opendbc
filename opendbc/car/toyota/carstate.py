@@ -9,7 +9,7 @@ from opendbc.car.toyota.values import ToyotaFlags, CAR, DBC, STEER_THRESHOLD, NO
                                                   TSS2_CAR, EPS_SCALE, TSS3_STEER_DRIVER_TORQUE_THRESHOLD
 from opendbc.sunnypilot.car.toyota.carstate_ext import CarStateExt
 from opendbc.sunnypilot.car.toyota.values import ToyotaFlagsSP
-from opendbc.car.toyota.tss3 import PCS_REQUEST_IDS, TSS3_CHASSIS_BUS, TSS3_SOURCE_BUS
+from opendbc.car.toyota.tss3 import TSS3_CHASSIS_BUS, TSS3_SOURCE_BUS
 
 ButtonType = structs.CarState.ButtonEvent.Type
 SteerControlType = structs.CarParams.SteerControlType
@@ -177,9 +177,8 @@ class CarState(CarStateBase, CarStateExt):
       ret.cruiseState.speedCluster = cluster_set_speed * (CV.KPH_TO_MS if is_metric else CV.MPH_TO_MS)
 
     # PCS braking is requested in the FRC's CONTROL_REQUEST, panda forwards it to the VMC untouched. its warning is on PCS_HUD
-    self.tss3_stock_pcs = request["LONGITUDINAL_REQUEST_ID_LOWER"] in PCS_REQUEST_IDS
-    ret.stockAeb = (self.tss3_stock_pcs and request["LONGITUDINAL_ALLOCATION_METHOD_LOWER"] == 3 and
-                    request["LONGITUDINAL_REQUEST_ACCEL_LOWER"] < 0)
+    self.tss3_stock_pcs = bool(request["PCS_BRAKE_REQUEST"])
+    ret.stockAeb = self.tss3_stock_pcs and request["LONGITUDINAL_REQUEST_ACCEL_LOWER"] < 0
     ret.stockFcw = bool(cp_cam.vl["PCS_HUD"]["FCW"])
 
     return ret
