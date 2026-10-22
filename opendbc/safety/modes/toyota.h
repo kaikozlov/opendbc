@@ -256,9 +256,9 @@ static bool toyota_tss3_request_valid(const uint8_t request[], const Longitudina
   };
 
   static const AngleSteeringParams TOYOTA_TSS3_STEERING_PARAMS = {
-    .slip_factor = -0.0007484283457339188F,  // calc_slip_factor(VM)
+    .slip_factor = -0.0007485660712873701F,  // calc_slip_factor(VM)
     .steer_ratio = 15.3F,
-    .wheelbase = 2.825F,
+    .wheelbase = 2.82448F,
   };
 
   bool valid = safety_setup.toyota_stock_longitudinal ? toyota_tss3_stock_08a_match(request, now) : toyota_tss3_08a_match(request);
