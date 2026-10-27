@@ -549,6 +549,38 @@ class TestToyotaTSS3SignerTransport(unittest.TestCase):
     self.t += 10 * MS
     return sends
 
+  def test_probe_health_timeout_and_recovery(self):
+    CS = signer_state()
+    self.assertFalse(self.signer.available)
+    self.signer.probe(CS, 1.0, self.t)
+    self.signer.receive(signer_state([signer_response(1)]), False, self.t + 20 * MS)
+    self.assertTrue(self.signer.available)
+
+    self.t += 1_000 * MS
+    self.assertTrue(signer_requests(self.signer.probe(CS, 1.0, self.t)))
+    self.signer.receive(CS, False, self.t + SIGNER_TIMEOUT_NS + 1)
+    self.assertFalse(self.signer.available)
+    self.signer.receive(signer_state([signer_response(2)]), False, self.t + SIGNER_TIMEOUT_NS + 2)
+    self.assertFalse(self.signer.available)
+
+    self.t += 1_000 * MS
+    self.signer.probe(CS, 1.0, self.t)
+    self.signer.receive(signer_state([signer_response(3)]), False, self.t + 20 * MS)
+    self.assertTrue(self.signer.available)
+
+  def test_probe_result_is_not_published_on_engagement(self):
+    self.signer.probe(signer_state(), 1.0, self.t)
+    self.signer.receive(signer_state([signer_response(1)]), False, self.t + 20 * MS)
+    self.t += 1_000 * MS
+    self.signer.probe(signer_state(), 1.0, self.t)
+    self.t += 20 * MS
+    sends = self.step(signer_state([signer_response(2)]))
+    self.assertEqual(published_requests(sends), [])
+    self.assertFalse(self.signer.active)
+    sends = self.step(signer_state([signer_response(3)]))
+    self.assertEqual(len(published_requests(sends)), 1)
+    self.assertTrue(self.signer.available)
+
   def test_request_fragments_and_signed_publication(self):
     sends = self.step()
     fragments = signer_requests(sends)
@@ -621,9 +653,11 @@ class TestToyotaTSS3SignerTransport(unittest.TestCase):
     self.setUp()
     self.step()
     self.step(signer_state([signer_response(1)]))
+    self.assertTrue(self.signer.available)
     for _ in range(SIGNER_TIMEOUT_NS // (10 * MS) + 1):
       sends = self.step()
     assert (0x777, SIGNER_RELEASE, TSS3_AUX_BUS) in sends
+    self.assertFalse(self.signer.available)
 
   def test_rejected_publication_releases_and_rearms(self):
     self.step()
