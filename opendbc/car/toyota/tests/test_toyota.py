@@ -285,7 +285,9 @@ class TestToyotaTSS3CarInterface(unittest.TestCase):
     return CarInterface.get_params(self.car_model, tss3_fingerprint(), [], alpha_long, is_release, False)
 
   def interface(self, alpha_long=True):
-    return CarInterface(self.params(alpha_long))
+    CP = self.params(alpha_long)
+    CP_SP = CarInterface.get_params_sp(CP, self.car_model, tss3_fingerprint(), [], alpha_long, False, False)
+    return CarInterface(CP, CP_SP)
 
   def update(self, ci=None, iterations=20, speed_ms=0.0, extra=(), **frames):
     ci = ci or self.ci
@@ -293,13 +295,13 @@ class TestToyotaTSS3CarInterface(unittest.TestCase):
     msgs[0x0AA] = (6767 + round(speed_ms * 360)).to_bytes(2, "big") * 4
     for _ in range(iterations):
       packets = [CanData(address, data, tss3_bus(address)) for address, data in msgs.items()] + list(extra)
-      state = ci.update([(self.can_t, packets)])
+      state, _ = ci.update([(self.can_t, packets)])
       self.can_t += 10 * MS
     return state
 
   def apply(self, cc):
     self.t += 10 * MS
-    return self.ci.apply(cc, self.t)
+    return self.ci.apply(cc, structs.CarControlSP(), self.t)
 
   def last_request(self):
     return next(reversed(self.ci.CC.signer.pending.values())).values
@@ -307,6 +309,7 @@ class TestToyotaTSS3CarInterface(unittest.TestCase):
   def test_params(self):
     for alpha_long in (True, False):
       CP = self.params(alpha_long)
+      CarInterface.get_params_sp(CP, self.car_model, tss3_fingerprint(), [], alpha_long, False, False)
       self.assertEqual((CP.openpilotLongitudinalControl, CP.autoResumeSng), (alpha_long, alpha_long))
       self.assertEqual(bool(CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.STOCK_LONGITUDINAL), not alpha_long)
       self.assertTrue(CP.safetyConfigs[0].safetyParam & ToyotaSafetyFlags.TSS3)
@@ -504,7 +507,8 @@ class TestToyotaTSS3CarInterface(unittest.TestCase):
 
     stock_long = self.interface(alpha_long=False)
     self.update(stock_long, speed_ms=5.0)
-    self.assertEqual(stock_long.apply(tss3_control(active=False, accel=1.0, long_active=True), self.t)[0].accel, 0.0)
+    cc = tss3_control(active=False, accel=1.0, long_active=True)
+    self.assertEqual(stock_long.apply(cc, structs.CarControlSP(), self.t)[0].accel, 0.0)
 
   def test_cancel_and_hud(self):
     self.update(x412=bytes.fromhex("1000002200ee9307"))
@@ -693,7 +697,8 @@ class TestToyotaTSS3RadarInterface(unittest.TestCase):
   def setUp(self):
     CP = CarInterface.get_non_essential_params(self.car_model)
     CP.radarUnavailable = False
-    self.ri = RadarInterface(CP)
+    CP_SP = CarInterface.get_non_essential_params_sp(CP, self.car_model)
+    self.ri = RadarInterface(CP, CP_SP)
     self.packer = CANPacker(DBC[self.car_model][Bus.radar])
     self.t = 1_000 * MS
 

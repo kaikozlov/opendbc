@@ -127,7 +127,7 @@ class CarInterface(CarInterfaceBase):
                                         bool(ret.flags & ToyotaFlags.DISABLE_RADAR.value) or
                                         (bool(ret.flags & ToyotaFlags.TSS3) and alpha_long))
 
-    ret.autoResumeSng = ret.openpilotLongitudinalControl and candidate in NO_STOP_TIMER_CAR
+    ret.autoResumeSng = ret.openpilotLongitudinalControl and (candidate in NO_STOP_TIMER_CAR or bool(ret.flags & ToyotaFlags.TSS3))
 
     if not ret.openpilotLongitudinalControl:
       ret.safetyConfigs[0].safetyParam |= ToyotaSafetyFlags.STOCK_LONGITUDINAL.value
