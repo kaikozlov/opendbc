@@ -91,6 +91,7 @@ class CarState(CarStateBase):
       cp.vl["WHEEL_SPEEDS"]["WHEEL_SPEED_RR"],
     )
     ret.vEgoCluster = cp.vl["BODY_CONTROL_STATE_2"]["UI_SPEED"] * CV.KPH_TO_MS
+    self.is_metric = cp.vl["BODY_CONTROL_STATE_2"]["UNITS"] in (1, 2)
     ret.standstill = abs(ret.vEgoRaw) < 1e-3
     ret.vehicleSensorsInvalid = any(cp.vl["WHEEL_SPEEDS"][f"WHEEL_SPEED_{wheel}_FAULT"]
                                     for wheel in ("FL", "FR", "RL", "RR"))
@@ -166,7 +167,7 @@ class CarState(CarStateBase):
     ret.cruiseState.enabled = bool(request["CRUISE_OPERATING_LATCH"])
     # with openpilot longitudinal, the VMC never receives the FRC's hold request
     ret.cruiseState.standstill = not self.CP.openpilotLongitudinalControl and ret.cruiseState.enabled and bool(request["DELAYED_HOLD_STATE"])
-    ret.cruiseState.available = bool(cp_cam.vl["CRUISE_DISPLAY"]["CRUISE_MAIN_STATE"])
+    ret.cruiseState.available = self.CP.openpilotLongitudinalControl or bool(cp_cam.vl["CRUISE_DISPLAY"]["CRUISE_MAIN_STATE"])
     ret.cruiseState.nonAdaptive = cp_cam.vl["CRUISE_STATUS"]["CRUISE_MODE"] == 2
     ret.cruiseState.speed = request["SET_SPEED"] * CV.KPH_TO_MS
     cluster_set_speed = cp_cam.vl["CRUISE_DISPLAY"]["UI_SET_SPEED"]
