@@ -523,9 +523,9 @@ class TestToyotaTss3Safety(Tss3SafetyHelpers, common.CarSafetyTest, common.Angle
   SAFETY_MODEL = CarParams.SafetyModel.toyota
   SAFETY_PARAM = EPS_SCALE[CAR.TOYOTA_CAMRY_TSS3] | ToyotaSafetyFlags.TSS3
 
-  TX_MSGS = [[0x777, 1], [0x777, 0], [0x08A, 0], [0x101, 2], [0x412, 0]]
+  TX_MSGS = [[0x777, 1], [0x777, 0], [0x08A, 0], [0x101, 2], [0x412, 0], [0x2E5, 2], [0x251, 0]]
   RELAY_MALFUNCTION_ADDRS = {0: (0x08A, 0x412)}
-  FWD_BLACKLISTED_ADDRS = {2: [0x08A, 0x412]}
+  FWD_BLACKLISTED_ADDRS = {0: [0x2E5], 2: [0x08A, 0x412, 0x1B2, 0x251, 0x252]}
 
   MAX_ACCEL = 2.0
   MIN_ACCEL = -3.5
@@ -808,6 +808,22 @@ class TestToyotaTss3Safety(Tss3SafetyHelpers, common.CarSafetyTest, common.Angle
 
   def _pcm_status_msg(self, enable):
     return self.packer.make_can_msg_safety("CONTROL_REQUEST", 2, {"CRUISE_OPERATING_LATCH": enable})
+
+  def test_enable_control_allowed_from_cruise(self):
+    self._rx(self._pcm_status_msg(False))
+    self._rx(self._pcm_status_msg(True))
+    self.assertFalse(self.safety.get_controls_allowed())
+
+  def test_disable_control_allowed_from_cruise(self):
+    self.safety.set_controls_allowed(True)
+    self._rx(self._pcm_status_msg(True))
+    self._rx(self._pcm_status_msg(False))
+    self.assertTrue(self.safety.get_controls_allowed())
+
+  def test_cruise_engaged_prev(self):
+    for engaged in (True, False):
+      self._rx(self._pcm_status_msg(engaged))
+      self.assertFalse(self.safety.get_cruise_engaged_prev())
 
 
 class TestToyotaTss3SafetyStockLongitudinal(Tss3SafetyHelpers, common.SafetyTestBase):

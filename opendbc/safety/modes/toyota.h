@@ -42,6 +42,8 @@
   {0x08A, 0, 32, .check_relay = true, .disable_static_blocking = true},  /* CONTROL_REQUEST */ \
   {0x412, 0, 8, .check_relay = true},  /* LKAS_HUD */ \
   {0x101, 2, 8, .check_relay = false},  /* BRAKE_MODULE cancel */ \
+  {0x2E5, 2, 8, .check_relay = false},  /* synthetic driver unlatched */ \
+  {0x251, 0, 8, .check_relay = false},  /* synthetic cruise display */ \
 
 #define TOYOTA_COMMON_RX_CHECKS(lta)                                                                                                       \
   {.msg = {{ 0xaa, 0, 8, 83U, .ignore_checksum = true, .ignore_counter = true}, { 0 }, { 0 }}},      \
@@ -63,6 +65,7 @@
   {.msg = {{0x116, 0, 8, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},   \
   {.msg = {{0x101, 0, 8, 50U, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},                            \
   {.msg = {{0x08A, 2, 32, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},  \
+  {.msg = {{0x0FE, 0, 32, 30U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},  \
 
 #define TOYOTA_SECOC_RX_CHECKS                                                                                                             \
   TOYOTA_COMMON_RX_CHECKS(false)                                                                                                           \
@@ -130,12 +133,32 @@ static void toyota_rx_hook(const CANPacket_t *msg) {
         safety.toyota_tss3_stock_08a_cnt++;
       }
 
-      pcm_cruise_check(GET_BIT(msg, 27U));  // CONTROL_REQUEST.CRUISE_OPERATING_LATCH
+      if (safety_setup.toyota_stock_longitudinal) {
+        pcm_cruise_check(GET_BIT(msg, 27U));  // CONTROL_REQUEST.CRUISE_OPERATING_LATCH
+      }
 
       safety.toyota_tss3_stock_pcs = GET_BIT(msg, 38U);  // CONTROL_REQUEST.PCS_BRAKE_REQUEST
       if (safety.toyota_tss3_stock_pcs) {
         safety.toyota_tss3_08a_active = false;
       }
+    }
+
+    if (!safety_setup.toyota_stock_longitudinal && msg_matches(msg, 0x0FEU, 0U, 32U)) {
+      bool res = GET_BIT(msg, 31U) && !GET_BIT(msg, 55U);
+      bool set = GET_BIT(msg, 39U) && !GET_BIT(msg, 62U);
+      bool cancel = GET_BIT(msg, 38U) && !GET_BIT(msg, 61U);
+      int button = cancel ? 1 : set ? 2 : res ? 3 : GET_BIT(msg, 58U) ? 4 : 0;
+
+      if ((button != safety.cruise_button_prev) && ((safety.cruise_button_prev == 2) || (safety.cruise_button_prev == 3))) {
+        safety.controls_allowed = true;
+      }
+      if ((button == 4) && (safety.cruise_button_prev != 4)) {
+        safety.controls_allowed = !safety.controls_allowed;
+      }
+      if (cancel) {
+        safety.controls_allowed = false;
+      }
+      safety.cruise_button_prev = button;
     }
 
     // STEER_ANGLE_SENSOR, in LATERAL_REQUEST_PINION_ANGLE units
@@ -409,6 +432,24 @@ static bool toyota_tss3_tx_hook(const CANPacket_t *msg, const LongitudinalLimits
     tx = !msg->fd;
   }
 
+  if (msg_matches(msg, 0x2E5U, 2U, 8U)) {
+    tx = !safety_setup.toyota_stock_longitudinal && !msg->fd &&
+         (GET_BYTES_64_LE(msg, 0, 8) == 0x0000000040550000ULL);
+  }
+
+  if (msg_matches(msg, 0x251U, 0U, 8U)) {
+    bool active = msg->data[0] == 0xC0U;
+    bool available = msg->data[0] == 0xA0U;
+    bool initialized = msg->data[1] == 0x10U;
+    bool uninitialized = available && (msg->data[1] == 0U) && (msg->data[2] == 0U);
+    uint8_t distance = msg->data[5] >> 5U;
+    tx = !safety_setup.toyota_stock_longitudinal && !msg->fd && (active || available) && (initialized || uninitialized) &&
+         (msg->data[3] == (active ? 0x90U : 0x48U)) && (msg->data[4] == 0x80U) &&
+         (distance >= 1U) && (distance <= 4U) &&
+         ((msg->data[5] & 0x1FU) == (active ? 0x10U : 0x08U)) &&
+         (msg->data[6] == 0xA0U) && (msg->data[7] == 0x80U);
+  }
+
   return tx;
 }
 
@@ -598,6 +639,10 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
 static bool toyota_fwd_hook(int bus_num, int addr) {
   // block the FRC's CONTROL_REQUEST while openpilot sends it, forward it again if openpilot stops
   bool block = false;
+  if (safety_setup.toyota_tss3 && !safety_setup.toyota_stock_longitudinal &&
+      (((bus_num == 0) && (addr == 0x2E5)) || ((bus_num == 2) && ((addr == 0x1B2) || (addr == 0x251) || (addr == 0x252))))) {
+    block = true;
+  }
   if (safety.toyota_tss3_08a_active && (bus_num == 2) && (addr == 0x8A)) {
     if (safety_get_ts_elapsed(safety_ts, safety.toyota_tss3_08a_last_tx_ts) > TOYOTA_TSS3_08A_TIMEOUT_US) {
       safety.toyota_tss3_08a_active = false;
