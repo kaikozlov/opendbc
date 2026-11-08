@@ -1,8 +1,9 @@
 import math
 import numpy as np
-from opendbc.car import Bus, make_tester_present_msg, rate_limit, structs, ACCELERATION_DUE_TO_GRAVITY, DT_CTRL
+from opendbc.car import Bus, CanData, make_tester_present_msg, rate_limit, structs, ACCELERATION_DUE_TO_GRAVITY, DT_CTRL
 from opendbc.car.lateral import apply_meas_steer_torque_limits, apply_std_steer_angle_limits, apply_steer_angle_limits_vm, common_fault_avoidance
 from opendbc.car.carlog import carlog
+from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.common.filter_simple import FirstOrderFilter, HighPassFilter
 from opendbc.car.common.pid import PIDController
 from opendbc.car.secoc import add_mac, build_sync_mac
@@ -65,6 +66,9 @@ class CarController(CarControllerBase):
     self.permit_braking = True
     self.steer_rate_counter = 0
     self.distance_button = 0
+    self.tss3_cruise_display_enabled = False
+    self.tss3_cruise_display_initialized = False
+    self.tss3_cruise_display_set_speed = 0
 
     # *** start long control state ***
     self.long_pid = get_long_tune(self.CP, self.params)
@@ -117,6 +121,25 @@ class CarController(CarControllerBase):
 
     if CC.cruiseControl.cancel:
       can_sends.append(toyotacan.create_tss3_brake_cancel_command(self.packer, CS.tss3_brake_module, TSS3_SOURCE_BUS))
+
+    if self.CP.openpilotLongitudinalControl and self.frame % 30 == 0:
+      can_sends.append(CanData(0x2E5, bytes.fromhex("0000554000000000"), TSS3_SOURCE_BUS))
+
+    set_speed_valid = CS.out.vCruise < 250
+    set_speed = round(CS.out.vCruise * (1.0 if CS.is_metric else CV.KPH_TO_MPH)) if set_speed_valid else 0
+    set_speed_changed = CC.enabled and set_speed_valid and (not self.tss3_cruise_display_initialized or set_speed != self.tss3_cruise_display_set_speed)
+    if self.CP.openpilotLongitudinalControl and (self.frame % 100 == 0 or CC.enabled != self.tss3_cruise_display_enabled or set_speed_changed):
+      if CC.enabled and set_speed_valid:
+        self.tss3_cruise_display_set_speed = min(max(set_speed, 0), 255)
+        self.tss3_cruise_display_initialized = True
+      display_active = CC.enabled and self.tss3_cruise_display_initialized
+      distance = min(max(4 - hud_control.leadDistanceBars, 1), 4)
+      state = 0x10 if display_active else 0x08
+      cruise_display = bytes((0xC0 if display_active else 0xA0, 0x10 if self.tss3_cruise_display_initialized else 0,
+                              self.tss3_cruise_display_set_speed, 0x90 if display_active else 0x48, 0x80,
+                              (distance << 5) | state, 0xA0, 0x80))
+      can_sends.append(CanData(0x251, cruise_display, TSS3_CHASSIS_BUS))
+      self.tss3_cruise_display_enabled = CC.enabled
 
     # *** hud ui ***
     # at 5Hz, or immediately on alert change

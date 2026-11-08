@@ -126,6 +126,8 @@ class CarInterface(CarInterfaceBase):
                                         (bool(ret.flags & ToyotaFlags.TSS3) and alpha_long))
 
     ret.autoResumeSng = ret.openpilotLongitudinalControl
+    if ret.flags & ToyotaFlags.TSS3:
+      ret.pcmCruise = not ret.openpilotLongitudinalControl
 
     if not ret.openpilotLongitudinalControl:
       ret.safetyConfigs[0].safetyParam |= ToyotaSafetyFlags.STOCK_LONGITUDINAL.value
