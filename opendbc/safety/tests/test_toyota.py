@@ -569,11 +569,9 @@ class TestToyotaTss3Safety(Tss3SafetyHelpers, common.CarSafetyTest, common.Angle
     self.angle_cmd_count += 1
     return self._control_request_msg(self._application(angle_raw=angle_raw, lat_active=True))
 
-  def _angle_meas_msg(self, angle: float):
-    coarse = round(angle / 1.5)
-    fraction = angle - coarse * 1.5
-    values = {"STEER_ANGLE": coarse * 1.5, "STEER_FRACTION": fraction}
-    return self.packer.make_can_msg_safety("STEER_ANGLE_SENSOR", 0, values)
+  def _angle_meas_msg(self, angle: float, status: int = 1):
+    values = {"STEER_ANGLE": angle, "STEER_ANGLE_STATUS": status}
+    return self.packer.make_can_msg_safety("EPS_STATUS", 0, values)
 
   def _get_steer_cmd_angle_max(self, speed):
     return min(get_max_angle_vm(max(speed - 1., 1.), self.VM, self.params), 32767 / self.DEG_TO_CAN)
@@ -627,6 +625,24 @@ class TestToyotaTss3Safety(Tss3SafetyHelpers, common.CarSafetyTest, common.Angle
         angle_raw = max(min(self.safety.get_angle_meas_max(), 1745), -1745)
         self.safety.set_timer(t + gap)
         self.assertEqual(self._request(self._application(angle_raw=angle_raw, lat_active=True)), restarted)
+
+  def test_angle_measurements(self):
+    for status in (0, 1, 2, 3):
+      for angle in np.arange(0, self.STEER_ANGLE_MAX * 2, 1):
+        for a in (angle, -angle, 0, 0, 0, 0):
+          self.assertEqual(status == 1, self._rx(self._angle_meas_msg(a, status)))
+
+        final_angle = round(angle * self.DEG_TO_CAN) if status == 1 else 0
+        self.assertEqual(self.safety.get_angle_meas_min(), -final_angle)
+        self.assertEqual(self.safety.get_angle_meas_max(), final_angle)
+
+        self._rx(self._angle_meas_msg(0))
+        self.assertEqual(self.safety.get_angle_meas_min(), -final_angle)
+        self.assertEqual(self.safety.get_angle_meas_max(), 0)
+
+        self._rx(self._angle_meas_msg(0))
+        self.assertEqual(self.safety.get_angle_meas_min(), 0)
+        self.assertEqual(self.safety.get_angle_meas_max(), 0)
 
   def test_vehicle_speed_measurements(self):
     self._common_measurement_test(self._speed_msg, 0, 71.6, 1,

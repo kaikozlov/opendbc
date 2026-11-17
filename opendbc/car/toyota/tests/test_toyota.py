@@ -320,6 +320,7 @@ class TestToyotaTSS3CarInterface(unittest.TestCase):
     self.assertEqual(state.gearShifter, structs.CarState.GearShifter.drive)
     self.assertTrue(state.cruiseState.available and state.cruiseState.enabled)
     self.assertFalse(state.carNotReady or state.steerFaultTemporary or state.steerFaultPermanent)
+    self.assertAlmostEqual(state.steeringAngleDeg + state.steeringAngleOffsetDeg, -98 * 1024 / 17870, delta=1e-6)
 
   def test_seatbelt(self):
     for payload, unlatched in (("0000154000000000", False), ("0000554000000000", True), ("0000154000000000", False)):
@@ -417,11 +418,12 @@ class TestToyotaTSS3CarInterface(unittest.TestCase):
     # recorded with 1.57 Nm of driver torque, and at startup with angle control inhibited
     override = bytes.fromhex("0f0000001501207d10001000230001d7020d0000002301d2000000005c6941f3")
     initializing = bytes.fromhex("00000000000008400000080000100000000000010000000000000000a44271be")
-    for eps, pressed in ((override, True), (initializing, False)):
+    for eps, pressed, invalid in ((override, True, False), (initializing, False, True)):
       state = self.update(speed_ms=5, x030=eps)
       self.assertTrue(state.canValid)
       self.assertEqual(state.steeringPressed, pressed)
-      self.assertFalse(state.steerFaultTemporary or state.steerFaultPermanent or state.vehicleSensorsInvalid)
+      self.assertFalse(state.steerFaultTemporary or state.steerFaultPermanent)
+      self.assertEqual(state.vehicleSensorsInvalid, invalid)
 
     # byte 6 holds EPS_FAULT_INHIBIT (0x04) and DRIVER_TORQUE_INVALID (0x01), 0xF2 sets only the undecoded bits
     checksum = CANPacker(TSS3_PT_DBC).dbc.name_to_msg["EPS_STATUS"].sigs["CHECKSUM"]

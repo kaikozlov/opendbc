@@ -61,7 +61,7 @@
   {.msg = {{0x224, 0, 8, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},  \
 
 #define TOYOTA_TSS3_RX_CHECKS                                                                                                                         \
-  {.msg = {{0x025, 0, 32, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},  \
+  {.msg = {{0x030, 0, 32, 100U, .ignore_checksum = true, .ignore_counter = true}, { 0 }, { 0 }}},                              \
   {.msg = {{0x0AA, 0, 8, 100U, .ignore_checksum = true, .ignore_counter = true}, { 0 }, { 0 }}},                               \
   {.msg = {{0x116, 0, 8, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},   \
   {.msg = {{0x101, 0, 8, 50U, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},                            \
@@ -106,6 +106,9 @@ static bool toyota_get_quality_flag_valid(const CANPacket_t *msg) {
   bool valid = false;
   if (msg->addr == 0x260U) {
     valid = !GET_BIT(msg, 3U);  // STEER_TORQUE_SENSOR.STEER_ANGLE_INITIALIZING
+  }
+  if (msg->addr == 0x30U) {
+    valid = ((msg->data[16] >> 1U) & 3U) == 1U;  // EPS_STATUS.STEER_ANGLE_STATUS
   }
   if (msg->addr == 0xaaU) {  // WHEEL_SPEEDS
     // each wheel speed is 1-bit fault + 15-bit speed
@@ -162,12 +165,10 @@ static void toyota_rx_hook(const CANPacket_t *msg) {
       safety.cruise_button_prev = button;
     }
 
-    // STEER_ANGLE_SENSOR, in LATERAL_REQUEST_PINION_ANGLE units
-    if (msg_matches(msg, 0x25U, 0U)) {
-      int angle_coarse = to_signed(((msg->data[0] & 0xFU) << 8U) | msg->data[1], 12);
-      int angle_fraction = to_signed((msg->data[4] >> 4U) & 0xFU, 4);
-      int angle_tenths = (angle_coarse * 15) + angle_fraction;
-      update_sample(&safety.angle_meas, ROUND(((float)angle_tenths * 1787.0F) / 1024.0F));
+    // EPS_STATUS.STEER_ANGLE, in LATERAL_REQUEST_PINION_ANGLE units
+    if (msg_matches(msg, 0x30U, 0U, 32U) && toyota_get_quality_flag_valid(msg)) {
+      int angle = to_signed((msg->data[20] << 8U) | msg->data[21], 16);
+      update_sample(&safety.angle_meas, angle);
     }
   }
 

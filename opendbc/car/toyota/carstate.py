@@ -64,6 +64,15 @@ class CarState(CarStateBase):
     self.tss3_request_loss_frames = 0
     self.tss3_acc_faulted = False
 
+  def _update_angle_offset(self, ret, cp, angle):
+    # Offset seems to be invalid for large steering angles and high angle rates
+    if abs(ret.steeringAngleDeg) < 90 and abs(ret.steeringRateDeg) < 100 and cp.can_valid:
+      self.angle_offset.update(angle - ret.steeringAngleDeg)
+
+    if self.angle_offset.initialized:
+      ret.steeringAngleOffsetDeg = self.angle_offset.x
+      ret.steeringAngleDeg = angle - self.angle_offset.x
+
   def update_tss3(self, can_parsers) -> structs.CarState:
     cp = can_parsers[Bus.pt]
     cp_cam = can_parsers[Bus.cam]
@@ -98,6 +107,10 @@ class CarState(CarStateBase):
 
     ret.steeringAngleDeg = cp.vl["STEER_ANGLE_SENSOR"]["STEER_ANGLE"] + cp.vl["STEER_ANGLE_SENSOR"]["STEER_FRACTION"]
     ret.steeringRateDeg = cp.vl["STEER_ANGLE_SENSOR"]["STEER_RATE"]
+    steer_angle_valid = cp.vl["EPS_STATUS"]["STEER_ANGLE_STATUS"] == 1
+    if steer_angle_valid:
+      self._update_angle_offset(ret, cp, cp.vl["EPS_STATUS"]["STEER_ANGLE"])
+    ret.vehicleSensorsInvalid |= not steer_angle_valid
     ret.carNotReady = cp.vl["READY_STATUS"]["READY_STATUS"] == 0
     ret.gearShifter = self.parse_gear_shifter(self.shifter_values.get(int(cp.vl["GEAR_PACKET_HYBRID"]["GEAR"]), None))
 
@@ -232,13 +245,7 @@ class CarState(CarStateBase):
       self.accurate_steer_angle_seen = True
 
     if self.accurate_steer_angle_seen:
-      # Offset seems to be invalid for large steering angles and high angle rates
-      if abs(ret.steeringAngleDeg) < 90 and abs(ret.steeringRateDeg) < 100 and cp.can_valid:
-        self.angle_offset.update(torque_sensor_angle_deg - ret.steeringAngleDeg)
-
-      if self.angle_offset.initialized:
-        ret.steeringAngleOffsetDeg = self.angle_offset.x
-        ret.steeringAngleDeg = torque_sensor_angle_deg - self.angle_offset.x
+      self._update_angle_offset(ret, cp, torque_sensor_angle_deg)
 
     ret.gearShifter = self.parse_gear_shifter(self.shifter_values.get(can_gear, None))
     ret.leftBlinker = cp.vl["BLINKERS_STATE"]["TURN_SIGNALS"] == 1
