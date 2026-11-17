@@ -52,7 +52,7 @@ class RadarInterface(RadarInterfaceBase):
       ret.errors.canError = True
 
     if self.CP.flags & ToyotaFlags.TSS3:
-      self._update_tss3_points(updated_messages, ret.errors.canError)
+      self._update_tss3_points(rcp, updated_messages, ret.errors.canError)
     else:
       if rcp.vl['STATUS_MSG']['RADAR_STATUS'] != 1 or rcp.vl['STATUS_MSG']['RADAR_PRE_FAULT'] != 0:
         ret.errors.radarUnavailableTemporary = True
@@ -87,7 +87,7 @@ class RadarInterface(RadarInterfaceBase):
     ret.points = list(self.pts.values())
     return ret
 
-  def _update_tss3_points(self, updated_messages, can_error):
+  def _update_tss3_points(self, rcp, updated_messages, can_error):
     if can_error:
       self.pts.clear()
       return
@@ -96,7 +96,7 @@ class RadarInterface(RadarInterfaceBase):
       # lifecycle flags only apply to the cycle they were received in
       if motion_addr not in updated_messages:
         continue
-      geometry, motion = self.rcp.vl[geometry_addr], self.rcp.vl[motion_addr]
+      geometry, motion = rcp.vl[geometry_addr], rcp.vl[motion_addr]
       for slot in range(TSS3_SLOTS):
         key = bank * TSS3_SLOTS + slot
         new, ended = motion[f'NEW_TRACK_{slot}'], motion[f'TRACK_ENDED_{slot}']

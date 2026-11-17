@@ -433,7 +433,7 @@ TSS3_FRC_PCS_08A = (bytes.fromhex("0000000cc0002d8bf0605ef0607fff007fff000b40001
                     bytes.fromhex("00000008c0002d87f0605ef0607fff007fff000d400030000000130006f38fbe"))
 
 
-class Tss3SafetyHelpers:
+class ToyotaTss3SafetyBase(common.SafetyTestBase):
   signer_seq = 0
 
   @staticmethod
@@ -518,7 +518,7 @@ class Tss3SafetyHelpers:
     return self.safety.safety_tx_hook(self._control_request_msg(request))
 
 
-class TestToyotaTss3Safety(Tss3SafetyHelpers, common.CarSafetyTest, common.AngleSteeringSafetyTest,
+class TestToyotaTss3Safety(ToyotaTss3SafetyBase, common.CarSafetyTest, common.AngleSteeringSafetyTest,
                            common.LongitudinalAccelSafetyTest):
 
   DBC = TSS3_DBC
@@ -844,7 +844,7 @@ class TestToyotaTss3Safety(Tss3SafetyHelpers, common.CarSafetyTest, common.Angle
       self.assertFalse(self.safety.get_cruise_engaged_prev())
 
 
-class TestToyotaTss3SafetyStockLongitudinal(Tss3SafetyHelpers, common.SafetyTestBase):
+class TestToyotaTss3SafetyStockLongitudinal(ToyotaTss3SafetyBase):
 
   SAFETY_MODEL = CarParams.SafetyModel.toyota
   SAFETY_PARAM = EPS_SCALE[CAR.TOYOTA_CAMRY_TSS3] | ToyotaSafetyFlags.TSS3 | ToyotaSafetyFlags.STOCK_LONGITUDINAL

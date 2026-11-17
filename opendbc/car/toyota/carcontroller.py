@@ -1,7 +1,8 @@
 import math
 import numpy as np
 from opendbc.car import Bus, CanData, make_tester_present_msg, rate_limit, structs, ACCELERATION_DUE_TO_GRAVITY, DT_CTRL
-from opendbc.car.lateral import apply_meas_steer_torque_limits, apply_std_steer_angle_limits, apply_steer_angle_limits_vm, common_fault_avoidance
+from opendbc.car.lateral import AngleSteeringLimits, apply_meas_steer_torque_limits, apply_std_steer_angle_limits, \
+                                  apply_steer_angle_limits_vm, common_fault_avoidance
 from opendbc.car.carlog import carlog
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.common.filter_simple import FirstOrderFilter, HighPassFilter
@@ -206,6 +207,7 @@ class CarController(CarControllerBase):
         apply_angle = actuators.steeringAngleDeg + CS.out.steeringAngleOffsetDeg
 
         # Angular rate limit based on speed
+        assert isinstance(self.params.ANGLE_LIMITS, AngleSteeringLimits)
         self.last_angle = apply_std_steer_angle_limits(apply_angle, self.last_angle, CS.out.vEgoRaw,
                                                        CS.out.steeringAngleDeg + CS.out.steeringAngleOffsetDeg,
                                                        CC.latActive, self.params.ANGLE_LIMITS)

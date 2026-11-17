@@ -151,12 +151,12 @@ static void toyota_rx_hook(const CANPacket_t *msg) {
       bool res = GET_BIT(msg, 31U) && !GET_BIT(msg, 55U);
       bool set = GET_BIT(msg, 39U) && !GET_BIT(msg, 62U);
       bool cancel = GET_BIT(msg, 38U) && !GET_BIT(msg, 61U);
-      int button = cancel ? 1 : set ? 2 : res ? 3 : GET_BIT(msg, 58U) ? 4 : 0;
+      uint8_t button = cancel ? 1U : set ? 2U : res ? 3U : GET_BIT(msg, 58U) ? 4U : 0U;
 
-      if ((button != safety.cruise_button_prev) && ((safety.cruise_button_prev == 2) || (safety.cruise_button_prev == 3))) {
+      if ((button != safety.cruise_button_prev) && ((safety.cruise_button_prev == 2U) || (safety.cruise_button_prev == 3U))) {
         safety.controls_allowed = true;
       }
-      if ((button == 4) && (safety.cruise_button_prev != 4)) {
+      if ((button == 4U) && (safety.cruise_button_prev != 4U)) {
         safety.controls_allowed = !safety.controls_allowed;
       }
       if (cancel) {
