@@ -719,13 +719,16 @@ class TestToyotaTSS3RadarInterface(unittest.TestCase):
     self.t += 50 * MS
     return rr
 
-  def update(self, objects=None, geometry=True):
+  def cycle(self, objects=None, geometry=True):
     msgs = []
     for bank in range(len(TSS3_GEOMETRY_MSGS)):
       if geometry:
         msgs.append(self.geometry_msg(bank, objects))
       msgs.append(self.motion_msg(bank, objects))
-    return self.send(msgs)
+    return msgs
+
+  def update(self, objects=None, geometry=True):
+    return self.send(self.cycle(objects, geometry))
 
   def track_ids(self, objects=None):
     return [pt.trackId for pt in self.update(objects).points]
@@ -804,3 +807,16 @@ class TestToyotaTSS3RadarInterface(unittest.TestCase):
     self.assertIsNone(self.send([self.geometry_msg(0, {0: self.TRACK | {'dist': 25}})]))
     rr = self.send([self.motion_msg(0, {0: self.TRACK | {'vrel': -5}}), self.motion_msg(1), self.motion_msg(2)])
     self.assertEqual([(p.trackId, p.dRel, p.vRel) for p in rr.points], [(first[0], 25, -5)])
+
+  def test_batched_track_lifecycle(self):
+    for event in ({'new': 1, 'ended': 1}, {'ended': 1}):
+      for same_packet in (False, True):
+        with self.subTest(event=event, same_packet=same_packet):
+          first, = self.track_ids({0: self.TRACK | {'new': 1}})
+          transition = self.cycle({0: self.TRACK | event | {'dist': 45}})
+          following = self.cycle({0: self.TRACK | {'dist': 44}})
+          packets = [(self.t, transition + following)] if same_packet else [(self.t, transition), (self.t + 50 * MS, following)]
+          rr = self.ri.update(packets)
+          self.t += 100 * MS
+          self.assertFalse(rr.errors.canError)
+          self.assertEqual([(p.trackId, p.dRel) for p in rr.points], [(first + 1, 44)])

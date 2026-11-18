@@ -46,6 +46,24 @@ class RadarInterface(RadarInterfaceBase):
 
     self.rcp = None if CP.radarUnavailable else _create_radar_can_parser(CP)
 
+  def update(self, can_strings):
+    if self.rcp is None or not self.CP.flags & ToyotaFlags.TSS3:
+      return super().update(can_strings)
+
+    ret = None
+    for nanos, frames in can_strings:
+      start = 0
+      # Process each radar cycle before later frames overwrite its lifecycle flags.
+      for end, (address, _, bus) in enumerate(frames, 1):
+        if address == self.trigger_msg and bus == self.rcp.bus:
+          rr = super().update([(nanos, frames[start:end])])
+          if rr is not None:
+            ret = rr
+          start = end
+      if not start or start < len(frames):
+        super().update([(nanos, frames[start:] if start else frames)])
+    return ret
+
   def _update(self, rcp, updated_messages):
     ret = RadarData()
     if not rcp.can_valid:
