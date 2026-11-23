@@ -33,6 +33,7 @@ class RadarInterface(RadarInterfaceBase):
     super().__init__(CP)
     if CP.flags & ToyotaFlags.TSS3:
       self.trigger_msg = TSS3_MOTION_MSGS[-1]
+      self.prev_scan = 0
     else:
       if CP.flags & ToyotaFlags.TSS2:
         self.RADAR_A_MSGS = list(range(0x180, 0x190))
@@ -106,6 +107,12 @@ class RadarInterface(RadarInterfaceBase):
     return ret
 
   def _update_tss3_points(self, rcp, updated_messages, can_error):
+    # a skipped scan can drop a track's lifecycle flags
+    scan = rcp.vl[self.trigger_msg]['COUNTER']
+    if (self.prev_scan + 1) % 256 != scan:
+      self.pts.clear()
+    self.prev_scan = scan
+
     if can_error:
       self.pts.clear()
       return
@@ -123,8 +130,8 @@ class RadarInterface(RadarInterfaceBase):
 
         if new or ended or not valid:
           self.pts.pop(key, None)
-        # don't combine this cycle's motion with the previous cycle's geometry
-        if not valid or geometry_addr not in updated_messages:
+        # only combine geometry and motion from the same scan
+        if not valid or geometry_addr not in updated_messages or geometry['COUNTER'] != motion['COUNTER']:
           continue
 
         if key not in self.pts:

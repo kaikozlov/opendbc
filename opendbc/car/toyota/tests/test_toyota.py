@@ -775,8 +775,7 @@ class TestToyotaTSS3RadarInterface(unittest.TestCase):
 
   def test_missed_geometry(self):
     first = self.track_ids({0: self.TRACK | {'new': 1}})
-    rr = self.send([self.geometry_msg(1), self.geometry_msg(2),
-                    self.motion_msg(0, {0: self.TRACK | {'vrel': -5}}), self.motion_msg(1), self.motion_msg(2)])
+    rr = self.send(self.cycle({0: self.TRACK | {'vrel': -5}})[1:])
     self.assertFalse(rr.errors.canError)
     self.assertEqual([(p.trackId, p.dRel, p.vRel) for p in rr.points], [(first[0], 20, -1)])
     rr = self.update({0: self.TRACK | {'dist': 25, 'vrel': -5}})
@@ -784,8 +783,9 @@ class TestToyotaTSS3RadarInterface(unittest.TestCase):
 
   def test_missed_motion_after_new_track(self):
     first = self.track_ids({0: self.TRACK | {'new': 1}})
-    rr = self.send([self.geometry_msg(0, {0: self.TRACK | {'dist': 25}}), self.geometry_msg(1), self.geometry_msg(2),
-                    self.motion_msg(1), self.motion_msg(2)])
+    msgs = self.cycle({0: self.TRACK | {'dist': 25}})
+    del msgs[1]
+    rr = self.send(msgs)
     self.assertFalse(rr.errors.canError)
     self.assertEqual([(p.trackId, p.dRel, p.vRel) for p in rr.points], [(first[0], 20, -1)])
     rr = self.update({0: self.TRACK | {'dist': 25, 'vrel': -5}})
@@ -795,8 +795,7 @@ class TestToyotaTSS3RadarInterface(unittest.TestCase):
     for event in ({'new': 1}, {'ended': 1}, {'state': 0}):
       with self.subTest(event=event):
         first = self.track_ids({0: self.TRACK})
-        rr = self.send([self.geometry_msg(1), self.geometry_msg(2),
-                        self.motion_msg(0, {0: self.TRACK | event}), self.motion_msg(1), self.motion_msg(2)])
+        rr = self.send(self.cycle({0: self.TRACK | event})[1:])
         self.assertEqual(len(rr.points), 0)
         recovered = self.track_ids({0: self.TRACK})
         self.assertEqual(len(recovered), 1)
