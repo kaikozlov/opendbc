@@ -422,7 +422,7 @@ class TestToyotaTSS3CarInterface(unittest.TestCase):
       state = self.update(speed_ms=5, x030=eps)
       self.assertTrue(state.canValid)
       self.assertEqual(state.steeringPressed, pressed)
-      self.assertFalse(state.steerFaultTemporary or state.steerFaultPermanent)
+      self.assertEqual((state.steerFaultTemporary, state.steerFaultPermanent), (invalid, False))
       self.assertEqual(state.vehicleSensorsInvalid, invalid)
 
     # byte 6 holds EPS_FAULT_INHIBIT (0x04) and DRIVER_TORQUE_INVALID (0x01), 0xF2 sets only the undecoded bits

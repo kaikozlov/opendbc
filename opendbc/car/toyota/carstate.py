@@ -129,7 +129,7 @@ class CarState(CarStateBase):
     ret.steeringTorque = (cp.vl["EPS_STATUS"]["STEERING_WHEEL_TORQUE_COARSE"] +
                           cp.vl["EPS_STATUS"]["STEERING_WHEEL_TORQUE_FINE"]) if not driver_torque_invalid else 0.0
     ret.steeringPressed = abs(ret.steeringTorque) >= TSS3_STEER_DRIVER_TORQUE_THRESHOLD
-    ret.steerFaultTemporary = bool(cp.vl["EPS_STATUS"]["EPS_FAULT_INHIBIT"])
+    ret.steerFaultTemporary = any(cp.vl["EPS_STATUS"][sig] for sig in ("EPS_FAULT_INHIBIT", "COOPERATIVE_COMMAND_INHIBIT", "COOPERATIVE_ANGLE_INHIBIT"))
 
     # REQUEST_LOSS also pulses on disengagement, the VMC latches a cruise fault until restart if it persists for ~1 s
     self.tss3_request_loss_frames = self.tss3_request_loss_frames + 1 if cp.vl["CONTROL_RESULT"]["REQUEST_LOSS"] else 0
