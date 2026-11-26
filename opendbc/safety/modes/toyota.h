@@ -154,13 +154,17 @@ static void toyota_rx_hook(const CANPacket_t *msg) {
       uint8_t button = cancel ? 1U : set ? 2U : res ? 3U : GET_BIT(msg, 58U) ? 4U : 0U;
 
       if ((button != safety.cruise_button_prev) && ((safety.cruise_button_prev == 2U) || (safety.cruise_button_prev == 3U))) {
-        safety.controls_allowed = true;
+        enter_controls();
       }
       if ((button == 4U) && (safety.cruise_button_prev != 4U)) {
-        safety.controls_allowed = !safety.controls_allowed;
+        if (safety.controls_allowed) {
+          exit_controls();
+        } else {
+          enter_controls();
+        }
       }
       if (cancel) {
-        safety.controls_allowed = false;
+        exit_controls();
       }
       safety.cruise_button_prev = button;
     }

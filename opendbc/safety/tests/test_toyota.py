@@ -517,6 +517,11 @@ class TestToyotaTss3Safety(ToyotaTss3SafetyBase, common.CarSafetyTest, common.An
   RELAY_MALFUNCTION_ADDRS = {0: (0x08A, 0x412)}
   FWD_BLACKLISTED_ADDRS = {0: [0x2E5], 2: [0x08A, 0x412, 0x1B2, 0x251, 0x252]}
 
+  RX_QUALITY_FLAGS = {
+    "WHEEL_SPEEDS": TestToyotaSafetyBase.RX_QUALITY_FLAGS["WHEEL_SPEEDS"],
+    "EPS_STATUS": {"STEER_ANGLE_STATUS": (1,)},
+  }
+
   MAX_ACCEL = 2.0
   MIN_ACCEL = -3.5
   INACTIVE_ACCEL = 0.0
@@ -800,7 +805,7 @@ class TestToyotaTss3Safety(ToyotaTss3SafetyBase, common.CarSafetyTest, common.An
       self.assertEqual(self._tx(msg), not fd)
 
   def _user_brake_msg(self, brake):
-    return self.packer.make_can_msg_safety("BRAKE_MODULE", 0, {"BRAKE_PRESSED": brake}, fix_toyota_checksum)
+    return self.packer.make_can_msg_safety("BRAKE_MODULE", 0, {"BRAKE_PRESSED": brake})
 
   def _speed_msg(self, speed):
     values = {f"WHEEL_SPEED_{wheel}": speed * 3.6 for wheel in ("FR", "FL", "RR", "RL")}
